@@ -82,7 +82,7 @@ export const isValidDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNa
 const RULES: [Field, RegExp][] = [
   ["sku", /^(sku|sku code|item code|product code|code|part no|part number|article|article no|material code|alias|item alias|stock item alias|catalogue no|cat no)$/],
   ["date", /(^| )(date|dated|bill date|invoice date|vch date|voucher date)$/],
-  ["quantity", /(^| )(qty|quantity|pcs|units|billed qty|actual qty|nos|closing stock|stock)$|(^| )(quantity|qty)( |$)/],
+  ["quantity", /(^| )(qty|quantity|pcs|units|billed qty|actual qty|nos|closing stock|stock)$|(^| )(quantity|qty)( |$)|^(opening|closing|receipt|receipts|received|purchase|purchases|inward|inwards|outward|outwards|sales|sale|sold|issue|issues|dispatch|balance|stock in hand|soh|physical stock|current stock|available stock|primary|secondary)( qty| quantity| stock| pcs| units| balance)?$/],
   ["unit_price", /(^| )(rate|price|unit price|mrp|ptr|pts|rate per unit|net rate)$/],
   ["amount", /(^| )(value|amount|net amount|taxable value|gross amount|total value)$/],
   ["reference", /^(invoice|inv|bill|voucher|vch|ref|reference|challan|order|doc)( no| number| num)?$/],
@@ -116,9 +116,9 @@ function labelsAt(grid: Grid, r: number): { labels: string[]; rows: number } {
 }
 
 const QTY_PREF: Record<Mode, RegExp[]> = {
-  COUNT: [/closing/, /balance|stock/],
-  INPUT: [/inward|purchase|receipt|received|\bin\b/, /billed/, /closing/],
-  OUTPUT: [/outward|sale|sold|issue|dispatch|\bout\b/, /billed/],
+  COUNT: [/closing/, /stock in hand|soh|physical|current|available/, /balance|stock/],
+  INPUT: [/inward|purchase|receipt|received|primary|\bin\b/, /billed/, /closing/],
+  OUTPUT: [/outward|sale|sold|issue|dispatch|secondary|\bout\b/, /billed/],
 };
 
 export function mapLabels(labels: string[], mode: Mode): Field[] {
@@ -130,7 +130,7 @@ export function mapLabels(labels: string[], mode: Mode): Field[] {
   let qPick = q[0];
   if (q.length > 1) {
     for (const re of QTY_PREF[mode]) { const hit = q.find(i => re.test(labels[i])); if (hit !== undefined) { qPick = hit; break; } }
-    if (mode === "COUNT" && !q.some(i => /closing/.test(labels[i]))) qPick = q[q.length - 1];
+    if (mode === "COUNT" && !q.some(i => /closing|stock in hand|soh|physical|current|available/.test(labels[i]))) qPick = q[q.length - 1];
     q.forEach(i => { if (i !== qPick) mapping[i] = "ignore"; });
   }
   // Rate / value: prefer the one in the same group as the chosen quantity.
@@ -176,11 +176,16 @@ export function titleText(grid: Grid, layout: Layout): string {
   return grid.slice(0, end).map(r => r.map(cellText).filter(Boolean).join(" ")).filter(Boolean).join(" | ");
 }
 
-export function detectDistributor(text: string, distributors: { code: string; name: string; aliases?: string[] | null }[]): string {
+/** Identifies a file layout by its column headings, so a saved column setup can be reused. */
+export function formatSignature(layout: Layout): string {
+  return `${layout.headerRows}#` + layout.labels.map(l => l.trim()).join("|");
+}
+
+export function detectDistributor(text: string, distributors: { code: string; name: string; company_name?: string | null; aliases?: string[] | null }[]): string {
   const t = ` ${normName(text)} `;
   let best = "", bestLen = 0;
   for (const d of distributors) {
-    for (const n of [d.name, ...(d.aliases || [])]) {
+    for (const n of [d.name, d.company_name || "", ...(d.aliases || [])]) {
       const k = normName(n);
       if (k.length >= 4 && t.includes(` ${k} `) && k.length > bestLen) { best = d.code; bestLen = k.length; }
     }

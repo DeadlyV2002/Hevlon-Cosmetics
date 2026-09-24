@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Product, StockLine, Role, fmt } from "./lib/supabase";
+import { supabase, Distributor, Product, ProductAlias, StockLine, Role, fmt } from "./lib/supabase";
 import Inventory from "./pages/Inventory";
 import Distributors from "./pages/Distributors";
 import History from "./pages/History";
@@ -18,6 +18,7 @@ export default function App() {
   const [message, setMessage] = useState(""), [loading, setLoading] = useState(false);
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [aliases, setAliases] = useState<ProductAlias[]>([]);
   const [stock, setStock] = useState<StockLine[]>([]);
   const [retailers, setRetailers] = useState<any[]>([]);
   const [recent, setRecent] = useState<any[]>([]);
@@ -37,13 +38,14 @@ export default function App() {
   }
   async function refreshAll() {
     if (!supabase || !session) return;
-    const [prof, d, p, s, r, b] = await Promise.all([
+    const [prof, d, p, s, r, b, al] = await Promise.all([
       q(supabase.from("profiles").select("role").eq("id", session.user.id).maybeSingle(), "profile"),
       q(supabase.from("distributors").select("*").order("name"), "distributors"),
       q(supabase.from("products").select("id,sku,item_name,unit_price").order("item_name").limit(10000), "products"),
       q(supabase.from("distributor_stock_summary").select("*").order("distributor_name").order("item_name").limit(20000), "stock"),
       q(supabase.from("retailers").select("id,name,code,territory,created_at,distributors(name)").order("name").limit(2000), "retailers"),
       q(supabase.from("inventory_batch_summary").select("*").order("created_at", { ascending: false }).limit(6), "recent postings"),
+      q(supabase.from("product_aliases").select("product_id,alias").limit(20000), "product names"),
     ]);
     setRole(((prof as any)?.role as Role) ?? null);
     if (d) setDistributors(d as Distributor[]);
@@ -51,6 +53,7 @@ export default function App() {
     if (s) setStock(s as StockLine[]);
     if (r) setRetailers(r as any[]);
     if (b) setRecent(b as any[]);
+    if (al) setAliases(al as ProductAlias[]);
   }
   async function login() {
     if (!supabase) return;
@@ -84,7 +87,7 @@ export default function App() {
           <span className="who">{session.user.email}{role && <em className="tag">{ROLE_LABEL[role]}</em>}</span></header>
         {message && <div className="notice" onClick={() => setMessage("")}>{message}<span className="x">✕</span></div>}
         {page === "Dashboard" && <Dashboard stock={stock} distributors={distributors} products={products} recent={recent} go={setPage} />}
-        {page === "Inventory" && <Inventory distributors={distributors} products={products} stock={stock} onPosted={refreshAll} notify={setMessage} />}
+        {page === "Inventory" && <Inventory distributors={distributors} products={products} aliases={aliases} stock={stock} canManage={canManage} onPosted={refreshAll} onDistributorsChanged={refreshAll} notify={setMessage} />}
         {page === "Distributors" && <Distributors distributors={distributors} stock={stock} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} distributors={distributors} />}
@@ -121,25 +124,38 @@ function Dashboard({ stock, distributors, products, recent, go }: { stock: Stock
 }
 
 function Reports({ stock, distributors }: { stock: StockLine[]; distributors: Distributor[] }) {
-  const [dist, setDist] = useState(""), [search, setSearch] = useState(""), [hideZero, setHideZero] = useState(true);
-  const byDist = useMemo(() => distributors.map(d => {
+  const [dist, setDist] = useState(""), [search, setSearch] = useState(""), [hideZero, setHideZero] = useState(true), [sup, setSup] = useState("");
+  const supers = useMemo(() => [...new Set(distributors.map(d => d.super_stockist || "").filter(Boolean))].sort(), [distributors]);
+  const superOf = useMemo(() => new Map(distributors.map(d => [d.id, d.super_stockist || ""])), [distributors]);
+  const byDist = useMemo(() => distributors.filter(d => !sup || (d.super_stockist || "") === sup).map(d => {
     const lines = stock.filter(s => s.distributor_id === d.id);
-    return { Code: d.code, Distributor: d.name, Territory: d.territory || "", Products: lines.filter(l => Number(l.current_stock)).length,
+    return { Code: d.code, Distributor: d.name, "Super stockist": d.super_stockist || "", Owner: d.owner_name || "", Territory: d.territory || "", Products: lines.filter(l => Number(l.current_stock)).length,
       Units: lines.reduce((a, l) => a + Number(l.current_stock), 0), "Value ₹": lines.reduce((a, l) => a + Number(l.stock_value), 0),
       "Last movement": lines.reduce((a, l) => (l.last_movement > a ? l.last_movement : a), "") };
-  }), [stock, distributors]);
-  const lines = stock.filter(s => (!dist || s.distributor_id === dist) && (!hideZero || Number(s.current_stock) !== 0)
+  }), [stock, distributors, sup]);
+  const bySuper = useMemo(() => {
+    const m = new Map<string, { n: number; units: number; value: number }>();
+    distributors.forEach(d => { const k = d.super_stockist || "No super stockist"; const t = m.get(k) || { n: 0, units: 0, value: 0 }; t.n++; m.set(k, t); });
+    stock.forEach(s => { const k = superOf.get(s.distributor_id) || "No super stockist"; const t = m.get(k) || { n: 0, units: 0, value: 0 }; t.units += Number(s.current_stock); t.value += Number(s.stock_value); m.set(k, t); });
+    return [...m.entries()].sort((a, b) => b[1].value - a[1].value);
+  }, [stock, distributors, superOf]);
+  const lines = stock.filter(s => (!dist || s.distributor_id === dist) && (!sup || superOf.get(s.distributor_id) === sup) && (!hideZero || Number(s.current_stock) !== 0)
     && `${s.distributor_name} ${s.sku} ${s.item_name}`.toLowerCase().includes(search.toLowerCase()));
   function exportAll() {
     const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bySuper.map(([k, t]) => ({ "Super stockist": k, Distributors: t.n, Units: t.units, "Value ₹": t.value }))), "By super stockist");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byDist), "By distributor");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lines.map(s => ({ Distributor: s.distributor_name, Code: s.distributor_code, SKU: s.sku, Product: s.item_name, In: Number(s.total_input), Out: Number(s.total_output), Stock: Number(s.current_stock), "Rate ₹": Number(s.unit_price), "Value ₹": Number(s.stock_value), "Last movement": s.last_movement }))), "Stock detail");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lines.map(s => ({ Distributor: s.distributor_name, Code: s.distributor_code, "Super stockist": superOf.get(s.distributor_id) || "", SKU: s.sku, Product: s.item_name, In: Number(s.total_input), Out: Number(s.total_output), Stock: Number(s.current_stock), "Rate ₹": Number(s.unit_price), "Value ₹": Number(s.stock_value), "Last movement": s.last_movement }))), "Stock detail");
     XLSX.writeFile(wb, `distributor-stock-${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
   return <>
-    <section className="card"><div className="rowhead"><h2>Stock by distributor</h2><button onClick={exportAll}>Export to Excel</button></div>
-      <div className="tablewrap"><table><thead><tr><th>Code</th><th>Distributor</th><th>Territory</th><th>Products in stock</th><th>Units</th><th>Value ₹</th><th>Last movement</th></tr></thead>
-        <tbody>{byDist.map(r => <tr key={r.Code}><td>{r.Code}</td><td>{r.Distributor}</td><td>{r.Territory}</td><td>{r.Products}</td><td>{fmt(r.Units)}</td><td>{fmt(r["Value ₹"])}</td><td>{r["Last movement"] || "—"}</td></tr>)}</tbody></table></div></section>
+    <section className="card"><div className="rowhead"><h2>Stock by super stockist</h2><button onClick={exportAll}>Export to Excel</button></div>
+      <div className="tablewrap"><table><thead><tr><th>Super stockist</th><th>Distributors</th><th>Units</th><th>Value ₹</th></tr></thead>
+        <tbody>{bySuper.map(([k, t]) => <tr key={k} className="clickable" onClick={() => setSup(k === "No super stockist" ? "" : k)}><td><b>{k}</b></td><td>{t.n}</td><td>{fmt(t.units)}</td><td>{fmt(t.value)}</td></tr>)}</tbody></table></div></section>
+    <section className="card"><div className="rowhead"><h2>Stock by distributor{sup ? ` — ${sup}` : ""}</h2>
+      <select value={sup} onChange={e => setSup(e.target.value)} style={{ width: "auto" }}><option value="">All super stockists</option>{supers.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+      <div className="tablewrap"><table><thead><tr><th>Code</th><th>Distributor</th><th>Super stockist</th><th>Territory</th><th>Products in stock</th><th>Units</th><th>Value ₹</th><th>Last movement</th></tr></thead>
+        <tbody>{byDist.map(r => <tr key={r.Code}><td>{r.Code}</td><td>{r.Distributor}</td><td>{r["Super stockist"]}</td><td>{r.Territory}</td><td>{r.Products}</td><td>{fmt(r.Units)}</td><td>{fmt(r["Value ₹"])}</td><td>{r["Last movement"] || "—"}</td></tr>)}</tbody></table></div></section>
     <section className="card"><div className="rowhead"><h2>Stock detail</h2>
       <div className="actions"><select value={dist} onChange={e => setDist(e.target.value)}><option value="">All distributors</option>{distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
         <input className="search" placeholder="Search product…" value={search} onChange={e => setSearch(e.target.value)} />

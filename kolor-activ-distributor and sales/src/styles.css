@@ -110,3 +110,15 @@ td.sub{background:#f8fafc;padding:10px 18px}
 .edit input.item_name,.edit input.retailer{min-width:220px}
 .edit input.reference,.edit input.distributor,.edit input.sku{min-width:110px}
 .edit input.date{min-width:140px}
+.status{padding:10px 12px;border-radius:8px;margin:10px 0;font-weight:600;font-size:14px}
+.status.err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.status.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.status.info{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+.inline-status{display:inline-block;margin:0 0 0 8px}
+.fixbox{border:1px solid #fcd34d;background:#fffbeb;border-radius:10px;padding:12px 14px;margin:10px 0}
+.fixrow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:8px}
+.fixrow label{font-size:13px;font-weight:600;color:#334155;min-width:220px}
+.fixrow .or{color:#64748b;padding-bottom:12px}
+.footer-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap}
+.footer-actions .status{margin:0;flex:1}
+.edit input.match{min-width:230px}

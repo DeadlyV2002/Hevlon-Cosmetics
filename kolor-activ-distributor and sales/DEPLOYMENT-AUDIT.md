@@ -1,5 +1,14 @@
 # Deployment Package Audit
 
+## v3 (24 Sep 2026) — run `supabase/migrations/004_super_stockist_formats_aliases.sql` after 003
+- Fixed: "Save stock count" looked dead when rows had problems (usually an unknown distributor) because the message showed at the top of the page. Problems now show next to the Save button, the first bad row is scrolled into view, and an unknown distributor can be fixed in one click (add as new, or save the file's name as another name of an existing distributor).
+- Distributors: owner name, company name and super stockist (with suggestions). Company name also counts for matching files. Filter by super stockist.
+- Distributor import: finds the heading row, recognises Distributor / Company / Owner / Super Stockist / City / Mobile / Other names columns, shows a preview with editable column choices, updates existing distributors (same code or name) and keeps values where the sheet is blank.
+- Remembered formats: when a file is saved, its column setup is stored by its headings; the next file with the same headings is read the same way automatically.
+- Product names: "Same as" lets you say that a distributor's product name is one of your products; the app remembers it (product_aliases) and matches it automatically in future files, in the browser and in the database.
+- Stock statements with Opening / Receipt / Sales / Closing columns are recognised (Closing for stock count, Receipt for stock IN, Sales for stock OUT).
+- Reports: stock by super stockist, super stockist column and filter, included in the Excel export.
+
 ## v2 (24 Sep 2026, later) — run `supabase/migrations/003_distributors_tally_history.sql` after 002
 - Distributors page: add / edit / delete, alternative names (as printed on Tally reports), Excel import. Only HO admins and state managers can change them (enforced in the database).
 - Matching by name: distributors match on code, name or any alternative name; products match on SKU or name. "M/S", "Pvt Ltd", capitals and punctuation are ignored.

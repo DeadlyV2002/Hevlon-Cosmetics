@@ -36,6 +36,9 @@ Your login accounts (Authentication → Users) are not touched by this.
 ### Step 1.3b — Run the v2 update
 SQL Editor → New query → paste all of `supabase/migrations/003_distributors_tally_history.sql` → Run. Safe to run more than once.
 
+### Step 1.3c — Run the v3 update
+SQL Editor → New query → paste all of `supabase/migrations/004_super_stockist_formats_aliases.sql` → Run.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

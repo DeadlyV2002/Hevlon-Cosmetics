@@ -611,6 +611,10 @@ language sql stable set search_path=public as $$
 $$;
 
 -- ---------- Permissions ----------
+-- Some Supabase projects don't expose new tables to the API automatically, so grant them
+-- explicitly. Row level security (above) still decides which rows each user can see or change.
+grant select, insert, update, delete on public.distributor_comments, public.sales_officers, public.so_reports,
+  public.so_report_lines, public.product_aliases, public.import_formats to authenticated;
 revoke all on function public.post_movements(text,jsonb,text,text,text,boolean,boolean) from public, anon;
 grant execute on function public.post_movements(text,jsonb,text,text,text,boolean,boolean) to authenticated;
 revoke all on function public.post_stock_count(text,jsonb,date,text,text,boolean) from public, anon;

@@ -69,3 +69,44 @@ table.edit input{margin:0;padding:7px;min-width:90px}
   main{margin-left:0;padding:16px}
   .actions{flex-wrap:wrap}
 }
+
+/* v2 additions */
+.hint{font-size:14px;color:#475569;margin:8px 0}
+.warn{color:#b45309;background:#fef3c7;padding:10px 12px;border-radius:8px}
+.tag{display:inline-block;font-style:normal;font-size:12px;font-weight:600;background:#e0e7ff;color:#3730a3;border-radius:999px;padding:1px 8px;margin-left:6px}
+.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;border:2px dashed #93c5fd;border-radius:12px;padding:22px;margin:14px 0;background:#f8fbff;cursor:pointer;text-align:center}
+.drop:hover{background:#eff6ff}
+.drop input{max-width:320px}
+.drop small{color:#64748b}
+.formgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 14px;margin:10px 0}
+.formgrid label{font-weight:600;font-size:14px;color:#334155}
+.formgrid .wide{grid-column:1/-1}
+.formgrid small{font-weight:400;color:#64748b}
+label.button{display:inline-block;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}
+label.button.secondary{background:#e2e8f0;color:#334155}
+button.small{padding:6px 10px;font-size:13px}
+button.link{background:none;color:#2563eb;padding:0;font-weight:600}
+.inline{display:inline-flex;align-items:center;gap:6px;font-size:14px;white-space:nowrap}
+.inline input,.inline select{width:auto;margin:0}
+.actions select{width:auto;margin:0}
+tr.bad td{background:#fef2f2}
+.check{white-space:normal;min-width:130px;font-size:13px}
+.err{color:#b91c1c;font-weight:600}
+.ok{color:#15803d;font-weight:700}
+.wrap{white-space:normal;max-width:260px}
+table.map td{vertical-align:top;min-width:150px;border:0}
+table.map select{margin:4px 0}
+table.map small{display:block;color:#475569;font-weight:600}
+table.map .sample{color:#94a3b8;font-weight:400}
+.skipped{margin-top:12px}
+.skipped table{font-size:13px}
+.pill{font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:#e2e8f0}
+.pill.input{background:#dcfce7;color:#166534}.pill.output{background:#fee2e2;color:#991b1b}.pill.count{background:#e0e7ff;color:#3730a3}
+tr.clickable{cursor:pointer}tr.clickable:hover td{background:#f8fafc}
+td.sub{background:#f8fafc;padding:10px 18px}
+.notice{display:flex;justify-content:space-between;gap:12px}
+.notice .x{opacity:.5}
+::placeholder{color:#94a3b8;font-weight:400}
+.edit input.item_name,.edit input.retailer{min-width:220px}
+.edit input.reference,.edit input.distributor,.edit input.sku{min-width:110px}
+.edit input.date{min-width:140px}

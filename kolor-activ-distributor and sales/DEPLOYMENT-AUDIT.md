@@ -1,4 +1,20 @@
-# Deployment Package Audit (24 Sep 2026)
+# Deployment Package Audit
+
+## v2 (24 Sep 2026, later) — run `supabase/migrations/003_distributors_tally_history.sql` after 002
+- Distributors page: add / edit / delete, alternative names (as printed on Tally reports), Excel import. Only HO admins and state managers can change them (enforced in the database).
+- Matching by name: distributors match on code, name or any alternative name; products match on SKU or name. "M/S", "Pvt Ltd", capitals and punctuation are ignored.
+- One upload box reads Excel (xlsx/xls/xlsm/xlsb/ods), CSV/TSV, Tally exports (Excel, XML incl. UTF-16, JSON, HTML, ASCII/TXT, PDF), scanned PDFs and photos (OCR).
+- Header detection finds the column row anywhere in the first 40 lines, including Tally's two-line headers (Closing Balance → Quantity / Rate / Value), and picks Inwards / Outwards / Closing by mode. Every column can be re-assigned in the app.
+- Tally group lines, totals and blank rows are left out automatically and listed under "Left out" with a reason and an "Add back" button.
+- The distributor is detected from the report heading or file name.
+- New "Stock count" mode sets a distributor's stock to Tally closing quantities and records the difference.
+- The same file can't be posted twice by accident (SHA-256 fingerprint).
+- History page lists every posting with its lines; managers can undo a posting (blocked if that stock was already sold).
+- Review table flags problems before posting: unknown distributor, product never stocked in, not enough stock, missing retailer, bad date.
+- Removed the empty Sales and Collections pages (nothing wrote to those tables); Reports now has stock by distributor and value, exported to Excel.
+- Tested: parser against 9 sample formats; database functions on Postgres; the full upload → review → post flow in a real browser.
+
+## v1 (24 Sep 2026)
 
 `npm install` and `npm run build` (tsc + vite) pass. The SQL migration was run twice against Postgres with stubbed Supabase auth and tested for stock-in, stock-out, oversell blocking, unknown SKU and unknown distributor.
 

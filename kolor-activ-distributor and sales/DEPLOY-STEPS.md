@@ -33,6 +33,9 @@ Your login accounts (Authentication → Users) are not touched by this.
 8. You should see **Success. No rows returned**. If a warning asks about destructive operations, click **Run this query**.
 9. Check: Table Editor should now list `collections`, `distributors`, `inventory_batches`, `inventory_transactions`, `products`, `profiles`, `retailers`, `sales_invoices`, and the view `distributor_stock_summary`.
 
+### Step 1.3b — Run the v2 update
+SQL Editor → New query → paste all of `supabase/migrations/003_distributors_tally_history.sql` → Run. Safe to run more than once.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:
@@ -42,7 +45,7 @@ where id = (select id from auth.users where email = 'vedantdaga2002@gmail.com');
 ```
 3. It should say **Success** with 1 row affected.
 
-### Step 1.5 — Add your distributors
+### Step 1.5 — Add your distributors (or use the Distributors page in the app)
 Option A, a few distributors — SQL Editor → new query → edit names, then Run:
 ```sql
 insert into public.distributors (code, name, territory) values

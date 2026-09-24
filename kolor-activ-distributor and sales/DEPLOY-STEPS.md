@@ -39,6 +39,9 @@ SQL Editor → New query → paste all of `supabase/migrations/003_distributors_
 ### Step 1.3c — Run the v3 update
 SQL Editor → New query → paste all of `supabase/migrations/004_super_stockist_formats_aliases.sql` → Run.
 
+### Step 1.3d — Run the v4 update (before the v4 code goes live)
+SQL Editor → New query → paste all of `supabase/migrations/005_locations_transfers_so_checks.sql` → Run. It should end with **Success. No rows returned**. Supabase warns about destructive operations because the script drops and recreates views and functions; no data is deleted, so click **Run this query**. Safe to run more than once, and the v3 app keeps working after it runs.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:
@@ -48,18 +51,9 @@ where id = (select id from auth.users where email = 'vedantdaga2002@gmail.com');
 ```
 3. It should say **Success** with 1 row affected.
 
-### Step 1.5 — Add your distributors (or use the Distributors page in the app)
-Option A, a few distributors — SQL Editor → new query → edit names, then Run:
-```sql
-insert into public.distributors (code, name, territory) values
-  ('D001', 'Sharma Traders', 'Delhi'),
-  ('D002', 'Gupta Enterprises', 'Haryana');
-```
-Option B, many distributors:
-1. Make an Excel sheet with three column headers exactly: `code`, `name`, `territory`. Fill rows. Save as **CSV (Comma delimited)**.
-2. Table Editor → click **distributors** → **Insert** (top) → **Import data from CSV** → pick the file → **Import data**.
-
-Codes must be unique. In your upload sheets, the Distributor column must contain either the code (D001) or the exact name.
+### Step 1.5 — Add your godown, super stockists and distributors (in the app)
+Distributors page → **Godowns** tab: add your godown. Company = your company name exactly as it prints on your Tally reports, so the app recognises your own files.
+Then **Distributors** tab → **Import from Excel** with your distributor list. A Super Stockist column creates the super stockists automatically; fill in their details on the **Super stockists** tab afterwards.
 
 ### Step 1.6 — Turn off public sign-up
 1. Left menu → **Authentication** (padlock icon).
@@ -116,6 +110,8 @@ The `sales_app_fixed` project builds from a folder that is about to be deleted, 
 
 ## PART 3 — GitHub (replace the old code)
 
+Since v3 the code is pushed with git from `C:\Users\Samsung\Hevlon-Cosmetics` (a clone of the repo), which replaces the manual steps below. They are kept for reference.
+
 Open https://github.com/DeadlyV2002/Hevlon-Cosmetics.
 
 ### Step 3.1 — Delete the old folder
@@ -154,14 +150,6 @@ Never upload a `.env` file, `node_modules` or `dist`.
 
 1. Open https://salescontrolapp.vercel.app. If you see **Setup needed**, the environment variables are missing or misspelled (step 2.2); fix them and redeploy.
 2. Sign in with your email and password.
-3. Click **Inventory** → **Inventory Input** → **Download Template**.
-4. Open the template in Excel. Fill two rows: Distributor `D001`, SKU `TEST-01`, Product `Test Lipstick`, Qty `50`, Rate `100`. Save.
-5. Back in the app, under **Excel / CSV**, choose the file. A preview table appears.
-6. Click **Post INPUT** → **OK**.
-7. **Live Distributor Stock** should show D001 / TEST-01 with 100 in stock (2 × 50).
-8. Switch to **Inventory Output** → **+ Add row manually** → fill Distributor `D001`, SKU `TEST-01`, Qty `500`, Retailer `Test Store` → **Post OUTPUT**. It must be blocked with **Insufficient stock… Available 100, requested 500**.
-9. Remove the test data in SQL Editor:
-```sql
-delete from public.inventory_transactions where product_id = (select id from public.products where sku = 'TEST-01');
-delete from public.products where sku = 'TEST-01';
-```
+3. Inventory → upload your godown's Tally Stock Summary. The yellow or green box under the type buttons says what the app read the file as; check it, then **Save stock count**.
+4. Upload a Tally sales register of dispatches to super stockists. The review table should say **transfer to …** on each row. Save it, then check the super stockist's stock on the Distributors page.
+5. Undo any test posting on the **History** page.

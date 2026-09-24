@@ -3,13 +3,16 @@
 // Pure functions only, so it can be tested outside the browser.
 import * as XLSX from "xlsx";
 
-export type Mode = "INPUT" | "OUTPUT" | "COUNT";
-export type Field = "ignore" | "item_name" | "sku" | "quantity" | "unit_price" | "amount" | "date" | "reference" | "retailer" | "distributor";
+/** INPUT = stock received, OUTPUT = stock sent out, COUNT = closing stock, SO = sales officer's daily report. */
+export type Mode = "INPUT" | "OUTPUT" | "COUNT" | "SO";
+export type Field = "ignore" | "item_name" | "sku" | "quantity" | "unit_price" | "amount" | "date" | "reference" | "retailer" | "distributor" | "so";
 export const FIELD_LABELS: Record<Field, string> = {
   ignore: "— ignore —", item_name: "Product name", sku: "SKU / item code", quantity: "Quantity", unit_price: "Rate",
-  amount: "Amount / value", date: "Date", reference: "Invoice / voucher no.", retailer: "Party / retailer", distributor: "Distributor",
+  amount: "Amount / value", date: "Date", reference: "Invoice / voucher no.", retailer: "Party (retailer / distributor / supplier)",
+  distributor: "Location (whose stock)", so: "Sales officer (SO)",
 };
-export type Row = { date: string; reference: string; distributor: string; sku: string; item_name: string; quantity: number; unit_price: number; retailer: string };
+/** retailer holds the party: who received the stock (OUT), who sent it (IN), or the SO's retailer. */
+export type Row = { date: string; reference: string; distributor: string; sku: string; item_name: string; quantity: number; unit_price: number; retailer: string; so: string };
 export type Cell = string | number | boolean | Date | null | undefined;
 export type Grid = Cell[][];
 export interface Sheet { name: string; grid: Grid }
@@ -17,8 +20,10 @@ export interface Table { sheets: Sheet[]; source: string; note?: string; fillDow
 export interface Layout { headerRow: number; headerRows: number; labels: string[]; mapping: Field[] }
 export interface Skipped { line: number; text: string; reason: string; row?: Row }
 
-export const today = () => new Date().toISOString().slice(0, 10);
-export const emptyRow = (): Row => ({ date: today(), reference: "", distributor: "", sku: "", item_name: "", quantity: 0, unit_price: 0, retailer: "" });
+/** yyyy-mm-dd in local time. (toISOString alone is UTC, which is still yesterday before 5:30 am in India.) */
+export const localDate = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+export const today = () => localDate(new Date());
+export const emptyRow = (): Row => ({ date: today(), reference: "", distributor: "", sku: "", item_name: "", quantity: 0, unit_price: 0, retailer: "", so: "" });
 
 // ---------- small helpers ----------
 export function normName(s: unknown): string {
@@ -77,6 +82,13 @@ export function toISODate(v: unknown): string {
 }
 export const isValidDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 
+/** Last date in a report heading: "1-Apr-26 to 24-Sep-26" → 2026-09-24 (a stock summary's "as on" date). */
+export function headingDate(text: string): string {
+  const found = text.match(/\b\d{1,2}[-\s/.](?:\d{1,2}|[A-Za-z]{3,9})[-\s/.,]*\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g) || [];
+  const dates = found.map(toISODate).filter(isValidDate);
+  return dates.length ? dates[dates.length - 1] : "";
+}
+
 // ---------- header recognition ----------
 // Order matters: the first matching rule wins.
 const RULES: [Field, RegExp][] = [
@@ -86,8 +98,9 @@ const RULES: [Field, RegExp][] = [
   ["unit_price", /(^| )(rate|price|unit price|mrp|ptr|pts|rate per unit|net rate)$/],
   ["amount", /(^| )(value|amount|net amount|taxable value|gross amount|total value)$/],
   ["reference", /^(invoice|inv|bill|voucher|vch|ref|reference|challan|order|doc)( no| number| num)?$/],
-  ["retailer", /^(party|party name|party a c name|customer|customer name|retailer|retailer name|buyer|outlet|shop|shop name|consignee|ledger|ledger name|dealer)$/],
-  ["distributor", /^(distributor|distributor name|distributor code|stockist|stockist name|db name|super stockist)$/],
+  ["so", /^(so|so name|s o|s o name|salesman|salesman name|sales man|sales officer|sales officer name|sales person|salesperson|sales executive|employee|employee name|emp name|dsr|dsr name|ase|ase name|tso|tso name|psr|psr name|isr|isr name|field officer)$/],
+  ["retailer", /^(party|party name|party a c name|customer|customer name|retailer|retailer name|outlet|outlet name|shop|shop name|store|store name|buyer|consignee|consignee name|ledger|ledger name|dealer|supplier|supplier name|vendor|vendor name|received from|sold to|dispatched to|despatched to|sent to)$/],
+  ["distributor", /^(distributor|distributor name|distributor code|stockist|stockist name|db name|godown|godown name|warehouse|warehouse name)$/],
   ["item_name", /^(particulars|item|items|item name|item description|product|product name|products|description|description of goods|stock item|stock item name|name of item|name of the item|material|goods|name|sku name|product description)$/],
 ];
 export function fieldFor(l: string): Field {
@@ -119,6 +132,7 @@ const QTY_PREF: Record<Mode, RegExp[]> = {
   COUNT: [/closing/, /stock in hand|soh|physical|current|available/, /balance|stock/],
   INPUT: [/inward|purchase|receipt|received|primary|\bin\b/, /billed/, /closing/],
   OUTPUT: [/outward|sale|sold|issue|dispatch|secondary|\bout\b/, /billed/],
+  SO: [/order|sale|sold|secondary|billed/, /\bqty\b|quantity|pcs|units/],
 };
 
 export function mapLabels(labels: string[], mode: Mode): Field[] {
@@ -150,7 +164,7 @@ export function mapLabels(labels: string[], mode: Mode): Field[] {
     items.forEach(i => { if (i !== (part !== undefined ? other : items[0])) mapping[i] = "ignore"; });
     if (part !== undefined && !mapping.includes("retailer")) mapping[part] = "retailer";
   }
-  for (const f of ["sku", "date", "reference", "retailer", "distributor"] as Field[]) idx(f).slice(1).forEach(i => (mapping[i] = "ignore"));
+  for (const f of ["sku", "date", "reference", "retailer", "distributor", "so"] as Field[]) idx(f).slice(1).forEach(i => (mapping[i] = "ignore"));
   return mapping;
 }
 
@@ -196,9 +210,9 @@ export function detectDistributor(text: string, distributors: { code: string; na
 const TOTAL = /^(grand\s*total|sub\s*-?\s*total|total|opening balance|closing balance|carried over|brought forward|b\/f|c\/f)\b/i;
 
 /** Turns a grid + column mapping into rows; everything left out is reported with a reason. */
-export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { distributor?: string; date?: string }, fillDown = true): { rows: Row[]; skipped: Skipped[] } {
+export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { distributor?: string; date?: string; so?: string }, fillDown = true): { rows: Row[]; skipped: Skipped[] } {
   const col = (f: Field) => layout.mapping.indexOf(f);
-  const c = { item: col("item_name"), sku: col("sku"), qty: col("quantity"), rate: col("unit_price"), amt: col("amount"), date: col("date"), ref: col("reference"), ret: col("retailer"), dist: col("distributor") };
+  const c = { item: col("item_name"), sku: col("sku"), qty: col("quantity"), rate: col("unit_price"), amt: col("amount"), date: col("date"), ref: col("reference"), ret: col("retailer"), dist: col("distributor"), so: col("so") };
   const get = (r: Cell[], i: number) => (i >= 0 ? r[i] : undefined);
   const start = layout.headerRow + Math.max(layout.headerRows, 1);
   const rows: (Row & { _line: number; _noRate: boolean })[] = [];
@@ -209,7 +223,7 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
   const carry: Record<number, Cell> = {};
   for (let i = Math.max(start, 0); i < grid.length; i++) {
     const r = [...(grid[i] || [])];
-    if (fillDown) for (const ci of [c.date, c.ref, c.ret]) if (ci >= 0) { if (cellText(r[ci])) carry[ci] = r[ci]; else if (cellText(r[c.item]) && carry[ci] !== undefined) r[ci] = carry[ci]; }
+    if (fillDown) for (const ci of [c.date, c.ref, c.ret, c.so, c.dist]) if (ci >= 0) { if (cellText(r[ci])) carry[ci] = r[ci]; else if (cellText(r[c.item]) && carry[ci] !== undefined) r[ci] = carry[ci]; }
     const text = r.map(cellText).filter(Boolean).join(" · ");
     if (!text) continue;
     const item = cellText(get(r, c.item)), sku = cellText(get(r, c.sku));
@@ -229,6 +243,7 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
       quantity: qty ?? 0,
       unit_price: rate === null ? 0 : Math.abs(rate),
       retailer: cellText(get(r, c.ret)),
+      so: cellText(get(r, c.so)) || defaults.so || "",
     };
     if (qty === null) { skipped.push({ line, text, reason: "no quantity", row }); continue; }
     if (qty < 0) {
@@ -241,11 +256,14 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
   }
 
   // Tally "Detailed" stock summaries list a group line (with the group total) before its items.
+  // Only lists without dates, invoice numbers or parties have group lines; in a register a line
+  // can equal the sum of the next ones by chance.
+  const summaryList = c.date < 0 && c.ref < 0 && c.ret < 0;
   const out: Row[] = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     let sum = 0, n = 0, isGroup = false;
-    for (let j = i + 1; j < rows.length && n < 200; j++) {
+    for (let j = i + 1; summaryList && j < rows.length && n < 200; j++) {
       sum += rows[j].quantity; n++;
       if (Math.abs(sum - r.quantity) < 1e-6 && r.quantity > 0) { isGroup = n >= 2 || r._noRate; break; }
       if (sum > r.quantity) break;

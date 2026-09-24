@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import * as XLSX from "xlsx";
-import { supabase, Distributor, Product, ProductAlias, StockLine, Role, fmt } from "./lib/supabase";
+import { supabase, Distributor, Product, ProductAlias, StockLine, Retailer, SalesOfficer, Role, fetchAll, errText } from "./lib/supabase";
+import Dashboard from "./pages/Dashboard";
 import Inventory from "./pages/Inventory";
 import Distributors from "./pages/Distributors";
+import Retailers from "./pages/Retailers";
+import SOChecks from "./pages/SOChecks";
+import Reports from "./pages/Reports";
 import History from "./pages/History";
 
-type Page = "Dashboard" | "Inventory" | "Distributors" | "History" | "Reports" | "Retailers" | "Team";
-const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "History", "Reports", "Retailers", "Team"];
+export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "SO checks" | "Reports" | "History" | "Team";
+const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "SO checks", "Reports", "History", "Team"];
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
 
 export default function App() {
@@ -16,11 +19,13 @@ export default function App() {
   const [email, setEmail] = useState(""), [password, setPassword] = useState("");
   const [page, setPage] = useState<Page>("Dashboard");
   const [message, setMessage] = useState(""), [loading, setLoading] = useState(false);
-  const [distributors, setDistributors] = useState<Distributor[]>([]);
+  const [locations, setLocations] = useState<Distributor[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [aliases, setAliases] = useState<ProductAlias[]>([]);
   const [stock, setStock] = useState<StockLine[]>([]);
-  const [retailers, setRetailers] = useState<any[]>([]);
+  const [retailers, setRetailers] = useState<Retailer[]>([]);
+  const [officers, setOfficers] = useState<SalesOfficer[]>([]);
+  const [commentCounts, setCommentCounts] = useState<Map<string, number>>(new Map());
   const [recent, setRecent] = useState<any[]>([]);
 
   useEffect(() => {
@@ -31,29 +36,33 @@ export default function App() {
   }, []);
   useEffect(() => { if (session) refreshAll(); }, [session?.user.id]);
 
-  async function q<T>(p: PromiseLike<{ data: T | null; error: { message: string } | null }>, label: string): Promise<T | null> {
-    const { data, error } = await p;
-    if (error) { setMessage(`Could not load ${label}: ${error.message}`); return null; }
-    return data;
-  }
   async function refreshAll() {
     if (!supabase || !session) return;
-    const [prof, d, p, s, r, b, al] = await Promise.all([
-      q(supabase.from("profiles").select("role").eq("id", session.user.id).maybeSingle(), "profile"),
-      q(supabase.from("distributors").select("*").order("name"), "distributors"),
-      q(supabase.from("products").select("id,sku,item_name,unit_price").order("item_name").limit(10000), "products"),
-      q(supabase.from("distributor_stock_summary").select("*").order("distributor_name").order("item_name").limit(20000), "stock"),
-      q(supabase.from("retailers").select("id,name,code,territory,created_at,distributors(name)").order("name").limit(2000), "retailers"),
-      q(supabase.from("inventory_batch_summary").select("*").order("created_at", { ascending: false }).limit(6), "recent postings"),
-      q(supabase.from("product_aliases").select("product_id,alias").limit(20000), "product names"),
+    const sb = supabase, failed: string[] = [];
+    /** One list failing (say, before the latest database step is run) shouldn't blank the others. */
+    const all = <T,>(label: string, page: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) =>
+      fetchAll<T>(page).catch(e => { failed.push(`${label}: ${errText(e)}`); return null; });
+    const [prof, d, p, s, r, al, so, cc, b] = await Promise.all([
+      sb.from("profiles").select("role").eq("id", session.user.id).maybeSingle(),
+      all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
+      all<Product>("products", (a, z) => sb.from("products").select("id,sku,item_name,unit_price").order("item_name").order("id").range(a, z)),
+      all<StockLine>("stock", (a, z) => sb.from("distributor_stock_summary").select("*").order("distributor_id").order("product_id").range(a, z)),
+      all<Retailer>("retailers", (a, z) => sb.from("retailers").select("id,distributor_id,code,name,territory,owner_name,phone,created_at").order("name").order("id").range(a, z)),
+      all<ProductAlias>("product names", (a, z) => sb.from("product_aliases").select("product_id,alias").order("id").range(a, z)),
+      all<SalesOfficer>("sales officers", (a, z) => sb.from("sales_officers").select("*").order("name").order("id").range(a, z)),
+      all<{ distributor_id: string; n: number }>("comments", (a, z) => sb.from("distributor_comment_counts").select("distributor_id,n").order("distributor_id").range(a, z)),
+      sb.from("inventory_batch_summary").select("*").order("created_at", { ascending: false }).limit(6),
     ]);
-    setRole(((prof as any)?.role as Role) ?? null);
-    if (d) setDistributors(d as Distributor[]);
-    if (p) setProducts(p as Product[]);
-    if (s) setStock(s as StockLine[]);
-    if (r) setRetailers(r as any[]);
-    if (b) setRecent(b as any[]);
-    if (al) setAliases(al as ProductAlias[]);
+    setRole(((prof.data as any)?.role as Role) ?? null);
+    if (d) setLocations(d.map(x => ({ ...x, kind: x.kind || "DISTRIBUTOR" })));
+    if (p) setProducts(p);
+    if (s) setStock(s);
+    if (r) setRetailers(r);
+    if (al) setAliases(al);
+    if (so) setOfficers(so);
+    if (cc) setCommentCounts(new Map(cc.map(x => [x.distributor_id, Number(x.n)])));
+    if (b.data) setRecent(b.data);
+    if (failed.length) setMessage(`Could not load ${failed.join("; ")}. If this mentions a missing table or column, run the latest database step (supabase/migrations) in Supabase.`);
   }
   async function login() {
     if (!supabase) return;
@@ -86,100 +95,23 @@ export default function App() {
         <header><div><small>KOLOR ACTIV · HEVLON COSMETICS</small><h1>{page}</h1></div>
           <span className="who">{session.user.email}{role && <em className="tag">{ROLE_LABEL[role]}</em>}</span></header>
         {message && <div className="notice" onClick={() => setMessage("")}>{message}<span className="x">✕</span></div>}
-        {page === "Dashboard" && <Dashboard stock={stock} distributors={distributors} products={products} recent={recent} go={setPage} />}
-        {page === "Inventory" && <Inventory distributors={distributors} products={products} aliases={aliases} stock={stock} canManage={canManage} onPosted={refreshAll} onDistributorsChanged={refreshAll} notify={setMessage} />}
-        {page === "Distributors" && <Distributors distributors={distributors} stock={stock} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Dashboard" && <Dashboard stock={stock} locations={locations} products={products} recent={recent} go={setPage} />}
+        {page === "Inventory" && <Inventory locations={locations} products={products} aliases={aliases} stock={stock} officers={officers} retailers={retailers}
+          canManage={canManage} onPosted={refreshAll} onListsChanged={refreshAll} notify={setMessage} />}
+        {page === "Distributors" && <Distributors locations={locations} stock={stock} commentCounts={commentCounts} canManage={canManage} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Retailers" && <Retailers retailers={retailers} locations={locations} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Reports" && <Reports stock={stock} locations={locations} />}
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
-        {page === "Reports" && <Reports stock={stock} distributors={distributors} />}
-        {page === "Retailers" && <Retailers retailers={retailers} />}
         {page === "Team" && <Team role={role} />}
       </main>
     </div>
   );
 }
 
-function Metric({ title, value, sub }: { title: string; value: string | number; sub?: string }) {
-  return <div className="metric"><small>{title}</small><b>{value}</b>{sub && <small>{sub}</small>}</div>;
-}
-
-function Dashboard({ stock, distributors, products, recent, go }: { stock: StockLine[]; distributors: Distributor[]; products: Product[]; recent: any[]; go: (p: Page) => void }) {
-  const units = stock.reduce((a, x) => a + Number(x.current_stock || 0), 0);
-  const value = stock.reduce((a, x) => a + Number(x.stock_value || 0), 0);
-  const active = new Set(stock.map(s => s.distributor_id));
-  const noStock = distributors.filter(d => !active.has(d.id));
-  return <>
-    <div className="cards">
-      <Metric title="Distributors" value={distributors.length} sub={noStock.length ? `${noStock.length} with no stock posted` : undefined} />
-      <Metric title="Products" value={products.length} />
-      <Metric title="Units at distributors" value={fmt(units)} />
-      <Metric title="Stock value" value={`₹${fmt(value)}`} sub="at latest purchase rate" />
-    </div>
-    <section className="card"><div className="rowhead"><h2>Recent postings</h2><button className="secondary" onClick={() => go("History")}>All history</button></div>
-      {recent.length ? <table><tbody>{recent.map(b => <tr key={b.id}><td>{new Date(b.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</td>
-        <td><span className={`pill ${String(b.mode).toLowerCase()}`}>{b.mode === "INPUT" ? "Stock IN" : b.mode === "OUTPUT" ? "Stock OUT" : "Stock count"}</span></td>
-        <td>{b.distributor_name || "several"}</td><td className="wrap">{b.source_file}</td><td>{b.lines} lines</td></tr>)}</tbody></table>
-        : <p className="empty">Nothing posted yet. Start with <button className="link" onClick={() => go("Distributors")}>adding distributors</button>, then <button className="link" onClick={() => go("Inventory")}>upload stock</button>.</p>}
-    </section>
-  </>;
-}
-
-function Reports({ stock, distributors }: { stock: StockLine[]; distributors: Distributor[] }) {
-  const [dist, setDist] = useState(""), [search, setSearch] = useState(""), [hideZero, setHideZero] = useState(true), [sup, setSup] = useState("");
-  const supers = useMemo(() => [...new Set(distributors.map(d => d.super_stockist || "").filter(Boolean))].sort(), [distributors]);
-  const superOf = useMemo(() => new Map(distributors.map(d => [d.id, d.super_stockist || ""])), [distributors]);
-  const byDist = useMemo(() => distributors.filter(d => !sup || (d.super_stockist || "") === sup).map(d => {
-    const lines = stock.filter(s => s.distributor_id === d.id);
-    return { Code: d.code, Distributor: d.name, "Super stockist": d.super_stockist || "", Owner: d.owner_name || "", Territory: d.territory || "", Products: lines.filter(l => Number(l.current_stock)).length,
-      Units: lines.reduce((a, l) => a + Number(l.current_stock), 0), "Value ₹": lines.reduce((a, l) => a + Number(l.stock_value), 0),
-      "Last movement": lines.reduce((a, l) => (l.last_movement > a ? l.last_movement : a), "") };
-  }), [stock, distributors, sup]);
-  const bySuper = useMemo(() => {
-    const m = new Map<string, { n: number; units: number; value: number }>();
-    distributors.forEach(d => { const k = d.super_stockist || "No super stockist"; const t = m.get(k) || { n: 0, units: 0, value: 0 }; t.n++; m.set(k, t); });
-    stock.forEach(s => { const k = superOf.get(s.distributor_id) || "No super stockist"; const t = m.get(k) || { n: 0, units: 0, value: 0 }; t.units += Number(s.current_stock); t.value += Number(s.stock_value); m.set(k, t); });
-    return [...m.entries()].sort((a, b) => b[1].value - a[1].value);
-  }, [stock, distributors, superOf]);
-  const lines = stock.filter(s => (!dist || s.distributor_id === dist) && (!sup || superOf.get(s.distributor_id) === sup) && (!hideZero || Number(s.current_stock) !== 0)
-    && `${s.distributor_name} ${s.sku} ${s.item_name}`.toLowerCase().includes(search.toLowerCase()));
-  function exportAll() {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bySuper.map(([k, t]) => ({ "Super stockist": k, Distributors: t.n, Units: t.units, "Value ₹": t.value }))), "By super stockist");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byDist), "By distributor");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lines.map(s => ({ Distributor: s.distributor_name, Code: s.distributor_code, "Super stockist": superOf.get(s.distributor_id) || "", SKU: s.sku, Product: s.item_name, In: Number(s.total_input), Out: Number(s.total_output), Stock: Number(s.current_stock), "Rate ₹": Number(s.unit_price), "Value ₹": Number(s.stock_value), "Last movement": s.last_movement }))), "Stock detail");
-    XLSX.writeFile(wb, `distributor-stock-${new Date().toISOString().slice(0, 10)}.xlsx`);
-  }
-  return <>
-    <section className="card"><div className="rowhead"><h2>Stock by super stockist</h2><button onClick={exportAll}>Export to Excel</button></div>
-      <div className="tablewrap"><table><thead><tr><th>Super stockist</th><th>Distributors</th><th>Units</th><th>Value ₹</th></tr></thead>
-        <tbody>{bySuper.map(([k, t]) => <tr key={k} className="clickable" onClick={() => setSup(k === "No super stockist" ? "" : k)}><td><b>{k}</b></td><td>{t.n}</td><td>{fmt(t.units)}</td><td>{fmt(t.value)}</td></tr>)}</tbody></table></div></section>
-    <section className="card"><div className="rowhead"><h2>Stock by distributor{sup ? ` — ${sup}` : ""}</h2>
-      <select value={sup} onChange={e => setSup(e.target.value)} style={{ width: "auto" }}><option value="">All super stockists</option>{supers.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-      <div className="tablewrap"><table><thead><tr><th>Code</th><th>Distributor</th><th>Super stockist</th><th>Territory</th><th>Products in stock</th><th>Units</th><th>Value ₹</th><th>Last movement</th></tr></thead>
-        <tbody>{byDist.map(r => <tr key={r.Code}><td>{r.Code}</td><td>{r.Distributor}</td><td>{r["Super stockist"]}</td><td>{r.Territory}</td><td>{r.Products}</td><td>{fmt(r.Units)}</td><td>{fmt(r["Value ₹"])}</td><td>{r["Last movement"] || "—"}</td></tr>)}</tbody></table></div></section>
-    <section className="card"><div className="rowhead"><h2>Stock detail</h2>
-      <div className="actions"><select value={dist} onChange={e => setDist(e.target.value)}><option value="">All distributors</option>{distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
-        <input className="search" placeholder="Search product…" value={search} onChange={e => setSearch(e.target.value)} />
-        <label className="inline"><input type="checkbox" checked={hideZero} onChange={e => setHideZero(e.target.checked)} /> Hide zero</label></div></div>
-      <div className="tablewrap"><table><thead><tr><th>Distributor</th><th>SKU</th><th>Product</th><th>IN</th><th>OUT</th><th>Stock</th><th>Value ₹</th><th>Last movement</th></tr></thead>
-        <tbody>{lines.map(s => <tr key={`${s.distributor_id}-${s.product_id}`}><td>{s.distributor_name}</td><td>{s.sku}</td><td>{s.item_name}</td>
-          <td className="in">+{fmt(s.total_input)}</td><td className="out">-{fmt(s.total_output)}</td><td><b>{fmt(s.current_stock)}</b></td><td>{fmt(s.stock_value)}</td><td>{s.last_movement}</td></tr>)}</tbody></table>
-        {!lines.length && <p className="empty">No stock lines.</p>}</div></section>
-  </>;
-}
-
-function Retailers({ retailers }: { retailers: any[] }) {
-  const [search, setSearch] = useState("");
-  const list = retailers.filter(r => `${r.name} ${r.distributors?.name || ""}`.toLowerCase().includes(search.toLowerCase()));
-  return <section className="card"><div className="rowhead"><h2>Retailers ({retailers.length})</h2><input className="search" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} /></div>
-    <p className="hint">Retailers are added automatically from Stock OUT uploads.</p>
-    <div className="tablewrap"><table><thead><tr><th>Retailer</th><th>Distributor</th><th>Territory</th><th>First seen</th></tr></thead>
-      <tbody>{list.map(r => <tr key={r.id}><td>{r.name}</td><td>{r.distributors?.name}</td><td>{r.territory}</td><td>{String(r.created_at || "").slice(0, 10)}</td></tr>)}</tbody></table>
-      {!list.length && <p className="empty">No retailers yet.</p>}</div></section>;
-}
-
 function Team({ role }: { role: Role | null }) {
   return <section className="card"><h2>Team &amp; access</h2>
-    <p>Your role: <b>{role ? ROLE_LABEL[role] : "unknown"}</b>. HO admins and state managers can add/edit distributors and undo postings; everyone signed in can upload stock.</p>
+    <p>Your role: <b>{role ? ROLE_LABEL[role] : "unknown"}</b>. HO admins and state managers can add and edit godowns, super stockists, distributors, retailers and SOs, and undo postings. Everyone signed in can upload stock and SO reports.</p>
     <ol><li>Supabase → Authentication → Users → <b>Add user</b> → Create new user (tick “Auto Confirm User”).</li>
       <li>Set their role in the <code>profiles</code> table (HO_ADMIN, STATE_MANAGER, DISTRIBUTOR_MANAGER or SALESMAN).</li></ol></section>;
 }

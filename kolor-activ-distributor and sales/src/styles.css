@@ -528,3 +528,35 @@ button.rt-chip{border:0;cursor:pointer;font:inherit;font-size:12px}
 .pin.on{opacity:1;filter:none}
 .rotating{margin-top:8px;padding-top:8px;border-top:1px dashed #cbd5e1}
 .rotating h2{font-size:17px}
+.skiptable td{vertical-align:middle}
+.skiptable td.wrap{white-space:normal;min-width:200px}
+.skiptable td.act{text-align:right;white-space:nowrap}
+.footer-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px}
+.footer-actions .status{flex:1 1 280px;margin:0}
+.clearbtn{position:fixed;z-index:900;width:22px;height:22px;padding:0;border-radius:50%;background:#e2e8f0;color:#475569;font-size:11px;line-height:22px;text-align:center;text-transform:none}
+.clearbtn:hover{background:#cbd5e1;color:#0f172a}
+input:not([type=checkbox]):not([type=radio]):not([type=date]):not([type=file]),textarea{padding-right:30px}
+/* Long lists: a dozen rows in view, the rest scroll inside the table with the headings kept on top. */
+.scrolltable{max-height:min(560px,62vh);overflow:auto;border:1px solid #e2e8f0;border-radius:12px}
+.scrolltable thead th{position:sticky;top:0;z-index:2;background:#f8fafc;box-shadow:inset 0 -1px 0 #e2e8f0}
+table.nice tbody tr:nth-child(even) td{background:#fbfdff}
+table.nice tbody tr:hover td{background:#eff6ff}
+table.nice td{border-bottom-color:#f1f5f9}
+.dlabel.peak{font-weight:700;fill:#0f172a}
+/* SO Reports: one filter bar, tabs, compact tree */
+.sohead{padding:14px 18px}
+.sofilters{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.sofilters .search{flex:1 1 220px;margin:0;min-width:180px}
+.sofilters button.select{width:auto;min-width:150px;margin:0}
+.sotabs{display:flex;flex-wrap:wrap;gap:4px;margin-top:12px;border-bottom:1px solid #e2e8f0}
+.sotabs button{background:none;color:#475569;border-radius:8px 8px 0 0;padding:8px 14px;font-weight:600;border-bottom:2px solid transparent;display:inline-flex;gap:6px;align-items:center}
+.sotabs button:hover{color:#1d4ed8;background:#f8fafc}
+.sotabs button.on{color:#1d4ed8;border-bottom-color:#2563eb;background:#eff6ff}
+.sotabs .bellcount{position:static}
+.scrolltable.short{max-height:340px}
+.st-head{padding:6px 10px}
+.st-head b{font-size:14px}
+.st-tree .rt-branch{gap:6px}
+.duplist{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.duplist .chip{gap:8px;padding:3px 4px 3px 10px;background:#fff}
+td.sub{white-space:normal;max-width:0}

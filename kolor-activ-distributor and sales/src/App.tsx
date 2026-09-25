@@ -14,6 +14,7 @@ import Pricing from "./pages/Pricing";
 import Collections from "./pages/Collections";
 import SOReports from "./pages/SOReports";
 import AlertsBell from "./components/AlertsBell";
+import ClearButton from "./components/ClearButton";
 import { useSessionLog } from "./components/LogBook";
 
 export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "Collections" | "SO reports" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
@@ -143,6 +144,7 @@ export default function App() {
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Settings" && <Settings role={role} locations={locations} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>
+      <ClearButton />
     </div>
   );
 }

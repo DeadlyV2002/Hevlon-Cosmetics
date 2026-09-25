@@ -14,6 +14,7 @@ import { exportPng } from "../lib/present";
 
 interface Day { id: string; so_id: string; day: string; state: string | null; manager: string | null; hq: string | null; db_name: string | null; distributor_id: string | null; town: string | null; beat: string | null; remark: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number }
 interface Prod { product: string; category: string | null; qty: number; value: number }
+interface StockCheck { distributor_id: string; product: string; product_id: string | null; so_qty: number; so_value: number; opening: number; received: number; closing: number; counted: boolean; has_before: boolean }
 interface StateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number }
 interface Props { officers: SalesOfficer[]; locations: Distributor[]; stock: StockLine[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
 interface Checked { book: DsrBook; files: string; fresh: DsrDay[]; same: number; changed: { d: DsrDay; old: Day }[] }
@@ -30,6 +31,7 @@ interface Sum { soId: string; so?: SalesOfficer; days: number; att: Record<strin
 
 export default function SOReports({ officers, locations, stock, canManage, onChanged, notify }: Props) {
   const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "month")!.range());
+  const [tab, setTab] = useState<string>("overview"), [showIdle, setShowIdle] = useState(false);
   const [zone, setZone] = useState(""), [q, setQ] = useState(""), [focus, setFocus] = useState("");
   const [days, setDays] = useState<Day[]>([]), [prods, setProds] = useState<Prod[]>([]), [states, setStates] = useState<StateDay[]>([]), [bills, setBills] = useState<Billing[]>([]);
   const [latest, setLatest] = useState<Day[]>([]);
@@ -146,10 +148,12 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
       return { ...s, flag: f.join("; ") };
     });
   }, [view, byId]);
+  const dbCount = useMemo(() => { const m = new Map<string, Set<string>>(); view.forEach(d => { const k = d.distributor_id || d.db_name; if (k && WORKING.has(d.attendance || "")) m.set(d.so_id, (m.get(d.so_id) || new Set()).add(k)); }); return m; }, [view]);
   const working = (s: Sum) => ["Present", "Half Day", "Meeting"].reduce((a, k) => a + (s.att[k] || 0), 0);
   const scols: Col<Sum>[] = [
     { key: "so", label: "Name", value: s => s.so?.name || "Unknown" }, { key: "post", label: "Post", value: s => s.so?.designation },
     { key: "boss", label: "Reports To", value: s => byId.get(s.so?.manager_id || "")?.name }, { key: "zone", label: "Zone", value: s => zoneOf(s.so) }, { key: "hq", label: "HQ", value: s => s.so?.hq || s.so?.region },
+    { key: "dbs", label: "DBs Worked", value: s => dbCount.get(s.soId)?.size || 0, num: true },
     { key: "present", label: "Present", value: s => (s.att.Present || 0) + (s.att["Half Day"] || 0) / 2, num: true }, { key: "leave", label: "Leave", value: s => s.att.Leave || 0, num: true },
     { key: "off", label: "Off / Holiday", value: s => (s.att["Weekly Off"] || 0) + (s.att.Holiday || 0), num: true },
     { key: "calls", label: "Total Calls", value: s => s.calls, num: true }, { key: "pc", label: "Productive Calls", value: s => s.pc, num: true },
@@ -161,15 +165,16 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
   // ---------- tree: zone → ASM → ASE → SO ----------
   const sumOf = useMemo(() => new Map(sums.map(s => [s.soId, s])), [sums]);
   const teamTotal = (id: string) => { let v = 0, c = 0, p = 0; below(id).forEach(x => { const s = sumOf.get(x); if (s) { v += s.value; c += s.calls; p += s.pc; } }); return { v, c, p }; };
-  const roots = officers.filter(o => inView.has(o.id) && (!o.manager_id || !inView.has(o.manager_id)))
+  const hasData = (id: string) => [...below(id)].some(x => sumOf.has(x));
+  const roots = officers.filter(o => inView.has(o.id) && (!o.manager_id || !inView.has(o.manager_id)) && (showIdle || hasData(o.id)))
     .sort((a, b) => zoneOf(a).localeCompare(zoneOf(b)) || rankOf(a.designation) - rankOf(b.designation) || a.name.localeCompare(b.name));
   const zonesInTree = [...new Set(roots.map(zoneOf))];
   const node = (o: SalesOfficer, depth: number): JSX.Element => {
-    const t = teamTotal(o.id), s = sumOf.get(o.id), sub = (kids.get(o.id) || []).map(id => byId.get(id)!).filter(x => x && inView.has(x.id)).sort((a, b) => rankOf(a.designation) - rankOf(b.designation) || teamTotal(b.id).v - teamTotal(a.id).v);
+    const t = teamTotal(o.id), s = sumOf.get(o.id), sub = (kids.get(o.id) || []).map(id => byId.get(id)!).filter(x => x && inView.has(x.id) && (showIdle || hasData(x.id))).sort((a, b) => rankOf(a.designation) - rankOf(b.designation) || teamTotal(b.id).v - teamTotal(a.id).v);
     return <div key={o.id} className={`st-node d${depth}${focus === o.id ? " on" : ""}`}>
       <button className="st-head" onClick={() => setFocus(focus === o.id ? "" : o.id)} title="Show this person and their team">
         <span className={`st-post p-${o.designation || "SO"}`}>{o.designation || "SO"}</span><b>{o.name}</b><small>{o.hq || o.region || ""}</small>
-        <span className="st-num">{money(t.v)}<small>{t.c ? `${fmt(pct(t.p, t.c))}% PC` : "no calls"}{s ? ` · ${working(s)} days` : ""}</small></span>
+        <span className="st-num">{money(t.v)}<small>{t.c ? `${fmt(pct(t.p, t.c))}% PC` : "no calls"}{s ? ` · ${working(s)} days · ${plural(dbCount.get(o.id)?.size || 0, "DB")}` : ""}</small></span>
       </button>
       {sub.length > 0 && <div className="st-kids">{sub.map(k => node(k, depth + 1))}</div>}
     </div>;
@@ -242,101 +247,157 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     XLSX.writeFile(wb, `so-reports-${range.from}-to-${range.to}.xlsx`);
   }
 
+  // ---------- SO bookings against distributor stock, product by product ----------
+  const [checkRange, setCheckRange] = useState<Range>(() => PRESETS.find(p => p.id === "lastmonth")!.range());
+  const [stockRaw, setStockRaw] = useState<StockCheck[]>([]), [onlyFlagged, setOnlyFlagged] = useState(false);
+  useEffect(() => {
+    if (!supabase) return;
+    fetchAll<StockCheck>((a, b) => supabase!.rpc("dsr_stock_check", { p_from: checkRange.from, p_to: checkRange.to }).range(a, b)).then(setStockRaw).catch(() => setStockRaw([]));
+  }, [checkRange.from, checkRange.to, reload]);
+  const stockRows = useMemo(() => stockRaw.map(r => {
+    const so = n(r.so_qty), avail = n(r.opening) + n(r.received), drop = avail - n(r.closing);
+    let kind = "ok", flag = "";
+    if (!r.product_id) { kind = "noproduct"; flag = "product not in the product list: add the DSR products on the Pricing page"; }
+    else if (!r.has_before && !n(r.received)) { kind = "nodata"; flag = r.counted ? "first stock statement is at the end of this period, so what they had before is unknown" : "no stock or bills for this distributor before this period"; }
+    else if (so > avail + 0.05) { kind = "over"; flag = `booked ${fmt(so, 1)} doz, had ${fmt(avail, 1)}`; }
+    else if (r.counted && so > drop + 0.5) { kind = "drop"; flag = `booked ${fmt(so, 1)} doz, stock went down only ${fmt(drop, 1)}`; }
+    return { ...r, loc: locById.get(r.distributor_id), kind, flag };
+  }).filter(r => inView.size === officers.length || !filtered || view.some(d => d.distributor_id === r.distributor_id)), [stockRaw, locById, view]);
+  type SC = (typeof stockRows)[number];
+  const sccols: Col<SC>[] = [
+    { key: "db", label: "Distributor", value: r => r.loc?.name }, { key: "product", label: "Product", value: r => r.product },
+    { key: "qty", label: "Booked (Doz)", value: r => Math.round(n(r.so_qty) * 10) / 10, num: true }, { key: "value", label: "Booked ₹", value: r => Math.round(n(r.so_value)), num: true },
+    { key: "open", label: "Had Before", value: r => (r.has_before ? Math.round(n(r.opening) * 10) / 10 : null), num: true },
+    { key: "recv", label: "Received", value: r => Math.round(n(r.received) * 10) / 10, num: true },
+    { key: "close", label: "Stock At End", value: r => (r.counted ? Math.round(n(r.closing) * 10) / 10 : null), num: true }, { key: "flag", label: "Check", value: r => r.flag },
+  ];
+  const sct = useColumnFilters(onlyFlagged ? stockRows.filter(r => r.kind === "over" || r.kind === "drop") : stockRows, sccols);
+
+  const TABS = [["overview", "Overview"], ["team", "Team"], ["checks", "Stock Checks"], ["attendance", "Attendance"], ["log", "Daily Log"], ["products", "Products"], ["upload", "Upload DSR"], ["staff", "Sales Team"]] as const;
+  const flagged = stockRows.filter(r => r.kind === "over" || r.kind === "drop");
   return <>
-    <section className="card upload">
-      <div className="rowhead"><h2>Upload Daily Sales Reports</h2>
-        <label className="button secondary">{busy === "read" ? "Reading…" : "Choose DSR Workbooks"}<input hidden type="file" multiple accept=".xlsx,.xlsm,.xls" onChange={e => { const x = [...(e.target.files || [])]; if (x.length) read(x); e.target.value = ""; }} /></label></div>
-      <p className="hint">Upload the DSR workbooks for any states, one or several at a time, as often as you like. Every sheet is read: SO sheets give each person's days, the state total is used to check them, and summary sheets are noted. New days are added; a day already logged for a person is kept unless you choose to replace it.</p>
-      {check && <div className="fixbox">
-        <b>{check.files}</b>: {plural(check.fresh.length, "new day")} to add, {plural(check.same, "day")} already logged with the same figures{check.book.stateDays.length ? `, ${plural(check.book.stateDays.length, "state-total day")}` : ""}, {plural(check.book.products.length, "product")} with SS rates.
-        {check.changed.length > 0 && <div className="warn">{plural(check.changed.length, "day")} {check.changed.length === 1 ? "is" : "are"} already logged for the same person with different figures, which is a discrepancy: {check.changed.slice(0, 6).map(c => `${c.d.so} on ${c.d.day} (logged ${money(c.old.sale_value)}, ${c.old.total_calls} calls; now ${money(c.d.sale_value)}, ${c.d.total_calls} calls)`).join("; ")}{check.changed.length > 6 ? "…" : ""}.
-          <label className="inline"><input type="checkbox" checked={replaceChanged} onChange={e => setReplaceChanged(e.target.checked)} /> Replace them with this upload</label></div>}
-        {check.book.dupes.length > 0 && <div className="warn">The same person appears twice on the same day in this upload ({plural(check.book.dupes.length, "time")}); only the first is used: {check.book.dupes.slice(0, 5).join("; ")}{check.book.dupes.length > 5 ? "…" : ""}.</div>}
-        <div className="tablewrap"><table><thead><tr><th>File</th><th>Sheet</th><th>Read As</th><th>Rows</th><th>Note</th></tr></thead>
-          <tbody>{check.book.sheets.map((s, i) => <tr key={i}><td>{s.file}</td><td>{s.name}</td><td>{s.kind}</td><td>{s.rows}</td><td className="wrap">{s.note}</td></tr>)}</tbody></table></div>
-        <div className="actions"><button className="secondary" onClick={() => setCheck(null)}>Cancel</button>
-          <button disabled={busy === "post" || (!check.fresh.length && !(replaceChanged && check.changed.length) && !check.book.stateDays.length)} onClick={post}>{busy === "post" ? "Saving…" : check.fresh.length + (replaceChanged ? check.changed.length : 0) ? `Add ${plural(check.fresh.length + (replaceChanged ? check.changed.length : 0), "Day")}` : "Save State Totals"}</button></div>
-      </div>}
-      <div className="reserve">{msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}</div>
+    <section className="card sohead">
+      <div className="sofilters">
+        <DateRange value={range} onChange={setRange} />
+        <Select value={zone} onChange={e => { setZone(e.target.value); setFocus(""); }} aria-label="Zone"><option value="">All zones</option>{allZones.map(z => <option key={z} value={z}>{z}</option>)}</Select>
+        <input className="search" placeholder="Search a person, HQ, area or town…" value={q} onChange={e => setQ(e.target.value)} />
+        <button className="secondary" onClick={exportAll} disabled={!days.length}>Export To Excel</button>
+      </div>
+      {focus && <p className="hint">Showing {byId.get(focus)?.name} and their team. <button className="link" onClick={() => setFocus("")}>Show Everyone</button></p>}
+      <div className="sotabs" role="tablist">{TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
+        {label}{id === "checks" && flagged.length ? <em className="bellcount">{flagged.length}</em> : null}</button>)}</div>
+      {err && <div className="status err">{err}</div>}
     </section>
 
-    {latestDay && <section className="card">
-      <div className="rowhead"><h2>Latest Day: {new Date(`${latestDay}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</h2>
-        <span className="muted">{money(latestRows.reduce((a, d) => a + n(d.sale_value), 0))} secondary · {plural(latestRows.filter(d => WORKING.has(d.attendance || "")).length, "person", "people")} working</span></div>
-      <div className="tablewrap"><table><thead><tr><th>Name</th><th>Attendance</th><th>DB</th><th>Town / Beat</th><th>Calls</th><th>PC</th><th>Secondary</th><th>Remark</th></tr></thead>
-        <tbody>{[...latestRows].sort((a, b) => n(b.sale_value) - n(a.sale_value)).map(d => <tr key={d.id}><td>{byId.get(d.so_id)?.name}</td><td><i className={cls(d.attendance)}>{d.attendance}</i></td>
-          <td>{d.db_name}</td><td className="wrap">{[d.town, d.beat].filter(Boolean).join(" · ")}</td><td>{d.total_calls}</td><td>{d.productive_calls}</td><td>{money(d.sale_value)}</td><td className="wrap">{d.remark}</td></tr>)}
-          {notReported.map(o => <tr key={o.id} className="flagged"><td>{o.name}</td><td><i className="att a-none">No report</i></td><td colSpan={6} className="muted">Nothing logged for this day</td></tr>)}</tbody></table></div>
-    </section>}
-
-    <section className="card">
-      <div className="rowhead"><h2>Sales Team Performance</h2>
-        <div className="actions"><DateRange value={range} onChange={setRange} />
-          <Select value={zone} onChange={e => { setZone(e.target.value); setFocus(""); }} aria-label="Zone"><option value="">All zones</option>{allZones.map(z => <option key={z} value={z}>{z}</option>)}</Select>
-          <input className="search" placeholder="Search a person, HQ, area or town…" value={q} onChange={e => setQ(e.target.value)} />
-          <button className="secondary" onClick={exportAll} disabled={!days.length}>Export To Excel</button></div></div>
-      {focus && <p className="hint">Showing {byId.get(focus)?.name} and their team. <button className="link" onClick={() => setFocus("")}>Show Everyone</button></p>}
-      {err && <div className="status err">{err}</div>}
+    {tab === "overview" && <>
       <div className="cards">
         <div className="metric"><small>Secondary sales</small><b>{money(tot.value)}</b></div>
         <div className="metric"><small>Total calls</small><b>{fmt(tot.calls)}</b></div>
         <div className="metric"><small>Productive calls</small><b>{fmt(tot.pc)}</b></div>
         <div className="metric"><small>Strike rate (PC %)</small><b>{tot.calls ? `${fmt(pct(tot.pc, tot.calls))}%` : "—"}</b></div>
+        <div className="metric"><small>Distributors worked</small><b>{fmt(new Set(view.map(d => d.distributor_id || d.db_name).filter(Boolean)).size)}</b></div>
       </div>
-      {roots.length > 0 && <div className="st-tree">{zonesInTree.map(z => <details key={z} className="rt-state" open>
-        <summary><h3>{z}</h3><span className="rt-badge">{plural(officers.filter(o => zoneOf(o) === z && inView.has(o.id)).length, "person", "people")}</span>
+      {latestDay && <section className="card">
+        <div className="rowhead"><h2>Latest Day: {new Date(`${latestDay}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</h2>
+          <span className="muted">{money(latestRows.reduce((a, d) => a + n(d.sale_value), 0))} secondary · {plural(latestRows.filter(d => WORKING.has(d.attendance || "")).length, "person", "people")} working</span></div>
+        <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Name</th><th>Attendance</th><th>DB</th><th>Town / Beat</th><th>Calls</th><th>PC</th><th>Secondary</th><th>Remark</th></tr></thead>
+          <tbody>{[...latestRows].sort((a, b) => n(b.sale_value) - n(a.sale_value)).map(d => <tr key={d.id}><td>{byId.get(d.so_id)?.name}</td><td><i className={cls(d.attendance)}>{d.attendance}</i></td>
+            <td>{d.db_name}</td><td className="wrap">{[d.town, d.beat].filter(Boolean).join(" · ")}</td><td>{d.total_calls}</td><td>{d.productive_calls}</td><td>{money(d.sale_value)}</td><td className="wrap">{d.remark}</td></tr>)}
+            {notReported.map(o => <tr key={o.id} className="flagged"><td>{o.name}</td><td><i className="att a-none">No report</i></td><td colSpan={6} className="muted">Nothing logged for this day</td></tr>)}</tbody></table></div>
+      </section>}
+      {view.length > 0 ? <section className="card" ref={charts}>
+        <div className="rowhead"><h2>Charts</h2><button className="secondary" onClick={() => charts.current && exportPng(charts.current, "SO charts", `Sales team, ${range.from} to ${range.to}`).catch(e => notify(errText(e)))}>Export Charts</button></div>
+        <div className="reportcharts">
+          <section><h3>Secondary sales by day</h3><ChartView data={trend} size="focus" labels={false} /></section>
+          <section><h3>Top people by secondary</h3><ChartView data={topPeople} size="card" /></section>
+          <section><h3>Top products sold</h3>{prods.length ? <ChartView data={topProducts} size="card" /> : <p className="empty">No product lines.</p>}</section>
+          <section><h3>Sales by category</h3>{prods.length ? <ChartView data={byCategory} size="card" /> : <p className="empty">No product lines.</p>}</section>
+        </div>
+      </section> : <p className="empty">No daily reports in this period for this selection. Upload DSRs on the Upload DSR tab.</p>}
+    </>}
+
+    {tab === "team" && <section className="card">
+      <div className="rowhead"><h2>Team Tree</h2><label className="inline"><input type="checkbox" checked={showIdle} onChange={e => setShowIdle(e.target.checked)} /> Show people with no reports in this period</label></div>
+      <p className="hint">Open a zone to see its ASMs, ASEs and SOs with their sales. Click a person to see them and everyone under them.</p>
+      {roots.length > 0 ? <div className="st-tree">{zonesInTree.map(z => <details key={z} className="rt-state">
+        <summary><h3>{z}</h3><span className="rt-badge">{plural(officers.filter(o => zoneOf(o) === z && inView.has(o.id) && (showIdle || sumOf.has(o.id))).length, "person", "people")}</span>
           <span className="rt-badge">{money(sums.filter(s => zoneOf(s.so) === z).reduce((a, s) => a + s.value, 0))}</span></summary>
-        <div className="rt-branch">{roots.filter(o => zoneOf(o) === z).map(o => node(o, 0))}</div></details>)}</div>}
-      {sums.length ? <div className="tablewrap"><table><thead><tr>{scols.map(c => st.head(c.key))}</tr></thead>
+        <div className="rt-branch">{roots.filter(o => zoneOf(o) === z).map(o => node(o, 0))}</div></details>)}</div> : <p className="empty">Nobody matches.</p>}
+      <div className="rowhead"><h2>Performance</h2>{st.active > 0 && <button className="link" onClick={st.clear}>Clear Filters</button>}</div>
+      {sums.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{scols.map(c => st.head(c.key))}</tr></thead>
         <tbody>{st.rows.map(s => <tr key={s.soId} className={s.flag ? "flagged" : ""}>{scols.map(c => <td key={c.key} className={c.key === "flag" ? "wrap" : ""}>
           {c.key === "so" ? <button className="link strong" onClick={() => setFocus(s.soId)}>{s.so?.name || "Unknown"}</button> : c.key === "flag" ? s.flag && <span className="err">{s.flag}</span>
             : c.key === "value" || c.key === "perday" ? money(c.value(s)) : c.key === "strike" ? `${c.value(s)}%` : c.value(s)}</td>)}</tr>)}</tbody></table></div>
         : <p className="empty">No daily reports in this period for this selection.</p>}
-    </section>
-
-    {view.length > 0 && <section className="card" ref={charts}>
-      <div className="rowhead"><h2>Charts</h2><button className="secondary" onClick={() => charts.current && exportPng(charts.current, "SO charts", `Sales team, ${range.from} to ${range.to}`).catch(e => notify(errText(e)))}>Export Charts</button></div>
-      <div className="reportcharts">
-        <section><h3>Secondary sales by day</h3><ChartView data={trend} size="focus" labels={false} /></section>
-        <section><h3>Top people by secondary</h3><ChartView data={topPeople} size="card" /></section>
-        <section><h3>Top products sold</h3>{prods.length ? <ChartView data={topProducts} size="card" /> : <p className="empty">No product lines.</p>}</section>
-        <section><h3>Sales by category</h3>{prods.length ? <ChartView data={byCategory} size="card" /> : <p className="empty">No product lines.</p>}</section>
-      </div>
     </section>}
 
-    {(dbRows.length > 0 || stateGaps.length > 0 || unmatched.length > 0) && <section className="card">
-      <h2>Checks Against Stock And Collections</h2>
-      <p className="hint">What SOs booked at each distributor in this period, against what that distributor bought, holds and paid. SO bookings well above purchases and stock, or low collection, need a look.</p>
-      {stateGaps.length > 0 && <div className="warn">The state total sheet doesn't match the SO sheets on {plural(stateGaps.length, "day")}: {stateGaps.slice(0, 5).map(s => `${s.state} ${s.day} (state total ${money(s.sale_value)}, SOs add up to ${money(s.sos)})`).join("; ")}{stateGaps.length > 5 ? "…" : ""}.</div>}
-      {dbRows.length > 0 && <div className="tablewrap"><table><thead><tr><th>Distributor</th><th>SOs</th><th>SO Bookings</th><th>Billed To Them</th><th>Stock Now</th><th>Collection %</th><th>Flag</th></tr></thead>
-        <tbody>{dbRows.slice(0, 300).map(r => <tr key={r.id} className={r.flag ? "flagged" : ""}><td>{r.loc ? <button className="link strong" onClick={() => setReport(r.loc!)}>{r.loc.name}</button> : "Deleted"}</td>
-          <td className="wrap">{[...r.sos].join(", ")}</td><td>{money(r.value)}</td><td>{money(r.billed)}</td><td>{money(r.stockV)}</td><td>{r.cp === null ? "—" : `${fmt(r.cp)}%`}</td><td className="wrap">{r.flag && <span className="err">{r.flag}</span>}</td></tr>)}</tbody></table></div>}
-      {unmatched.length > 0 && <p className="hint">{plural(unmatched.length, "DB name")} in the DSRs {unmatched.length === 1 ? "isn't" : "aren't"} in your distributor list, so {unmatched.length === 1 ? "it" : "they"} can't be checked: {unmatched.slice(0, 12).map(([k, v]) => `${k} (${money(v)})`).join(", ")}{unmatched.length > 12 ? "…" : ""}. Add them, or add these spellings as other names on the Distributors page.</p>}
-    </section>}
+    {tab === "checks" && <>
+      <section className="card">
+        <div className="rowhead"><h2>SO Bookings Against Distributor Stock</h2><DateRange value={checkRange} onChange={setCheckRange} /></div>
+        <p className="hint">For each distributor, what SOs booked product by product in this period against what the distributor had: stock before the period plus stock received during it. Upload each distributor's month-end stock and bills, then check the month. Quantities are in dozens.</p>
+        <div className="cards">
+          <div className="metric"><small>Product lines booked</small><b>{fmt(stockRows.length)}</b></div>
+          <div className="metric"><small>Booked with no stock behind them</small><b>{fmt(stockRows.filter(r => r.kind === "over").length)}</b></div>
+          <div className="metric"><small>More than stock went down</small><b>{fmt(stockRows.filter(r => r.kind === "drop").length)}</b></div>
+          <div className="metric"><small>Can't check yet</small><b>{fmt(stockRows.filter(r => r.kind === "nodata" || r.kind === "noproduct").length)}</b></div>
+        </div>
+        <div className="actions"><label className="inline"><input type="checkbox" checked={onlyFlagged} onChange={e => setOnlyFlagged(e.target.checked)} /> Only problems</label>{sct.active > 0 && <button className="link" onClick={sct.clear}>Clear Filters</button>}</div>
+        {stockRows.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{sccols.map(c => sct.head(c.key))}</tr></thead>
+          <tbody>{sct.rows.map((r, i) => <tr key={i} className={r.kind === "over" || r.kind === "drop" ? "flagged" : ""}>
+            <td>{r.loc ? <button className="link strong" onClick={() => setReport(r.loc!)}>{r.loc.name}</button> : "Deleted"}</td><td>{r.product}</td><td>{fmt(r.so_qty, 1)}</td><td>{money(r.so_value)}</td>
+            <td>{r.has_before ? fmt(r.opening, 1) : "—"}</td><td>{fmt(r.received, 1)}</td><td>{r.counted ? fmt(r.closing, 1) : "—"}</td><td className="wrap">{r.flag && <span className={r.kind === "over" || r.kind === "drop" ? "err" : "muted"}>{r.flag}</span>}</td></tr>)}</tbody></table></div>
+          : <p className="empty">No SO bookings with a matched distributor in this period.</p>}
+      </section>
+      <section className="card">
+        <h2>Bookings, Billing And Collection By Distributor</h2>
+        {stateGaps.length > 0 && <div className="warn">The state total sheet doesn't match the SO sheets on {plural(stateGaps.length, "day")}: {stateGaps.slice(0, 5).map(s => `${s.state} ${s.day} (state total ${money(s.sale_value)}, SOs add up to ${money(s.sos)})`).join("; ")}{stateGaps.length > 5 ? "…" : ""}.</div>}
+        {dbRows.length > 0 ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr><th>Distributor</th><th>SOs</th><th>SO Bookings</th><th>Billed To Them</th><th>Stock Now</th><th>Collection %</th><th>Flag</th></tr></thead>
+          <tbody>{dbRows.slice(0, 300).map(r => <tr key={r.id} className={r.flag ? "flagged" : ""}><td>{r.loc ? <button className="link strong" onClick={() => setReport(r.loc!)}>{r.loc.name}</button> : "Deleted"}</td>
+            <td className="wrap">{[...r.sos].join(", ")}</td><td>{money(r.value)}</td><td>{money(r.billed)}</td><td>{money(r.stockV)}</td><td>{r.cp === null ? "—" : `${fmt(r.cp)}%`}</td><td className="wrap">{r.flag && <span className="err">{r.flag}</span>}</td></tr>)}</tbody></table></div>
+          : <p className="empty">No bookings at listed distributors in this period.</p>}
+        {unmatched.length > 0 && <p className="hint">{plural(unmatched.length, "DB name")} in the DSRs {unmatched.length === 1 ? "isn't" : "aren't"} in your distributor list, so {unmatched.length === 1 ? "it" : "they"} can't be checked: {unmatched.slice(0, 12).map(([k, v]) => `${k} (${money(v)})`).join(", ")}{unmatched.length > 12 ? "…" : ""}. Add them, or add these spellings as other names on the Distributors page.</p>}
+      </section>
+    </>}
 
-    {sums.length > 0 && <section className="card">
+    {tab === "attendance" && (sums.length ? <section className="card">
       <h2>Attendance</h2>
       <div className="legend attlegend">{Object.entries(SHORT).map(([k, v]) => <span key={k}><i className={cls(k)}>{v}</i>{k}</span>)}</div>
-      <div className="tablewrap"><table className="attgrid"><thead><tr><th>Name</th>{gridDates.map(d => <th key={d} title={d}>{Number(d.slice(8))}<small>{wd(d).slice(0, 2)}</small></th>)}<th>Working days</th></tr></thead>
+      <div className="tablewrap scrolltable"><table className="attgrid"><thead><tr><th>Name</th>{gridDates.map(d => <th key={d} title={d}>{Number(d.slice(8))}<small>{wd(d).slice(0, 2)}</small></th>)}<th>Working days</th></tr></thead>
         <tbody>{sums.map(s => <tr key={s.soId}><td>{s.so?.name}</td>{gridDates.map(d => { const a = grid.get(`${s.soId}|${d}`); return <td key={d} title={`${d}: ${a || "no row"}`}>{a && <i className={cls(a)}>{SHORT[a] || "?"}</i>}</td>; })}<td><b>{working(s)}</b></td></tr>)}</tbody></table></div>
-    </section>}
+    </section> : <p className="empty">No daily reports in this period.</p>)}
 
-    {view.length > 0 && <section className="card">
+    {tab === "log" && (view.length ? <section className="card">
       <div className="rowhead"><h2>Daily Log ({dt.rows.length})</h2>{dt.active > 0 && <button className="link" onClick={dt.clear}>Clear Filters</button>}</div>
-      <div className="tablewrap"><table><thead><tr>{dcols.map(c => dt.head(c.key))}</tr></thead>
-        <tbody>{dt.rows.slice(0, 1500).map(d => <tr key={d.id} className={WORKING.has(d.attendance || "") ? "" : "muted"}>{dcols.map(c => <td key={c.key} className={c.key === "remark" || c.key === "beat" ? "wrap" : ""}>
-          {c.key === "att" ? <i className={cls(d.attendance)}>{d.attendance}</i> : c.key === "value" ? money(c.value(d)) : c.value(d)}</td>)}</tr>)}</tbody></table>
-        {dt.rows.length > 1500 && <p className="hint">Showing 1,500 of {dt.rows.length}. Export to Excel for all of them.</p>}</div>
-    </section>}
+      <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{dcols.map(c => dt.head(c.key))}</tr></thead>
+        <tbody>{dt.rows.slice(0, 2000).map(d => <tr key={d.id} className={WORKING.has(d.attendance || "") ? "" : "muted"}>{dcols.map(c => <td key={c.key} className={c.key === "remark" || c.key === "beat" ? "wrap" : ""}>
+          {c.key === "att" ? <i className={cls(d.attendance)}>{d.attendance}</i> : c.key === "value" ? money(c.value(d)) : c.value(d)}</td>)}</tr>)}</tbody></table></div>
+      {dt.rows.length > 2000 && <p className="hint">Showing 2,000 of {dt.rows.length}. Export to Excel for all of them.</p>}
+    </section> : <p className="empty">No daily reports in this period.</p>)}
 
-    {prods.length > 0 && <section className="card">
+    {tab === "products" && (prods.length ? <section className="card">
       <div className="rowhead"><h2>Products Sold</h2>{pt.active > 0 && <button className="link" onClick={pt.clear}>Clear Filters</button>}</div>
-      <div className="tablewrap"><table><thead><tr>{pcols.map(c => pt.head(c.key))}</tr></thead>
+      <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{pcols.map(c => pt.head(c.key))}</tr></thead>
         <tbody>{pt.rows.map(p => <tr key={p.product}><td>{p.product}</td><td>{p.category}</td><td>{fmt(p.qty, 1)}</td><td>{money(p.value)}</td></tr>)}</tbody></table></div>
+    </section> : <p className="empty">No product lines in this period.</p>)}
+
+    {tab === "upload" && <section className="card upload">
+      <div className="rowhead"><h2>Upload Daily Sales Reports</h2>
+        <label className="button secondary">{busy === "read" ? "Reading…" : "Choose DSR Workbooks"}<input hidden type="file" multiple accept=".xlsx,.xlsm,.xls,.ods,.csv" onChange={e => { const x = [...(e.target.files || [])]; if (x.length) read(x); e.target.value = ""; }} /></label></div>
+      <p className="hint">Upload the DSR workbooks for any states, one or several at a time, every day. Every sheet is read: SO sheets give each person's days, the state total is used to check them, and summary sheets are noted. New days are added; a day already logged for a person stays unless you choose to replace it.</p>
+      {check && <div className="fixbox">
+        <b>{check.files}</b>: {plural(check.fresh.length, "new day")} to add, {plural(check.same, "day")} already logged with the same figures{check.book.stateDays.length ? `, ${plural(check.book.stateDays.length, "state-total day")}` : ""}, {plural(check.book.products.length, "product")} with SS rates.
+        {check.changed.length > 0 && <div className="warn">{plural(check.changed.length, "day")} {check.changed.length === 1 ? "is" : "are"} already logged for the same person with different figures, which is a discrepancy: {check.changed.slice(0, 6).map(c => `${c.d.so} on ${c.d.day} (logged ${money(c.old.sale_value)}, ${c.old.total_calls} calls; now ${money(c.d.sale_value)}, ${c.d.total_calls} calls)`).join("; ")}{check.changed.length > 6 ? "…" : ""}.
+          <label className="inline"><input type="checkbox" checked={replaceChanged} onChange={e => setReplaceChanged(e.target.checked)} /> Replace them with this upload</label></div>}
+        {check.book.dupes.length > 0 && <div className="warn">The same person appears twice on the same day in this upload ({plural(check.book.dupes.length, "time")}); only the first is used: {check.book.dupes.slice(0, 5).join("; ")}{check.book.dupes.length > 5 ? "…" : ""}.</div>}
+        <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>File</th><th>Sheet</th><th>Read As</th><th>Rows</th><th>Note</th></tr></thead>
+          <tbody>{check.book.sheets.map((s, i) => <tr key={i}><td>{s.file}</td><td>{s.name}</td><td>{s.kind}</td><td>{s.rows}</td><td className="wrap">{s.note}</td></tr>)}</tbody></table></div>
+        <div className="actions"><button className="secondary" onClick={() => setCheck(null)}>Cancel</button>
+          <button disabled={busy === "post" || (!check.fresh.length && !(replaceChanged && check.changed.length) && !check.book.stateDays.length)} onClick={post}>{busy === "post" ? "Saving…" : check.fresh.length + (replaceChanged ? check.changed.length : 0) ? `Add ${plural(check.fresh.length + (replaceChanged ? check.changed.length : 0), "Day")}` : "Save State Totals"}</button></div>
+      </div>}
+      <div className="reserve">{msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}</div>
     </section>}
 
-    <Staff officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />
+    {tab === "staff" && <Staff officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />}
     {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} onClose={() => setReport(null)} />}
   </>;
 }
-

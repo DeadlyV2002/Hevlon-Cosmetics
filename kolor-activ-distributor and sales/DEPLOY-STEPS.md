@@ -72,6 +72,9 @@ SQL Editor → New query → paste all of `supabase/migrations/009_collections_d
 ### Step 1.3i — Run the v9 update (after 1.3h, before the v9 code goes live)
 SQL Editor → New query → paste all of `supabase/migrations/010_staff_dsr_logbook.sql` → Run → **Run this query** on the warning. It adds the sales team hierarchy (post, reports to, zone, HQ, areas), DSR uploads that keep days already logged, state totals, product totals by zone, and the log book. No existing data changes.
 
+### Step 1.3j — Run the v10 update (after 1.3i, before the v10 code goes live)
+SQL Editor → New query → paste all of `supabase/migrations/011_products_stock_checks_merge.sql` → Run → **Run this query** on the warning. It adds building the product list from the DSR price list, the check of SO bookings against distributor stock, and merging duplicate staff entries.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

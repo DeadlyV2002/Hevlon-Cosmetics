@@ -5,6 +5,7 @@ import {
   detectLayout, extractRows, titleText, cellText, formatSignature, normName, headingDate,
 } from "../lib/parse";
 import { readAnyFile, fileHash, ACCEPT } from "../lib/readers";
+import { guessProduct } from "../lib/fuzzy";
 import { detectFile, Detection, FileType } from "../lib/detect";
 import {
   supabase, Distributor, Product, ProductAlias, StockLine, SalesOfficer, Retailer, Kind, KINDS, KIND_LABEL, KIND_PLURAL,
@@ -131,6 +132,23 @@ export default function Inventory({ locations, products, aliases, stock, officer
   function clearAll() { setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
 
   /** "This name in the file = that existing product": applied to every row with the same name and remembered on save. */
+  const guessed = useRef("");
+  useEffect(() => {
+    const key = `${file?.hash || ""}|${rows.length}`;
+    if (!rows.length || guessed.current === key) return;
+    guessed.current = key;
+    const plan: Record<string, { productId: string; name: string }> = {}, sku = new Map<string, string>();
+    for (const r of rows) {
+      const k = normName(r.item_name);
+      if (!k || plan[k] || aliasPlan[k] || matchProduct(r.sku, r.item_name, products, aliases)) continue;
+      const g = guessProduct(r.item_name, r.unit_price, products);
+      if (g) { plan[k] = { productId: g.id, name: r.item_name }; sku.set(k, g.sku); }
+    }
+    if (!sku.size) return;
+    setAliasPlan(a => ({ ...a, ...plan }));
+    setRows(rs => rs.map(r => (sku.has(normName(r.item_name)) ? { ...r, sku: sku.get(normName(r.item_name))! } : r)));
+  }, [rows, file?.hash]);
+
   function matchTo(original: string, value: string) {
     const p = products.find(x => `${x.sku} — ${x.item_name}` === value);
     const key = normName(original);
@@ -185,10 +203,16 @@ export default function Inventory({ locations, products, aliases, stock, officer
       const p = matchProduct(r.sku, r.item_name, products, aliases);
       if (!r.sku.trim() && !r.item_name.trim()) problems.push("product missing");
       if (!isValidDate(r.date)) problems.push("date must be a valid date");
+      // The file's rate against the product's SS rate (both per dozen when they come from the DSR price list).
+      const ss = Number(p?.ss_rate) || 0;
+      if (p && ss && r.unit_price > 0 && Math.abs(r.unit_price - ss) > Math.max(0.5, ss * 0.005)) notes.push(`rate ₹${r.unit_price} here, SS rate ₹${ss}`);
       if (type === "COUNT") {
         if (!holderLoc) problems.push("choose whose stock this is (above)");
         if (r.quantity < 0) problems.push("negative quantity");
-        return { p, h: holderLoc, cur: holderLoc && p ? stockMap.get(`${holderLoc.id}|${p.id}`) ?? 0 : 0, problems, notes, excluded, senderShort };
+        const cur = holderLoc && p ? stockMap.get(`${holderLoc.id}|${p.id}`) ?? 0 : 0;
+        // Blank or zero in a closing statement: only matters if the app thinks they hold some.
+        if (r.quantity === 0 && cur === 0) { excluded = true; notes.push(p ? "none in stock" : "none in stock, not in product list"); }
+        return { p, h: holderLoc, cur, problems, notes, excluded, senderShort };
       }
       if (!(r.quantity > 0)) problems.push("quantity must be more than 0");
       const h = matchDistributor(r.distributor, locations);
@@ -505,8 +529,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
         })}</tbody></table></div>
       {skipped.length > 0 && <div className="skipped">
         <button className="link" onClick={() => setShowSkipped(s => !s)}>{showSkipped ? "▾" : "▸"} Left out ({skipped.length}): totals, group lines, blank quantities</button>
-        {showSkipped && <table><tbody>{skipped.map((s, i) => <tr key={i}><td>Line {s.line}</td><td>{s.text}</td><td><small>{s.reason}</small></td>
-          <td>{s.row && <button className="secondary small" onClick={() => restore(s)}>Add back</button>}</td></tr>)}</tbody></table>}
+        {showSkipped && <div className="tablewrap"><table className="skiptable"><tbody>{skipped.map((s, i) => <tr key={i}><td>Line {s.line}</td><td className="wrap">{s.text}</td><td><small>{s.reason}</small></td>
+          <td className="act">{s.row && <button className="secondary small" onClick={() => restore(s)}>Add Back</button>}</td></tr>)}</tbody></table></div>}
       </div>}
       <div className="footer-actions">
         {status && <div className={`status ${status.kind}`}>{status.text}</div>}

@@ -44,10 +44,10 @@ export default function History({ canManage, onChanged, notify }: { canManage: b
           {canManage && <td><button className="secondary small" onClick={e => { e.stopPropagation(); undo(b); }}>Undo</button></td>}
         </tr>
         {open === b.id && <tr><td colSpan={8} className="sub">
-          {!lines.length ? "Loading…" : <table><thead><tr><th>Date</th><th>Location</th><th>How</th><th>SKU</th><th>Product</th><th>Qty</th><th>Rate</th><th>Ref</th><th>From / to</th></tr></thead>
+          {!lines.length ? "Loading…" : <div className="tablewrap scrolltable short"><table><thead><tr><th>Date</th><th>Location</th><th>How</th><th>SKU</th><th>Product</th><th>Qty</th><th>Rate</th><th>Ref</th><th>From / to</th></tr></thead>
             <tbody>{lines.map(l => <tr key={l.id}><td>{l.transaction_date}</td><td>{l.distributor_name}</td><td>{HOW[l.source || ""] || ""}</td><td>{l.sku}</td><td>{l.item_name}</td>
               <td className={l.mode === "INPUT" ? "in" : "out"}>{l.mode === "INPUT" ? "+" : "-"}{fmt(l.quantity, 2).replace(/\.00$/, "")}</td><td>{fmt(l.unit_price, 2)}</td><td>{l.reference}</td>
-              <td>{l.counterparty_name || l.retailer_name || l.party}</td></tr>)}</tbody></table>}
+              <td>{l.counterparty_name || l.retailer_name || l.party}</td></tr>)}</tbody></table></div>}
         </td></tr>}
       </Fragment>)}</tbody></table>
       {!batches.length && <p className="empty">Nothing posted yet.</p>}</div>

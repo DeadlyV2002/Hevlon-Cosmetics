@@ -114,6 +114,17 @@ export default function Pricing({ products, locations, margins, schemes, canMana
     setDrafts(new Map());
     await onChanged();
   }
+  /** The DSR price list (SS rate per dozen for every product) becomes the product list. */
+  async function fromDsr() {
+    if (!supabase) return;
+    setBusy("dsr");
+    const { data, error } = await supabase.rpc("products_from_dsr");
+    setBusy("");
+    if (error) return say("err", `Couldn't add the DSR products: ${errText(error)}. Upload a DSR on the SO Reports page first, and run database step 011.`);
+    const r = data as { added: number; rated: number };
+    say("ok", r.added || r.rated ? `Added ${plural(r.added, "product")} from the DSR price list${r.rated ? ` and set the SS rate of ${plural(r.rated, "listed product")}` : ""}. Quantities for these are in dozens.` : "Every DSR product is already in the product list.");
+    await onChanged();
+  }
   function fillFromPurchase() {
     setDrafts(prev => {
       const n = new Map(prev);
@@ -228,7 +239,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
 
     <section className="card">
       <div className="rowhead"><h2>Product prices</h2>
-        <div className="actions wrap"><button className="secondary" onClick={download}>Download price list</button>
+        <div className="actions wrap">{canManage && <button className="secondary" disabled={busy === "dsr"} onClick={fromDsr}>{busy === "dsr" ? "Adding…" : "Add DSR Products"}</button>}<button className="secondary" onClick={download}>Download price list</button>
           {canManage && <label className="filebtn">Upload price list<input type="file" multiple accept={ACCEPT} hidden onChange={e => { const f = [...(e.target.files || [])]; if (f.length) upload(f); e.target.value = ""; }} /></label>}</div></div>
       <p>The SS rate is set automatically the first time a godown dispatch to a super stockist carries a rate. Change it here when your price list changes. Distributor and retailer prices use today's margins; schemes for particular super stockists aren't included.</p>
       {missing.length > 0 && <p className="warn">{plural(missing.length, "product")} {missing.length === 1 ? "has" : "have"} no SS rate and {missing.length === 1 ? "is" : "are"} valued at the last purchase rate for now.

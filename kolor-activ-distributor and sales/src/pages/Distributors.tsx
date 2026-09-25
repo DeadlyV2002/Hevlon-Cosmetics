@@ -290,7 +290,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
         </div></div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={[tab]} rank={rank} saveKey={`distributors-${tab}`} />
       {dt.active > 0 && <p className="hint">{plural(dt.rows.length, "row")} shown by the column filters. <button className="link" onClick={dt.clear}>Clear Filters</button></p>}
-      <div className="tablewrap"><table><thead><tr>{dcols.map(c => dt.head(c.key))}<th>Comments</th>{canManage && <th />}</tr></thead>
+      <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{dcols.map(c => dt.head(c.key))}<th>Comments</th>{canManage && <th />}</tr></thead>
         <tbody>{dt.rows.map(d => {
           const miss = incomplete(d);
           return <tr key={d.id}>{dcols.map(c => <td key={c.key} className={["company", "phone", "aliases"].includes(c.key) ? "wrap" : ""}>

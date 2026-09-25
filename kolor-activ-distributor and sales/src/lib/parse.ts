@@ -83,10 +83,32 @@ export function toISODate(v: unknown): string {
 export const isValidDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 
 /** Last date in a report heading: "1-Apr-26 to 24-Sep-26" → 2026-09-24 (a stock summary's "as on" date). */
-export function headingDate(text: string): string {
+export function headingDate(raw: string): string {
+  const text = raw.replace(/(\d)\s*([/.-])\s*(\d)/g, "$1$2$3");
   const found = text.match(/\b\d{1,2}[-\s/.](?:\d{1,2}|[A-Za-z]{3,9})[-\s/.,]*\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g) || [];
   const dates = found.map(toISODate).filter(isValidDate);
-  return dates.length ? dates[dates.length - 1] : "";
+  if (dates.length) return dates[dates.length - 1];
+  // "Month: AUGUST" or "August 2026": the last day of that month (this year, or last year if the month hasn't come yet).
+  const m = text.match(/\bmonth\W{0,4}([A-Za-z]{3,9})\.?(?:\W{0,3}(\d{2,4}))?/i) || text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s'-]+(\d{2,4})\b/i);
+  const mo = m ? MONTHS[m[1].slice(0, 3).toLowerCase()] : 0;
+  if (!mo) return "";
+  const now = new Date(), y = m![2] ? Number(yr(m![2])) : mo > now.getMonth() + 1 ? now.getFullYear() - 1 : now.getFullYear();
+  return localDate(new Date(y, mo, 0));
+}
+
+/** Stock statements often print two product tables side by side; this stacks the right-hand table under the left one. */
+export function unstackBlocks(grid: Grid): Grid {
+  for (let r = 0; r < Math.min(grid.length, 40); r++) {
+    const labels = (grid[r] || []).map(c => normName(cellText(c)));
+    const starts = labels.map((l, i) => (/^(products?|particulars|items?|item name|product name|description|sku name)$/.test(l) ? i : -1)).filter(i => i >= 0);
+    if (starts.length < 2) continue;
+    const width = starts[1] - starts[0];
+    const sig = (s: number) => labels.slice(s, s + width).join("|");
+    if (width < 2 || !starts.slice(1).every(s => sig(s) === sig(starts[0]) || sig(s).startsWith(labels[starts[0]]))) continue;
+    const body = (s: number) => grid.slice(r + 1).map(row => (row || []).slice(s, s + width)).filter(row => row.some(c => cellText(c)));
+    return [...grid.slice(0, r), grid[r].slice(starts[0], starts[0] + width), ...starts.flatMap(body)];
+  }
+  return grid;
 }
 
 // ---------- header recognition ----------
@@ -229,8 +251,11 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
     const item = cellText(get(r, c.item)), sku = cellText(get(r, c.sku));
     const line = i + 1;
     if (!item && !sku) { if (c.qty >= 0 && parseNum(get(r, c.qty)) !== null) skipped.push({ line, text, reason: "no product name" }); continue; }
-    if (TOTAL.test(item || sku)) { skipped.push({ line, text, reason: "total line" }); continue; }
-    const qty = parseNum(get(r, c.qty));
+    if (TOTAL.test(item || sku) || /\btotal\s*$/i.test(item || sku)) { skipped.push({ line, text, reason: "total line" }); continue; }
+    // In a closing stock statement a blank or dash means none in stock.
+    const qCell = get(r, c.qty);
+    let qty = parseNum(qCell);
+    if (qty === null && mode === "COUNT" && /^[\s\-–—0.]*$/.test(cellText(qCell))) qty = 0;
     const rawRate = parseNum(get(r, c.rate));
     let rate = rawRate;
     const amt = parseNum(get(r, c.amt));
@@ -263,7 +288,10 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     let sum = 0, n = 0, isGroup = false;
-    for (let j = i + 1; summaryList && j < rows.length && n < 200; j++) {
+    // A line with its own rate is a product, not a group line; zero lines don't count towards a group.
+    const canBeGroup = summaryList && (c.rate < 0 || r._noRate);
+    for (let j = i + 1; canBeGroup && j < rows.length && n < 200; j++) {
+      if (!rows[j].quantity) continue;
       sum += rows[j].quantity; n++;
       if (Math.abs(sum - r.quantity) < 1e-6 && r.quantity > 0) { isGroup = n >= 2 || r._noRate; break; }
       if (sum > r.quantity) break;
@@ -294,7 +322,7 @@ export function sheetRows(ws: XLSX.WorkSheet, blankrows = true): Cell[][] {
 }
 
 export function workbookToTable(wb: XLSX.WorkBook, source: string): Table {
-  const sheets = wb.SheetNames.map(name => ({ name, grid: sheetRows(wb.Sheets[name], false) }))
+  const sheets = wb.SheetNames.map(name => ({ name, grid: unstackBlocks(sheetRows(wb.Sheets[name], false)) }))
     .filter(s => s.grid.some(r => r.some(c => cellText(c))));
   // Largest sheet first.
   sheets.sort((a, b) => b.grid.length - a.grid.length);

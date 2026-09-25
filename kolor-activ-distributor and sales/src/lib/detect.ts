@@ -2,6 +2,7 @@
 // SO report) and whose stock it is, from the heading, file name, columns and party names.
 // Pure functions, so they can be tested outside the browser.
 import { Grid, Layout, cellText, normName, detectDistributor } from "./parse";
+import { keyWords, hasWord, similarity } from "./fuzzy";
 import { Distributor, SalesOfficer, KIND_LABEL, matchDistributor } from "./supabase";
 
 export type FileType = "COUNT" | "IN" | "OUT" | "SO";
@@ -22,6 +23,23 @@ const OUT_HEAD = /\b(sales|sale|sales register|dispatch|despatch|delivery note|d
 const SO_HEAD = /\b(so report|so daily|dsr|daily sales report|order report|order booking|orders booked|beat report|salesman report|secondary order|secondary orders)\b/;
 const CLOSING_LABEL = /(^| )(closing|stock in hand|soh|physical stock|current stock|available stock|balance)( |$)|^stock$/;
 
+/** When no name matches exactly: the distributor whose distinctive words (allowing small spelling
+ * differences) appear in the heading or file name, helped by its town appearing there too. */
+function nearDistributor(title: string, locations: Distributor[]): string {
+  const words = normName(title).split(" ").filter(Boolean);
+  let best = "", score = 0, tie = false;
+  for (const d of locations) {
+    const keys = [...new Set([...keyWords(d.name), ...keyWords(d.company_name || "")])];
+    if (!keys.length) continue;
+    const hit = keys.filter(k => hasWord(words, k)).length;
+    if (!hit) continue;
+    const town = d.territory ? words.some(w => w.length >= 4 && similarity(w, d.territory!) >= 0.75) : false;
+    const s = hit / keys.length + (town ? 0.6 : 0) + (hit === keys.length ? 0.3 : 0);
+    if (s > score + 0.01) { best = d.code; score = s; tie = false; } else if (Math.abs(s - score) <= 0.01) tie = true;
+  }
+  return score >= 1 && !tie ? best : "";
+}
+
 export function detectFile(grid: Grid, layout: Layout, heading: string, fileName: string, locations: Distributor[], officers: SalesOfficer[]): Detection {
   const reasons: string[] = [];
   const title = `${heading} ${fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[_\-.]+/g, " ")}`;
@@ -34,7 +52,7 @@ export function detectFile(grid: Grid, layout: Layout, heading: string, fileName
   const vtCol = layout.labels.findIndex(l => /^(voucher type|vch type|vch bill type|voucher type name|type)$/.test(l));
   const vtypes = values(vtCol).map(v => v.toLowerCase());
 
-  const holderCode = detectDistributor(title, locations);
+  const holderCode = detectDistributor(title, locations) || nearDistributor(title, locations);
   const holderLoc = locations.find(l => l.code === holderCode);
   const so = officers.find(o => [o.name, ...(o.aliases || [])].some(n => { const k = normName(n); return k.length >= 3 && h.includes(` ${k} `); }));
 
@@ -43,8 +61,8 @@ export function detectFile(grid: Grid, layout: Layout, heading: string, fileName
   const said = (re: RegExp) => h.match(re)?.[0].trim() || "";
   if (col("so") >= 0) { type = "SO"; reasons.push("it has a sales officer column"); }
   else if (SO_HEAD.test(h)) { type = "SO"; reasons.push(`the heading or file name says "${said(SO_HEAD)}"`); }
-  else if (so && !holderLoc) { type = "SO"; reasons.push(`the file name mentions your SO ${so.name}`); }
   else if (COUNT_HEAD.test(h)) { type = "COUNT"; reasons.push(`the heading or file name says "${said(COUNT_HEAD)}"`); }
+  else if (so && !holderLoc) { type = "SO"; reasons.push(`the file name mentions your SO ${so.name}`); }
   else if (IN_HEAD.test(h)) { type = "IN"; reasons.push(`the heading or file name says "${said(IN_HEAD)}"`); }
   else if (OUT_HEAD.test(h)) { type = "OUT"; reasons.push(`the heading or file name says "${said(OUT_HEAD)}"`); }
   if (!type) {

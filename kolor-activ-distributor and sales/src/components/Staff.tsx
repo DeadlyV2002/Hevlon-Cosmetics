@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { supabase, SalesOfficer, validPhone, cleanPhones, proper, properOrNull, plural, errText } from "../lib/supabase";
 import { cellText, normName } from "../lib/parse";
+import { similarity } from "../lib/fuzzy";
 import { normalizeState } from "../lib/india";
 import { readAnyFile } from "../lib/readers";
 import { findHeader } from "../lib/sheet";
@@ -102,6 +103,25 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
     finally { setBusy(false); }
   }
 
+  // Two entries that look like one person (spellings differ a little): offer to merge them.
+  const dupes = useMemo(() => {
+    const out: [SalesOfficer, SalesOfficer][] = [];
+    for (let i = 0; i < officers.length; i++) for (let j = i + 1; j < officers.length; j++) {
+      const a = officers[i], b = officers[j];
+      if (!(sameName(a.name, b.name) || similarity(a.name, b.name) >= 0.88)) continue;
+      const za = a.zone || a.state, zb = b.zone || b.state;
+      if (za && zb && !normName(za).includes(normName(zb).split(" ").pop() || "") && !normName(zb).includes(normName(za).split(" ").pop() || "")) continue;
+      out.push(a.name.length >= b.name.length ? [a, b] : [b, a]);
+    }
+    return out;
+  }, [officers]);
+  async function merge(keep: SalesOfficer, drop: SalesOfficer) {
+    if (!supabase || !confirm(`Merge "${drop.name}" into "${keep.name}"? Their daily reports, distributors and team move to ${keep.name}, and "${drop.name}" is kept as another spelling.`)) return;
+    const { error } = await supabase.rpc("merge_staff", { p_keep: keep.id, p_drop: drop.id });
+    if (error) return setMsg({ kind: "err", text: `Not merged: ${errText(error)}` });
+    setMsg({ kind: "ok", text: `Merged ${drop.name} into ${keep.name}.` }); await onChanged();
+  }
+
   const cols: Col<SalesOfficer>[] = [
     { key: "name", label: "Name", value: o => o.name }, { key: "desig", label: "Post", value: o => o.designation },
     { key: "boss", label: "Reports To", value: o => byId.get(o.manager_id || "")?.name }, { key: "zone", label: "Zone", value: o => o.zone || o.state },
@@ -134,7 +154,9 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
         <button disabled={busy} onClick={save}>{editing ? "Save Changes" : "Add Person"}</button></div>
     </div>}
     <div className="reserve">{msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}</div>
-    <div className="tablewrap"><table><thead><tr>{cols.map(c => t.head(c.key))}{canManage && <th />}</tr></thead>
+    {canManage && dupes.length > 0 && <div className="warn">{plural(dupes.length, "pair")} of entries look like the same person:
+      <div className="duplist">{dupes.slice(0, 20).map(([a, b]) => <span key={a.id + b.id} className="chip">{b.name} → {a.name}<button className="secondary small" onClick={() => merge(a, b)}>Merge</button></span>)}</div></div>}
+    <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{cols.map(c => t.head(c.key))}{canManage && <th />}</tr></thead>
       <tbody>{t.rows.map(o => <tr key={o.id} className={o.active ? "" : "muted"}>{cols.map(c => <td key={c.key} className={c.key === "areas" ? "wrap" : ""}>{c.key === "name" ? <b>{o.name}</b> : c.value(o)}</td>)}
         {canManage && <td><button className="secondary small" onClick={() => { setEditing(o); setOpen(true); setMsg(null); setForm({ name: o.name, designation: o.designation || "SO", manager_id: o.manager_id || "", zone: o.zone || o.state || "", hq: o.hq || o.region || "", areas: o.areas || "", phone: o.phone || "", aliases: (o.aliases || []).join(", "), active: o.active }); }}>Edit</button></td>}</tr>)}</tbody></table>
       {!officers.length && <p className="empty">No staff yet. Import your staff list, or upload a DSR and the people in it are added.</p>}</div>

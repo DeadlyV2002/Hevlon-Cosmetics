@@ -95,6 +95,8 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
   const xEvery = band >= 44 ? 1 : band >= 24 ? 2 : Math.ceil(44 / band);
   const labelEvery = band >= (size === "card" ? 40 : 34) ? 1 : 2;
   const empty = data.values.every(s => s.every(v => !v));
+  // The tallest column and each line's highest point always carry their value.
+  const peakCol = stackTotals.reduce((b, v, i) => (v > stackTotals[b] ? i : b), 0);
 
   function onMove(e: React.PointerEvent<SVGSVGElement>) {
     const b = e.currentTarget.getBoundingClientRect();
@@ -128,7 +130,7 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
           return top ? <path key={k} className={`f${data.series[k].slot}`} d={colPath(x0, yTop, w, h, 4)} />
             : <rect key={k} className={`f${data.series[k].slot}`} x={x0} y={yTop + 2} width={w} height={h} />;
         })}
-          {labels && stackTotals[i] > 0 && i % labelEvery === (n - 1) % labelEvery && <text className="dlabel" x={cx(i)} y={y(stackTotals[i]) - 6} textAnchor="middle">{f(stackTotals[i])}</text>}
+          {stackTotals[i] > 0 && ((labels && i % labelEvery === (n - 1) % labelEvery) || i === peakCol) && <text className={`dlabel${i === peakCol ? " peak" : ""}`} x={cx(i)} y={y(stackTotals[i]) - 6} textAnchor="middle">{f(stackTotals[i])}</text>}
         </g>;
       })}
       {lines && data.series.map((s, k) => {
@@ -137,6 +139,12 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
           <polyline className={`k${s.slot}`} points={pts} fill="none" />
           {data.values[k].map((v, i) => (i === n - 1 || i === hover) && <circle key={i} className={`f${s.slot} ring`} cx={cx(i)} cy={y(v)} r={4} />)}
         </g>;
+      })}
+      {lines && data.series.map((s, k) => {
+        const vals = data.values[k], pk = vals.reduce((b, v, i) => (v > vals[b] ? i : b), 0);
+        if (!vals[pk] || (labels && pk === n - 1)) return null;
+        return <g key={`pk-${s.key}`}><circle className={`f${s.slot} ring`} cx={cx(pk)} cy={y(vals[pk])} r={4} />
+          <text className="dlabel peak" x={cx(pk)} y={y(vals[pk]) - 9} textAnchor="middle">{f(vals[pk])}</text></g>;
       })}
       {lines && labels && ends.map(e => <g key={e.s.key}>
         {Math.abs(e.y1 - e.y0) > 2 && <line className="leader" x1={cx(n - 1) + 6} x2={cx(n - 1) + 12} y1={e.y0} y2={e.y1} />}

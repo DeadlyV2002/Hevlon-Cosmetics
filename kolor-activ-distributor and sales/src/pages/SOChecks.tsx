@@ -12,8 +12,9 @@ interface Aged { location_id: string; product_id: string; stock: number; aged_qt
 interface Vs { distributor_id: string; product_id: string; so_qty: number; so_checked: number; dist_out: number; so_names: string; data_until: string | null }
 interface Line { id: string; report_date: string; so_name: string; distributor_id: string; distributor_name: string; sku: string; item_name: string; quantity: number; retailer_name: string | null; retailer_status: string; retailer_other_distributor: string | null }
 interface Period { location_id: string; product_id: string; qty_out: number; closing: number }
-interface Status { location_id: string; last_count: string | null; last_sale: string | null; last_movement: string | null }
-interface CountLine { id: string; transaction_date: string; distributor_id: string; distributor_name: string; product_id: string; mode: string; quantity: number; source_file: string | null }
+interface Status { location_id: string; last_count: string | null; last_sale: string | null; last_movement: string | null; last_file: string | null }
+/** A stock count difference; each location's opening count is left out by the database. */
+interface CountLine { id: string; counted_on: string; location_id: string; product_id: string; change: number; source_file: string | null }
 interface Data { oversell: Oversell[]; aged: Aged[]; vs: Vs[]; lines: Line[]; period: Period[]; status: Status[]; counts: CountLine[] }
 const EMPTY: Data = { oversell: [], aged: [], vs: [], lines: [], period: [], status: [], counts: [] };
 
@@ -57,8 +58,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
         .gte("report_date", range.from).lte("report_date", range.to).neq("retailer_status", "OK").order("report_date").order("id").range(a, b)),
       fetchAll<Period>((a, b) => sb.rpc("stock_period", { p_from: minusDays(range.to, 29), p_to: range.to, p_locations: null }).range(a, b)),
       fetchAll<Status>((a, b) => sb.from("location_data_status").select("*").order("location_id").range(a, b)),
-      fetchAll<CountLine>((a, b) => sb.from("inventory_history").select("id,transaction_date,distributor_id,distributor_name,product_id,mode,quantity,source_file")
-        .eq("source", "COUNT").gte("transaction_date", range.from).lte("transaction_date", range.to).order("transaction_date").order("id").range(a, b)),
+      fetchAll<CountLine>((a, b) => sb.rpc("count_changes", { p_from: range.from, p_to: range.to, p_locations: null }).range(a, b)),
     ]).then(([oversell, aged, vs, lines, period, status, counts]) => { if (live) setData({ oversell, aged, vs, lines, period, status, counts }); })
       .catch(e => { if (live) setErr(`Could not run the checks: ${errText(e)}`); })
       .finally(() => { if (live) setLoading(false); });
@@ -92,10 +92,10 @@ export default function SOChecks({ locations, products, officers, canManage, onC
   const low = data.period.filter(p => ids.has(p.location_id) && n(p.qty_out) > 0)
     .map(p => ({ ...p, cover: n(p.closing) / (n(p.qty_out) / 30) })).filter(p => p.cover < 7).sort((a, b) => a.cover - b.cover);
   const stale = data.status.filter(s => ids.has(s.location_id)).map(s => {
-    const own = [s.last_count, s.last_sale].filter(Boolean).sort().pop() || null;
+    const own = [s.last_count, s.last_sale, s.last_file].filter(Boolean).sort().pop() || null;
     return { ...s, own, days: daysSince(own) };
   }).filter(s => s.days === null || s.days > staleDays).sort((a, b) => (b.days ?? 1e9) - (a.days ?? 1e9));
-  const counts = data.counts.filter(c => ids.has(c.distributor_id)).map(c => ({ ...c, change: c.mode === "INPUT" ? n(c.quantity) : -n(c.quantity) }))
+  const counts = data.counts.filter(c => ids.has(c.location_id)).map(c => ({ ...c, change: n(c.change), place: loc(c.location_id)?.name || "Deleted location" }))
     .sort((a, b) => Math.abs(b.change * price(b.product_id)) - Math.abs(a.change * price(a.product_id)));
 
   const TABS: { id: Tab; label: string; count: number; help: string }[] = [
@@ -105,7 +105,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
     { id: "retailers", label: "Retailer problems", count: retailerProblems.length, help: "SO lines whose retailer isn't in your list, belongs to a different distributor, or is blank. New outlets are fine once verified; the rest can be fake." },
     { id: "low", label: "Running low", count: low.length, help: "Products with less than 7 days of stock left at the rate they went out over the last 30 days. Push a reorder before the shelf runs dry." },
     { id: "stale", label: "No recent data", count: stale.length, help: `Distributors and super stockists that haven't sent a stock count or sales file in the last ${staleDays} days. Their stock in the app is out of date, so checks on them are weaker.` },
-    { id: "counts", label: "Stock count gaps", count: counts.length, help: "Stock that appeared or disappeared at a stock count without a recorded purchase or sale. For distributors who also send sales files, a drop here is unexplained stock." },
+    { id: "counts", label: "Stock count gaps", count: counts.length, help: "Stock that appeared or disappeared at a stock count without a recorded purchase or sale. Each location's opening count is left out. For distributors who also send sales files, a drop here is unexplained stock." },
   ];
   const current = TABS.find(t => t.id === tab)!;
 
@@ -128,8 +128,8 @@ export default function SOChecks({ locations, products, officers, canManage, onC
     vs: () => vs.map(v => { const d = loc(v.distributor_id), p = prod(v.product_id); return { Distributor: d?.name, "Super stockist": ssOf(d), SKU: p?.sku, Product: p?.item_name, "SO reported": n(v.so_checked), "Distributor's own sales / out": n(v.dist_out), "Extra claimed by SO": n(v.so_checked) - n(v.dist_out), "Extra value ₹": Math.round((n(v.so_checked) - n(v.dist_out)) * price(v.product_id)), "SO(s)": v.so_names, "Compared up to": v.data_until || "" }; }),
     retailers: () => retailerProblems.map(l => ({ Date: l.report_date, SO: l.so_name, Distributor: l.distributor_name, Retailer: l.retailer_name || "", Problem: l.retailer_status === "MISSING" ? "no retailer given" : l.retailer_status === "OTHER_DISTRIBUTOR" ? `listed under ${l.retailer_other_distributor}` : "not in your retailer list", SKU: l.sku, Product: l.item_name, Qty: n(l.quantity) })),
     low: () => low.map(p => { const d = loc(p.location_id), pr = prod(p.product_id); return { Location: d?.name, Type: d ? KIND_LABEL[d.kind] : "", SKU: pr?.sku, Product: pr?.item_name, Stock: n(p.closing), "Out in last 30 days": n(p.qty_out), "Days of stock left": Math.round(p.cover * 10) / 10 }; }),
-    stale: () => stale.map(s => { const d = loc(s.location_id); return { Location: d?.name, Type: d ? KIND_LABEL[d.kind] : "", State: d?.state, "Last stock count": s.last_count || "never", "Last sales file": s.last_sale || "never", "Days since their own data": s.days ?? "never" }; }),
-    counts: () => counts.map(c => ({ Date: c.transaction_date, Location: c.distributor_name, SKU: prod(c.product_id)?.sku, Product: prod(c.product_id)?.item_name, Change: c.change, "Value ₹": Math.round(c.change * price(c.product_id)), File: c.source_file || "" })),
+    stale: () => stale.map(s => { const d = loc(s.location_id); return { Location: d?.name, Type: d ? KIND_LABEL[d.kind] : "", State: d?.state, "Last stock count": s.last_count || "never", "Last sales file": s.last_sale || "never", "Last file of its own": s.last_file || "never", "Days since their own data": s.days ?? "never" }; }),
+    counts: () => counts.map(c => ({ Date: c.counted_on, Location: c.place, SKU: prod(c.product_id)?.sku, Product: prod(c.product_id)?.item_name, Change: c.change, "Value ₹": Math.round(c.change * price(c.product_id)), File: c.source_file || "" })),
   };
 
   return <>
@@ -170,11 +170,11 @@ export default function SOChecks({ locations, products, officers, canManage, onC
           {tab === "low" && <table><thead><tr><th>Location</th><th>Product</th><th>Stock</th><th>Out in last 30 days</th><th>Days of stock left</th></tr></thead>
             <tbody>{low.map(p => <tr key={`${p.location_id}${p.product_id}`}><td>{loc(p.location_id)?.name}</td><td>{pname(p.product_id)}</td>
               <td>{fmt(p.closing)}</td><td>{fmt(p.qty_out)}</td><td className={p.cover < 2 ? "out" : ""}><b>{p.cover.toFixed(1)}</b></td></tr>)}</tbody></table>}
-          {tab === "stale" && <table><thead><tr><th>Location</th><th>Type</th><th>State</th><th>Last stock count</th><th>Last sales file</th><th>Days since their own data</th></tr></thead>
+          {tab === "stale" && <table><thead><tr><th>Location</th><th>Type</th><th>State</th><th>Last stock count</th><th>Last sales file</th><th>Last file of its own</th><th>Days since their own data</th></tr></thead>
             <tbody>{stale.map(s => { const d = loc(s.location_id); return <tr key={s.location_id}><td>{d?.name}</td><td>{d ? KIND_LABEL[d.kind] : ""}</td><td>{d?.state}</td>
-              <td>{s.last_count || "never"}</td><td>{s.last_sale || "never"}</td><td><b>{s.days ?? "never sent"}</b></td></tr>; })}</tbody></table>}
+              <td>{s.last_count || "never"}</td><td>{s.last_sale || "never"}</td><td>{s.last_file || "never"}</td><td><b>{s.days ?? "never sent"}</b></td></tr>; })}</tbody></table>}
           {tab === "counts" && <table><thead><tr><th>Date</th><th>Location</th><th>Product</th><th>Change</th><th>Value</th><th>File</th></tr></thead>
-            <tbody>{counts.map(c => <tr key={c.id}><td>{c.transaction_date}</td><td>{c.distributor_name}</td><td>{pname(c.product_id)}</td>
+            <tbody>{counts.map(c => <tr key={c.id}><td>{c.counted_on}</td><td>{c.place}</td><td>{pname(c.product_id)}</td>
               <td className={c.change > 0 ? "in" : "out"}>{c.change > 0 ? "+" : ""}{fmt(c.change)}</td><td>{money(c.change * price(c.product_id))}</td><td className="wrap">{c.source_file}</td></tr>)}</tbody></table>}
           {!current.count && !loading && <p className="empty">{tab === "stale" || tab === "low" || tab === "counts" ? "Nothing here for this selection." : "Nothing found for this selection and period."}</p>}
         </div>

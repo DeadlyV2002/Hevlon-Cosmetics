@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase, Distributor, Product, ProductAlias, StockLine, Retailer, SalesOfficer, Role, fetchAll, errText } from "./lib/supabase";
+import { Alert, ChartKind, Ctx, clearInsightCache } from "./lib/insights";
 import Dashboard from "./pages/Dashboard";
 import Inventory from "./pages/Inventory";
 import Distributors from "./pages/Distributors";
@@ -8,9 +9,11 @@ import Retailers from "./pages/Retailers";
 import SOChecks from "./pages/SOChecks";
 import Reports from "./pages/Reports";
 import History from "./pages/History";
+import Settings from "./pages/Settings";
+import AlertsBell from "./components/AlertsBell";
 
-export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "SO checks" | "Reports" | "History" | "Team";
-const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "SO checks", "Reports", "History", "Team"];
+export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "SO checks" | "Reports" | "History" | "Settings";
+const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "SO checks", "Reports", "History", "Settings"];
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
 
 export default function App() {
@@ -26,7 +29,11 @@ export default function App() {
   const [retailers, setRetailers] = useState<Retailer[]>([]);
   const [officers, setOfficers] = useState<SalesOfficer[]>([]);
   const [commentCounts, setCommentCounts] = useState<Map<string, number>>(new Map());
-  const [recent, setRecent] = useState<any[]>([]);
+  const [testingMode, setTestingMode] = useState(false);
+  /** Goes up after every reload, so charts and alerts know to fetch fresh numbers. */
+  const [version, setVersion] = useState(0);
+  const [openKind, setOpenKind] = useState<ChartKind | null>(null);
+  const ctx: Ctx = useMemo(() => ({ locations, products, stock, officers }), [locations, products, stock, officers]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -42,7 +49,7 @@ export default function App() {
     /** One list failing (say, before the latest database step is run) shouldn't blank the others. */
     const all = <T,>(label: string, page: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) =>
       fetchAll<T>(page).catch(e => { failed.push(`${label}: ${errText(e)}`); return null; });
-    const [prof, d, p, s, r, al, so, cc, b] = await Promise.all([
+    const [prof, d, p, s, r, al, so, cc, settings] = await Promise.all([
       sb.from("profiles").select("role").eq("id", session.user.id).maybeSingle(),
       all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
       all<Product>("products", (a, z) => sb.from("products").select("id,sku,item_name,unit_price").order("item_name").order("id").range(a, z)),
@@ -51,7 +58,7 @@ export default function App() {
       all<ProductAlias>("product names", (a, z) => sb.from("product_aliases").select("product_id,alias").order("id").range(a, z)),
       all<SalesOfficer>("sales officers", (a, z) => sb.from("sales_officers").select("*").order("name").order("id").range(a, z)),
       all<{ distributor_id: string; n: number }>("comments", (a, z) => sb.from("distributor_comment_counts").select("distributor_id,n").order("distributor_id").range(a, z)),
-      sb.from("inventory_batch_summary").select("*").order("created_at", { ascending: false }).limit(6),
+      sb.from("app_settings").select("value").eq("key", "testing_mode").maybeSingle(),
     ]);
     setRole(((prof.data as any)?.role as Role) ?? null);
     if (d) setLocations(d.map(x => ({ ...x, kind: x.kind || "DISTRIBUTOR" })));
@@ -61,8 +68,10 @@ export default function App() {
     if (al) setAliases(al);
     if (so) setOfficers(so);
     if (cc) setCommentCounts(new Map(cc.map(x => [x.distributor_id, Number(x.n)])));
-    if (b.data) setRecent(b.data);
+    setTestingMode(settings.data?.value === true);
     if (failed.length) setMessage(`Could not load ${failed.join("; ")}. If this mentions a missing table or column, run the latest database step (supabase/migrations) in Supabase.`);
+    clearInsightCache();
+    setVersion(v => v + 1);
   }
   async function login() {
     if (!supabase) return;
@@ -70,6 +79,11 @@ export default function App() {
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     setLoading(false);
     setMessage(error ? (error.message === "Invalid login credentials" ? "Wrong email or password." : error.message) : "");
+  }
+  function pickAlert(a: Alert) {
+    setMessage("");
+    if (a.kind) { setPage("Dashboard"); setOpenKind(a.kind); }
+    else if (a.page) setPage(a.page);
   }
   const canManage = role === "HO_ADMIN" || role === "STATE_MANAGER";
 
@@ -92,26 +106,23 @@ export default function App() {
         <button className="secondary logout" onClick={() => supabase!.auth.signOut()}>Sign out</button>
       </aside>
       <main>
-        <header><div><small>KOLOR ACTIV · HEVLON COSMETICS</small><h1>{page}</h1></div>
-          <span className="who">{session.user.email}{role && <em className="tag">{ROLE_LABEL[role]}</em>}</span></header>
+        <header><div><small>KOLOR ACTIV · HEVLON COSMETICS{testingMode ? " · TESTING MODE" : ""}</small><h1>{page}</h1></div>
+          <div className="headright">
+            <AlertsBell ctx={ctx} version={version} onPick={pickAlert} />
+            <span className="who">{session.user.email}{role && <em className="tag">{ROLE_LABEL[role]}</em>}</span>
+          </div></header>
         {message && <div className="notice" onClick={() => setMessage("")}>{message}<span className="x">✕</span></div>}
-        {page === "Dashboard" && <Dashboard stock={stock} locations={locations} products={products} recent={recent} go={setPage} />}
+        {page === "Dashboard" && <Dashboard ctx={ctx} userId={session.user.id} version={version} openKind={openKind} onOpened={() => setOpenKind(null)} />}
         {page === "Inventory" && <Inventory locations={locations} products={products} aliases={aliases} stock={stock} officers={officers} retailers={retailers}
           canManage={canManage} onPosted={refreshAll} onListsChanged={refreshAll} notify={setMessage} />}
-        {page === "Distributors" && <Distributors locations={locations} stock={stock} commentCounts={commentCounts} canManage={canManage} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Distributors" && <Distributors locations={locations} stock={stock} retailers={retailers} commentCounts={commentCounts} canManage={canManage}
+          testingMode={testingMode} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
         {page === "Retailers" && <Retailers retailers={retailers} locations={locations} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} locations={locations} />}
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
-        {page === "Team" && <Team role={role} />}
+        {page === "Settings" && <Settings role={role} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>
     </div>
   );
-}
-
-function Team({ role }: { role: Role | null }) {
-  return <section className="card"><h2>Team &amp; access</h2>
-    <p>Your role: <b>{role ? ROLE_LABEL[role] : "unknown"}</b>. HO admins and state managers can add and edit godowns, super stockists, distributors, retailers and SOs, and undo postings. Everyone signed in can upload stock and SO reports.</p>
-    <ol><li>Supabase → Authentication → Users → <b>Add user</b> → Create new user (tick “Auto Confirm User”).</li>
-      <li>Set their role in the <code>profiles</code> table (HO_ADMIN, STATE_MANAGER, DISTRIBUTOR_MANAGER or SALESMAN).</li></ol></section>;
 }

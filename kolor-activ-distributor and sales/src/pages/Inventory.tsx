@@ -10,6 +10,7 @@ import {
   matchDistributor, matchProduct, matchSO, fetchAll, fmt, plural, errText,
 } from "../lib/supabase";
 import StockDownload from "../components/StockDownload";
+import MoveStock from "../components/MoveStock";
 import LocationForm from "../components/LocationForm";
 
 const TYPES: { id: FileType; label: string; help: string }[] = [
@@ -357,6 +358,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
 
   return <>
     <StockDownload locations={locations} products={products} stock={stock} notify={notify} />
+    {canManage && <MoveStock locations={locations} products={products} stock={stock} onMoved={onPosted} notify={notify} />}
 
     <section className="card upload">
       <div className="rowhead"><div><h2>Upload a file</h2><p>Drop in any stock file. The app works out what it is and whose stock it is; check its guess below.</p></div></div>

@@ -42,6 +42,9 @@ SQL Editor → New query → paste all of `supabase/migrations/004_super_stockis
 ### Step 1.3d — Run the v4 update (before the v4 code goes live)
 SQL Editor → New query → paste all of `supabase/migrations/005_locations_transfers_so_checks.sql` → Run. It should end with **Success. No rows returned**. Supabase warns about destructive operations because the script drops and recreates views and functions; no data is deleted, so click **Run this query**. Safe to run more than once, and the v3 app keeps working after it runs.
 
+### Step 1.3e — Run the v5 update (before the v5 code goes live)
+SQL Editor → New query → paste all of `supabase/migrations/006_delete_testing_dashboard.sql` → Run → **Run this query** on the warning. It adds deleting locations, testing mode, dashboard layouts and the dashboard functions. No data is changed, and the v4 app keeps working after it runs.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

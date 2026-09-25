@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, StockLine, nextCode, missingFields, matchDistributor, fmt, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, StockLine, nextCode, missingFields, matchDistributor, fmt, plural, errText } from "../lib/supabase";
 import { readAnyFile } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
@@ -8,9 +8,10 @@ import { normalizeState } from "../lib/india";
 import FilterBar, { Scope, emptyScope, applyScope } from "../components/FilterBar";
 import LocationForm, { splitAliases } from "../components/LocationForm";
 import Comments from "../components/Comments";
+import DeleteLocation from "../components/DeleteLocation";
 
 interface Props {
-  locations: Distributor[]; stock: StockLine[]; commentCounts: Map<string, number>; canManage: boolean; userId: string;
+  locations: Distributor[]; stock: StockLine[]; retailers: Retailer[]; commentCounts: Map<string, number>; canManage: boolean; testingMode: boolean; userId: string;
   onChanged: () => Promise<void>; notify: (m: string) => void;
 }
 
@@ -42,7 +43,8 @@ interface Preview { file: string; grid: Grid; headerRow: number; labels: string[
 type Row = Omit<Distributor, "id" | "created_at"> & { id?: string };
 interface ImportRow { status: "new" | "update"; missing: string[]; newSS: string; row: Row }
 
-export default function Distributors({ locations, stock, commentCounts, canManage, userId, onChanged, notify }: Props) {
+export default function Distributors({ locations, stock, retailers, commentCounts, canManage, testingMode, userId, onChanged, notify }: Props) {
+  const [deleting, setDeleting] = useState<Distributor | null>(null);
   const [tab, setTab] = useState<Kind>("DISTRIBUTOR");
   const [editing, setEditing] = useState<Distributor | null>(null);
   const [scope, setScope] = useState<Scope>(emptyScope("DISTRIBUTOR"));
@@ -82,15 +84,6 @@ export default function Distributors({ locations, stock, commentCounts, canManag
   const list = applyScope(ofKind, scope).filter(d => (!onlyIncomplete || incomplete(d).length)
     && `${d.code} ${d.name} ${d.company_name || ""} ${d.owner_name || ""} ${d.state || ""} ${d.region || ""} ${d.territory || ""} ${d.phone || ""} ${(d.aliases || []).join(" ")}`.toLowerCase().includes(search.toLowerCase()));
   const nIncomplete = ofKind.filter(d => incomplete(d).length).length;
-
-  async function remove(d: Distributor) {
-    if (!supabase) return;
-    const n = kids.get(d.id) || 0;
-    if (!confirm(`Delete ${d.name} (${d.code})?${n ? `\n\n${n} distributors work under this super stockist; they'll be left without one.` : ""}\n\nIts retailers and comments are deleted with it.`)) return;
-    const { error } = await supabase.from("distributors").delete().eq("id", d.id);
-    if (error) return show("err", error.code === "23503" ? `${d.name} has stock postings or SO reports, so it can't be deleted. Undo those in History / SO checks first.` : `Delete failed: ${error.message}`);
-    show("ok", `Deleted ${d.name}.`); await onChanged();
-  }
 
   // ---------- Excel import with preview ----------
   async function readImport(f: File) {
@@ -253,7 +246,7 @@ export default function Distributors({ locations, stock, commentCounts, canManag
             <td><button className={`secondary small${openComments === d.id ? " on" : ""}`} aria-expanded={openComments === d.id} onClick={() => setOpenComments(o => (o === d.id ? null : d.id))}>
               💬 {count(d.id)}</button></td>
             {canManage && <td className="actions"><button className="secondary small" onClick={() => { setEditing(d); setMsg(null); scrollTo({ top: 0, behavior: "smooth" }); }}>Edit</button>
-              <button className="del" title="Delete" aria-label={`Delete ${d.name}`} onClick={() => remove(d)}>✕</button></td>}
+              <button className="del" title="Delete" aria-label={`Delete ${d.name}`} onClick={() => setDeleting(d)}>✕</button></td>}
           </tr>
           {openComments === d.id && <tr><td colSpan={cols + (canManage ? 1 : 0)} className="sub">
             <Comments location={d} userId={userId} canManage={canManage} onCount={n => setCounts(c => ({ ...c, [d.id]: n }))} />
@@ -261,5 +254,8 @@ export default function Distributors({ locations, stock, commentCounts, canManag
         })}</tbody></table>
         {!list.length && <p className="empty">No {KIND_PLURAL[tab].toLowerCase()}{ofKind.length ? " match" : " yet"}.</p>}</div>
     </section>
+    {deleting && <DeleteLocation location={deleting} locations={locations} stock={stock} testingMode={testingMode}
+      retailers={retailers.filter(r => r.distributor_id === deleting.id).length} comments={count(deleting.id)}
+      onClose={() => setDeleting(null)} onDeleted={async m => { setDeleting(null); if (editing?.id === deleting.id) setEditing(null); show("ok", m); await onChanged(); }} />}
   </>;
 }

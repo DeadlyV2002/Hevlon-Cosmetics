@@ -1,6 +1,6 @@
 import { Select, Combo } from "./Select";
 import { useState } from "react";
-import { supabase, Distributor, Kind, KIND_LABEL, SalesOfficer, nextCode, missingFields, validPhone, validEmail, cleanPhones, errText } from "../lib/supabase";
+import { supabase, Distributor, Kind, KIND_LABEL, SalesOfficer, nextCode, missingFields, validPhone, validEmail, cleanPhones, proper, properOrNull, errText } from "../lib/supabase";
 import { STATES, normalizeState } from "../lib/india";
 import { normName } from "../lib/parse";
 
@@ -43,10 +43,10 @@ export default function LocationForm({ kind, editing, prefillName, locations, of
     const t = (s: string) => s.trim() || null;
     const ss = supers.find(s => s.id === form.parent_id);
     const payload = {
-      kind, name: form.name.trim(), company_name: t(form.company_name), owner_name: t(form.owner_name),
+      kind, name: proper(form.name), company_name: properOrNull(form.company_name), owner_name: properOrNull(form.owner_name),
       parent_id: kind === "DISTRIBUTOR" ? form.parent_id || null : null, super_stockist: kind === "DISTRIBUTOR" ? ss?.name || null : null,
-      state: normalizeState(form.state) || null, region: t(form.region), territory: t(form.territory), phone: t(cleanPhones(form.phone)), aliases: splitAliases(form.aliases),
-      email: t(form.email), ...(kind === "DISTRIBUTOR" ? { so_id: form.so_id || null } : {}),
+      state: normalizeState(form.state) || null, region: properOrNull(form.region), territory: properOrNull(form.territory), phone: t(cleanPhones(form.phone)), aliases: splitAliases(form.aliases),
+      email: t(form.email.toLowerCase()), ...(kind === "DISTRIBUTOR" ? { so_id: form.so_id || null } : {}),
     };
     const missing = missingFields(payload);
     if (missing.length) return setMsg({ kind: "err", text: `Fill in: ${missing.join(", ")}.` });

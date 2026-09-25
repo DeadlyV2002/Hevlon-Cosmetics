@@ -1,7 +1,7 @@
 import { Select } from "../components/Select";
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText, proper, properOrNull, cleanPhones } from "../lib/supabase";
 import { readAnyFile } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
@@ -66,13 +66,13 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
   }
   async function save() {
     if (!supabase) return;
-    const name = form.name.trim();
+    const name = proper(form.name);
     if (!name || !form.distributor_id) return show("err", "Enter the retailer's name and choose their distributor.");
     if (form.phone.trim() && !validPhone(form.phone)) return show("err", "The phone number needs 8 to 13 digits.");
     const clash = retailers.find(r => r.id !== editing?.id && r.distributor_id === form.distributor_id && normName(r.name) === normName(name));
     if (clash) return show("err", `${clash.name} is already listed under this distributor.`);
     const t = (s: string) => s.trim() || null;
-    const payload = { name, distributor_id: form.distributor_id, owner_name: t(form.owner_name), phone: t(form.phone), territory: t(form.territory), code: t(form.code) };
+    const payload = { name, distributor_id: form.distributor_id, owner_name: properOrNull(form.owner_name), phone: t(cleanPhones(form.phone)), territory: properOrNull(form.territory), code: t(form.code) };
     setBusy(true);
     const { error } = editing ? await supabase.from("retailers").update(payload).eq("id", editing.id) : await supabase.from("retailers").insert(payload);
     setBusy(false);
@@ -106,7 +106,7 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
     const seen = new Set<string>();
     return preview.grid.slice(preview.headerRow + 1).map(r => {
       const v = (f: RField) => (col(f) >= 0 ? cellText(r[col(f)]) : "");
-      const name = v("name");
+      const name = proper(v("name"));
       if (!name || /^(total|grand total)$/i.test(name)) return null;
       const distText = v("distributor");
       const d = distText ? matchDistributor(distText, sellers) : sellers.find(s => s.id === preview.forAll);
@@ -117,7 +117,7 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
       return {
         problem: !d ? (distText ? `distributor "${distText}" not in your list` : "no distributor") : dup ? "listed twice in the sheet" : "",
         status: old ? "update" : "new", distName: d?.name || distText,
-        row: { id: old?.id, name, distributor_id: d?.id || null, owner_name: keep("owner_name", v("owner_name")), phone: keep("phone", v("phone")), territory: keep("territory", v("territory")), code: keep("code", v("code")) },
+        row: { id: old?.id, name, distributor_id: d?.id || null, owner_name: keep("owner_name", proper(v("owner_name"))), phone: keep("phone", cleanPhones(v("phone"))), territory: keep("territory", proper(v("territory"))), code: keep("code", v("code")) },
       };
     }).filter(Boolean) as { problem: string; status: string; distName: string; row: Partial<Retailer> & { name: string } }[];
   }, [preview, retailers, sellers]);
@@ -186,7 +186,7 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
       <div className="tablewrap"><table><thead><tr><th /><th>Retailer</th><th>Distributor</th><th>Owner</th><th>Phone</th><th>Area / beat</th><th>Code</th><th>Check</th></tr></thead>
         <tbody>{importRows.slice(0, 500).map((x, i) => <tr key={i} className={x.problem ? "bad" : ""}><td><span className={`pill ${x.status === "new" ? "input" : "count"}`}>{x.status}</span></td>
           <td>{x.row.name}</td><td>{x.distName}</td><td>{x.row.owner_name}</td><td>{x.row.phone}</td><td>{x.row.territory}</td><td>{x.row.code}</td>
-          <td className="check">{x.problem ? <span className="err">{x.problem}</span> : <span className="ok">✓</span>}</td></tr>)}</tbody></table></div>
+          <td className="check">{x.problem ? <span className="err">{x.problem}</span> : <span className="ok">Ready</span>}</td></tr>)}</tbody></table></div>
       {importRows.some(x => x.problem.startsWith("distributor")) && <p className="hint">Rows whose distributor isn't recognised are skipped. Add the distributor, or its spelling as an "other name", on the Distributors page, then import again.</p>}
     </section>}
 

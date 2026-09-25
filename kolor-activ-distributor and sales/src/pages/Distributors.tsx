@@ -1,7 +1,7 @@
 import { Select } from "../components/Select";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, fmt, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
 import { readAnyFile } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
@@ -62,6 +62,8 @@ export default function Distributors({ locations, stock, retailers, officers, co
   const [preview, setPreview] = useState<Preview | null>(null);
   const [withIncomplete, setWithIncomplete] = useState(false);
   const [dropMissing, setDropMissing] = useState(false);
+  const formRef = useRef<HTMLDivElement>(null);
+  const toForm = () => setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const show = (kind: "ok" | "err", text: string) => { setMsg({ kind, text }); notify(text); };
@@ -107,7 +109,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
       // No plain name column: use the company name.
       if (!h.mapping.includes("name")) { const ci = h.mapping.indexOf("company_name"); if (ci >= 0) h.mapping[ci] = "name"; }
       setPreview({ file: f.name, grid: g, headerRow: h.row, labels: h.labels, mapping: h.mapping });
-      setWithIncomplete(false); setDropMissing(false);
+      setWithIncomplete(false); setDropMissing(false); toForm();
     } catch (e) { show("err", `Import failed: ${errText(e)}`); }
     finally { setBusy(false); }
   }
@@ -124,7 +126,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
     const out: ImportRow[] = [];
     for (const r of preview.grid.slice(preview.headerRow + 1)) {
       const v = (f: DField) => (col(f) >= 0 ? cellText(r[col(f)]) : "");
-      const name = v("name");
+      const name = proper(v("name"));
       if (!name || /^(total|grand total)$/i.test(name)) continue;
       let code = v("code").toUpperCase();
       const byC = code ? byCode.get(code) : undefined;
@@ -134,21 +136,21 @@ export default function Distributors({ locations, stock, retailers, officers, co
       if (seen.has(code)) code = nextCode(tab, taken);
       seen.add(code); taken.push({ code });
       const keep = (f: keyof Distributor, val: string) => val || (existing?.[f] as string | null) || null;
-      const soName = tab === "DISTRIBUTOR" ? v("so") : "", so = soName ? matchSO(soName, officers) : undefined;
+      const soName = tab === "DISTRIBUTOR" ? proper(v("so")) : "", so = soName ? matchSO(soName, officers) : undefined;
       let parent_id = existing?.parent_id || null, newSS = "";
-      const ssName = tab === "DISTRIBUTOR" ? v("super_stockist") : "";
+      const ssName = tab === "DISTRIBUTOR" ? proper(v("super_stockist")) : "";
       if (ssName) { const ss = matchDistributor(ssName, supers); if (ss) parent_id = ss.id; else { newSS = ssName; parent_id = null; } }
       const row: Row = {
         id: existing?.id, code, kind: tab, name,
         // The DB List has no separate company column: the DB name is the company's name.
-        company_name: keep("company_name", v("company_name") || name), owner_name: keep("owner_name", v("owner_name")),
-        state: normalizeState(v("state")) || existing?.state || null, region: keep("region", v("region")), territory: keep("territory", v("territory")),
-        phone: keep("phone", cleanPhones(col("phone") >= 0 ? r[col("phone")] : "")), email: keep("email", v("email")), parent_id,
+        company_name: keep("company_name", proper(v("company_name")) || name), owner_name: keep("owner_name", proper(v("owner_name"))),
+        state: normalizeState(v("state")) || existing?.state || null, region: keep("region", proper(v("region"))), territory: keep("territory", proper(v("territory"))),
+        phone: keep("phone", cleanPhones(col("phone") >= 0 ? r[col("phone")] : "")), email: keep("email", v("email").toLowerCase()), parent_id,
         ...(tab === "DISTRIBUTOR" ? { so_id: so?.id || existing?.so_id || null } : {}),
         super_stockist: tab === "DISTRIBUTOR" ? ssName || existing?.super_stockist || null : null,
         aliases: [...new Set([...(existing?.aliases || []), ...aliasCols.flatMap(i => splitAliases(cellText(r[i])))])],
       };
-      out.push({ status: existing ? "update" : "new", missing: missingFields({ ...row, parent_id: parent_id || newSS }), newSS, ssTown: v("ss_town"), newSO: soName && !so ? soName : "", row });
+      out.push({ status: existing ? "update" : "new", missing: missingFields({ ...row, parent_id: parent_id || newSS }), newSS, ssTown: proper(v("ss_town")), newSO: soName && !so ? soName : "", row });
     }
     return out;
   }, [preview, locations, officers, tab]);
@@ -214,12 +216,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
   }
 
   const cols = tab === "GODOWN" ? 13 : tab === "DISTRIBUTOR" ? 16 : 15;
-  return <>
-    <section className="tabs">
-      {KINDS.slice().reverse().map(k => <button key={k} className={tab === k ? "active" : ""} onClick={() => switchTab(k)}>
-        {KIND_PLURAL[k]} ({locations.filter(d => d.kind === k).length})</button>)}
-    </section>
-
+  const addCard = <div ref={formRef} className="scrollpad">
     {canManage ? <section className="card upload">
       <div className="rowhead"><h2>{editing ? `Edit ${editing.name}` : `Add ${KIND_LABEL[tab].toLowerCase()}`}</h2>
         <div className="actions"><button className="secondary" onClick={template}>{tab === "DISTRIBUTOR" ? "Download DB List template" : "Download blank import sheet"}</button>
@@ -251,16 +248,18 @@ export default function Distributors({ locations, stock, retailers, officers, co
         {absent.length > removable.length && <p className="hint">{plural(absent.length - removable.length, "of them", "of them")} still {absent.length - removable.length === 1 ? "holds" : "hold"} stock or {absent.length - removable.length === 1 ? "has" : "have"} distributors under {absent.length - removable.length === 1 ? "it" : "them"}; delete {absent.length - removable.length === 1 ? "it" : "them"} from the list below, where you can move the stock first.</p>}
       </div>}
       {newSupers.length > 0 && <p className="hint">{newSupers.length} super stockist{newSupers.length > 1 ? "s" : ""} in this sheet {newSupers.length > 1 ? "aren't" : "isn't"} in your list and will be added: {newSupers.slice(0, 8).join(", ")}{newSupers.length > 8 ? "…" : ""}. Fill in their details on the Super stockists tab afterwards.</p>}
-      <div className="tablewrap"><table><thead><tr><th /><th>Code</th><th>Name</th><th>Company</th>{tab !== "GODOWN" && <th>Owner</th>}{tab === "DISTRIBUTOR" && <th>Super stockist</th>}<th>State</th><th>Region</th><th>City / area</th><th>Phone</th><th>Email</th>{tab === "DISTRIBUTOR" && <th>SO</th>}<th>Missing</th></tr></thead>
+      <div className="tablewrap"><table><thead><tr><th /><th>Code</th><th>Name</th><th>Company</th>{tab !== "GODOWN" && <th>Owner</th>}{tab === "DISTRIBUTOR" && <th>Super stockist</th>}<th>State</th><th>Region</th><th>City / area</th><th>Phone</th><th>Email</th>{tab === "DISTRIBUTOR" && <th>SO</th>}<th>Check</th></tr></thead>
         <tbody>{importRows.slice(0, 500).map((x, i) => <tr key={i} className={x.missing.length ? "bad" : ""}>
           <td><span className={`pill ${x.status === "new" ? "input" : "count"}`}>{x.status}</span></td>
           <td>{x.row.code}</td><td>{x.row.name}</td><td className="wrap">{x.row.company_name}</td>{tab !== "GODOWN" && <td>{x.row.owner_name}</td>}
           {tab === "DISTRIBUTOR" && <td>{x.newSS ? <>{x.newSS} <em className="tag">new</em></> : byId.get(x.row.parent_id || "")?.name}</td>}
           <td>{x.row.state}</td><td>{x.row.region}</td><td>{x.row.territory}</td><td>{x.row.phone}</td><td>{x.row.email}</td>{tab === "DISTRIBUTOR" && <td>{x.newSO ? <>{x.newSO} <em className="tag">new</em></> : officers.find(o => o.id === x.row.so_id)?.name}</td>}
-          <td className="check">{x.missing.length ? <span className="err">{x.missing.join(", ")}</span> : <span className="ok">✓</span>}</td></tr>)}</tbody></table>
+          <td className="check">{x.missing.length ? <span className="err">Needs {x.missing.join(", ")}</span> : <span className="ok">Ready</span>}</td></tr>)}</tbody></table>
         {importRows.length > 500 && <p className="hint">Showing the first 500 of {importRows.length} rows. All of them are imported.</p>}</div>
     </section>}
 
+  </div>;
+  const listCard = <>
     <section className="card">
       <div className="rowhead"><h2>{KIND_PLURAL[tab]} ({list.length}{list.length !== ofKind.length ? ` of ${ofKind.length}` : ""})</h2>
         <div className="actions">
@@ -283,7 +282,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
             <td>{fmt(t?.units)}</td><td>{fmt(t?.value)}</td><td>{t?.last || "—"}</td>
             <td><button className={`secondary small${openComments === d.id ? " on" : ""}`} aria-expanded={openComments === d.id} onClick={() => setOpenComments(o => (o === d.id ? null : d.id))}>
               💬 {count(d.id)}</button></td>
-            {canManage && <td className="actions"><button className="secondary small" onClick={() => { setEditing(d); setMsg(null); scrollTo({ top: 0, behavior: "smooth" }); }}>Edit</button>
+            {canManage && <td className="actions"><button className="secondary small" onClick={() => { setEditing(d); setMsg(null); toForm(); }}>Edit</button>
               <button className="del" title="Delete" aria-label={`Delete ${d.name}`} onClick={() => setDeleting(d)}>✕</button></td>}
           </tr>
           {openComments === d.id && <tr><td colSpan={cols + (canManage ? 1 : 0)} className="sub">
@@ -292,6 +291,16 @@ export default function Distributors({ locations, stock, retailers, officers, co
         })}</tbody></table>
         {!list.length && <p className="empty">No {KIND_PLURAL[tab].toLowerCase()}{ofKind.length ? " match" : " yet"}.</p>}</div>
     </section>
+  </>;
+  // Once the list has records it comes first; the add and import form sits below it.
+  const listFirst = ofKind.length > 0;
+  return <>
+    <section className="tabs">
+      {KINDS.slice().reverse().map(k => <button key={k} className={tab === k ? "active" : ""} onClick={() => switchTab(k)}>
+        {KIND_PLURAL[k]} ({locations.filter(d => d.kind === k).length})</button>)}
+    </section>
+
+    {listFirst ? <>{listCard}{addCard}</> : <>{addCard}{listCard}</>}
     {deleting && <DeleteLocation location={deleting} locations={locations} stock={stock} testingMode={testingMode}
       retailers={retailers.filter(r => r.distributor_id === deleting.id).length} comments={count(deleting.id)}
       onClose={() => setDeleting(null)} onDeleted={async m => { setDeleting(null); if (editing?.id === deleting.id) setEditing(null); show("ok", m); await onChanged(); }} />}

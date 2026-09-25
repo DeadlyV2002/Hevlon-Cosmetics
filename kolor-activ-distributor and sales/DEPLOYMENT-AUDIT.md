@@ -9,6 +9,8 @@
 - Dropdowns are drawn by the page, so they open under their field in any window (native dropdowns opened on the wrong side of the screen in split and embedded windows). Long lists can be searched by typing.
 - Dashboard charts enlarge on click only (no hover); close with ✕, Esc or a click outside. The chart editor panel no longer inherits the sidebar's fixed position, which caused the glitch in the enlarged view. A second "Add a chart" button sits at the end of the dashboard.
 - Retailers tree: state → super stockist → distributor cards with retailer counts and names; a card opens to the full list. SO checks: seven summary tiles, one panel with the chosen check, thresholds shown only on the checks that use them. Reports bar labels no longer overlap in narrow windows. Header buttons wrap instead of spilling; form rows keep inputs aligned; messages under forms have reserved space so the page doesn't jump.
+- Names typed or imported are written like Excel PROPER ("SHARMA TRADERS pvt ltd" → "Sharma Traders Pvt Ltd"; two-letter capitals such as SS stay). Button labels are in Title Case. Import previews say "Ready" or "Needs …" in a Check column instead of a tick under "Missing".
+- Once a type has records, the Distributors page shows the list first and the add/import form below it; Edit and a new import scroll down to the form.
 - Tested in the browser with the real DB List (151 distributors, 23 SOs), move stock (479 units from one location to another), reminders timing, the pricing lock, and every page at 600, 960 and 1100 px wide with no overflow.
 
 ## v6 pricing (25 Sep 2026) — run `supabase/migrations/007_pricing_margins_schemes.sql` after 006, before pushing the code

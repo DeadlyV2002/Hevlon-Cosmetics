@@ -96,7 +96,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
       onClick={() => (open ? setOpen(false) : show())} onKeyDown={key}>
       <span>{sel?.label || " "}</span>
     </button>
-    {open && <>
+    {open && pos.left !== undefined && <>
       {searchable && createPortal(<input className="popsearch" ref={search} autoFocus placeholder="Type to search…" value={q} aria-label="Search the list"
         style={{ position: "fixed", left: pos.left, width: pos.width, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }}
         onChange={e => { setQ(e.target.value); setActive(0); }} onKeyDown={key} onPointerDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()} />, document.body)}
@@ -135,6 +135,6 @@ export function Combo({ options, value, defaultValue, onChange, onKeyDown, ...re
         else if (e.key === "Tab") setOpen(false);
         onKeyDown?.(e);
       }} />
-    {open && shown.length > 0 && !rest.disabled && <List opts={shown} active={active} setActive={setActive} pick={pick} listRef={list} pos={pos} current={cur} />}
+    {open && pos.left !== undefined && shown.length > 0 && !rest.disabled && <List opts={shown} active={active} setActive={setActive} pick={pick} listRef={list} pos={pos} current={cur} />}
   </>;
 }

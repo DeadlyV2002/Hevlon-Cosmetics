@@ -492,7 +492,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
             <td className="check">
               {ck.excluded ? <span className="muted">{ck.notes.join("; ")}</span>
                 : ck.problems.length ? <><span className="err">{ck.problems.join("; ")}</span>{ck.notes.length > 0 && <small className="muted"> ({ck.notes.join("; ")})</small>}</>
-                : <span className="ok">✓ {ck.notes.join("; ") || (plan ? "will remember" : !ck.p && type !== "SO" ? "new product" : "")}</span>}
+                : <span className="ok">{ck.notes.join("; ") || (plan ? "Ready, will remember" : !ck.p && type !== "SO" ? "Ready, new product" : "Ready")}</span>}
               {(ck.excluded || r.include) && <label className="inline small"><input type="checkbox" checked={!!r.include} onChange={e => updateRow(i, "include", e.target.checked)} /> save anyway</label>}
             </td>
             <td><button className="del" title="Remove row" aria-label="Remove row" onClick={() => setRows(rs => rs.filter((_, j) => j !== i))}>✕</button></td>

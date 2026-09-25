@@ -436,3 +436,7 @@ table.map button.select{width:100%;margin:4px 0}
 .rt-dist .tablewrap{margin-top:10px}
 .rowhead>.actions{flex:1 1 auto;justify-content:flex-end}
 .rowhead>.actions .search{flex:0 1 240px;min-width:140px}
+
+/* Button labels in Title Case ("Download Excel", "Move Stock"); dropdowns and cards holding data keep their own text. */
+button:not(.select):not(.galleryitem):not(.rt-distbtn):not(.link),label.button,label.filebtn,.galleryitem b{text-transform:capitalize}
+.scrollpad{scroll-margin-top:12px}

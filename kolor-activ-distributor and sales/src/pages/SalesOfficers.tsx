@@ -1,6 +1,6 @@
 import { Select } from "../components/Select";
 import { useEffect, useState } from "react";
-import { supabase, SalesOfficer, validPhone, fmt, errText } from "../lib/supabase";
+import { supabase, SalesOfficer, validPhone, fmt, errText, proper, properOrNull } from "../lib/supabase";
 import { normName } from "../lib/parse";
 import { STATES, normalizeState } from "../lib/india";
 import { splitAliases } from "../components/LocationForm";
@@ -25,12 +25,12 @@ export default function SalesOfficers({ officers, canManage, onChanged, notify }
 
   async function save() {
     if (!supabase) return;
-    const name = form.name.trim();
+    const name = proper(form.name);
     if (!name) return setMsg({ kind: "err", text: "Enter the SO's name." });
     if (form.phone.trim() && !validPhone(form.phone)) return setMsg({ kind: "err", text: "The phone number needs 8 to 13 digits." });
     const clash = officers.find(o => o.id !== editing?.id && normName(o.name) === normName(name));
     if (clash) return setMsg({ kind: "err", text: `${clash.name} (${clash.code}) is already in the list.` });
-    const payload = { name, phone: form.phone.trim() || null, state: normalizeState(form.state) || null, region: form.region.trim() || null, aliases: splitAliases(form.aliases), active: form.active };
+    const payload = { name, phone: form.phone.trim() || null, state: normalizeState(form.state) || null, region: properOrNull(form.region), aliases: splitAliases(form.aliases), active: form.active };
     const code = editing?.code || `SO${String(Math.max(0, ...officers.map(o => Number(o.code.match(/^SO(\d+)$/i)?.[1] || 0))) + 1).padStart(3, "0")}`;
     const { error } = editing ? await supabase.from("sales_officers").update(payload).eq("id", editing.id) : await supabase.from("sales_officers").insert({ ...payload, code });
     if (error) return setMsg({ kind: "err", text: error.code === "42501" ? "Only HO admins and state managers can change the SO list." : `Save failed: ${error.message}` });

@@ -119,6 +119,13 @@ export function matchProduct(sku: string, name: string, list: Product[], aliases
 }
 
 // ---------- formatting ----------
+/** Excel's PROPER: "SHARMA TRADERS pvt ltd" → "Sharma Traders Pvt Ltd". Two-letter capitals such as SS stay as they are. */
+export function proper(v: unknown): string {
+  return String(v ?? "").trim().replace(/\s+/g, " ").split(" ").map(w => (/^[A-Z]{2}$/.test(w) ? w
+    : w.toLowerCase().replace(/(^|[^a-z0-9'])([a-z])/g, (_, a, b) => a + b.toUpperCase()))).join(" ");
+}
+/** proper() for optional fields: empty stays null. */
+export const properOrNull = (v: unknown) => proper(v) || null;
 export const fmt = (n: unknown, d = 0) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d });
 /** "1 row", "3 rows". */
 export const plural = (n: number, one: string, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;

@@ -1,5 +1,16 @@
 # Deployment Package Audit
 
+## v7 (25 Sep 2026) — run `supabase/migrations/008_pricing_lock_contacts_reminders.sql` after 007, then set up reminders (DEPLOY-STEPS 1.3g)
+- The distributor import reads the DB List sheet as the template: DB Name is the distributor and its company name, DB Town its city, HQ its region, SS Name and SS Town its super stockist (created if new), SO/ASE Name its SO (created if new), Contact.No its phone, Contact Person its owner, and an optional Email column. Before, SO/ASE Name was read as the distributor's name and DB Name was skipped, so every row looked incomplete and nothing imported.
+- Phone numbers lose a leading 91 (or 0); two numbers in one cell are both kept, separated by a comma.
+- The sheet is the master list: the import preview lists distributors in the app that aren't in the sheet and can remove the ones without stock. "Download DB List template" gives the sheet's layout.
+- Pricing page and pricing data are locked to logins in `pricing_access` (only the owner to start); other logins, HO admins included, don't see the page and can't change prices, margins or schemes.
+- Monthly stock reminders by email (Resend) and WhatsApp (Business Cloud API) from a Supabase Edge Function run daily by pg_cron: the first on a set day, follow-ups every few days after the due day until a file from that distributor is posted. Settings shows who has sent last month's stock, who was reminded, and any sending errors.
+- Dropdowns are drawn by the page, so they open under their field in any window (native dropdowns opened on the wrong side of the screen in split and embedded windows). Long lists can be searched by typing.
+- Dashboard charts enlarge on click only (no hover); close with ✕, Esc or a click outside. The chart editor panel no longer inherits the sidebar's fixed position, which caused the glitch in the enlarged view. A second "Add a chart" button sits at the end of the dashboard.
+- Retailers tree: state → super stockist → distributor cards with retailer counts and names; a card opens to the full list. SO checks: seven summary tiles, one panel with the chosen check, thresholds shown only on the checks that use them. Reports bar labels no longer overlap in narrow windows. Header buttons wrap instead of spilling; form rows keep inputs aligned; messages under forms have reserved space so the page doesn't jump.
+- Tested in the browser with the real DB List (151 distributors, 23 SOs), move stock (479 units from one location to another), reminders timing, the pricing lock, and every page at 600, 960 and 1100 px wide with no overflow.
+
 ## v6 pricing (25 Sep 2026) — run `supabase/migrations/007_pricing_margins_schemes.sql` after 006, before pushing the code
 - Stock is valued at the SS rate (what you bill super stockists) on every page, chart, alert and download. A product without an SS rate is valued at its last purchase rate and flagged on the Pricing page.
 - The SS rate fills in by itself the first time a godown dispatch to a super stockist carries a rate (the scheme discount running that day is added back). After that it only changes on the Pricing page.

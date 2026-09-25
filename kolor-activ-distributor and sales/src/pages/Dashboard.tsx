@@ -46,8 +46,6 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
   const [gallery, setGallery] = useState(false);
   const [saveError, setSaveError] = useState("");
   const saveTimer = useRef<number>();
-  const hoverTimer = useRef<number>();
-  const quietFrom = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -78,18 +76,8 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
     onOpened();
   }, [openKind, charts]);
 
-  function open(id: string) { window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined; setEditing(false); setOpenId(id); }
-  function close(at: { x: number; y: number } | null) { quietFrom.current = at; setOpenId(null); setEditing(false); }
-  /** Resting the mouse on a chart for half a second enlarges it. Just after one closes, the mouse has to move away first. */
-  function hover(id: string, e: React.PointerEvent) {
-    if (e.pointerType !== "mouse" || openId || hoverTimer.current) return;
-    if (quietFrom.current) {
-      if (Math.hypot(e.clientX - quietFrom.current.x, e.clientY - quietFrom.current.y) < 80) return;
-      quietFrom.current = null;
-    }
-    hoverTimer.current = window.setTimeout(() => open(id), 500);
-  }
-  function unhover() { window.clearTimeout(hoverTimer.current); hoverTimer.current = undefined; }
+  function open(id: string) { setEditing(false); setOpenId(id); }
+  function close() { setOpenId(null); setEditing(false); }
 
   if (!charts) return <p className="empty">Loading your dashboard…</p>;
   const focus = charts.filter(c => c.focus), rest = charts.filter(c => !c.focus);
@@ -106,7 +94,7 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
 
   const card = (c: ChartConfig, size: ChartSize, wide = false) => <section key={c.id} className={`chartcard sz-${size}${wide ? " wide" : ""}`} tabIndex={0}
     aria-label={`${chartTitle(c)}. Press Enter to enlarge.`}
-    onPointerMove={e => hover(c.id, e)} onPointerLeave={unhover} onClick={() => open(c.id)}
+    onClick={() => open(c.id)}
     onKeyDown={e => { if (e.key === "Enter") open(c.id); }}>
     <header><h3>{chartTitle(c)}</h3><span className="enlarge" aria-hidden>⤢</span></header>
     <p className="subtitle">{KIND_SPECS[c.kind].subtitle(c)}</p>
@@ -115,7 +103,7 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
 
   return <>
     <div className="dashbar">
-      <p className="hint">Rest the mouse on a chart to enlarge it; move it off into the space around to shrink it back. Enlarged charts have a <b>Customize</b> button.</p>
+      <p className="hint">Click a chart to enlarge it. Enlarged charts have a <b>Customize</b> button; close them with ✕, Esc or a click outside.</p>
       <div className="actions">
         <button className="secondary" onClick={() => setGallery(true)}>+ Add a chart</button>
         <button className="secondary" onClick={() => { if (confirm("Put back the ten starting charts? Your changes to charts are lost.")) save(defaultCharts()); }}>Reset charts</button>
@@ -124,11 +112,12 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
     {saveError && <div className="status err">{saveError}</div>}
     {focus.length > 0 && <div className="focusgrid">{focus.map((c, i) => card(c, "focus", focus.length === 3 ? i === 0 : focus.length === 1))}</div>}
     {rest.length > 0 && <div className="chartgrid">{rest.map(c => card(c, "card"))}</div>}
+    {charts.length > 0 && <div className="dashend"><button className="secondary" onClick={() => setGallery(true)}>+ Add a chart</button></div>}
     {!charts.length && <p className="empty">No charts on your dashboard. <button className="link" onClick={() => setGallery(true)}>Add one</button>.</p>}
 
     {openChart && <Overlay chart={openChart} ctx={ctx} version={version} editing={editing} setEditing={setEditing} onClose={close}
       first={idx === 0} last={idx === charts.length - 1} onChange={update} onMove={move}
-      onRemove={() => { if (confirm(`Remove "${chartTitle(openChart)}" from your dashboard?`)) { save(charts.filter(c => c.id !== openChart.id)); close(null); } }} />}
+      onRemove={() => { if (confirm(`Remove "${chartTitle(openChart)}" from your dashboard?`)) { save(charts.filter(c => c.id !== openChart.id)); close(); } }} />}
     {gallery && <Gallery charts={charts} onClose={() => setGallery(false)}
       onAdd={kind => { const c = newChart(kind); save([...charts, c]); setGallery(false); setOpenId(c.id); setEditing(true); }} />}
   </>;
@@ -137,35 +126,24 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
 // ---------- enlarged chart ----------
 interface OverlayProps {
   chart: ChartConfig; ctx: Ctx; version: number; editing: boolean; setEditing: (v: boolean) => void; first: boolean; last: boolean;
-  onClose: (at: { x: number; y: number } | null) => void; onChange: (c: ChartConfig) => void; onMove: (d: -1 | 1) => void; onRemove: () => void;
+  onClose: () => void; onChange: (c: ChartConfig) => void; onMove: (d: -1 | 1) => void; onRemove: () => void;
 }
 function Overlay({ chart, ctx, version, editing, setEditing, first, last, onClose, onChange, onMove, onRemove }: OverlayProps) {
-  const panel = useRef<HTMLDivElement>(null);
-  const armed = useRef(false);
-  const closeTimer = useRef<number>();
   const closeBtn = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeBtn.current?.focus();
-    const t = window.setTimeout(() => (armed.current = true), 700);
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", esc);
     document.body.classList.add("noscroll");
-    return () => { window.clearTimeout(t); window.clearTimeout(closeTimer.current); document.removeEventListener("keydown", esc); document.body.classList.remove("noscroll"); };
+    return () => { document.removeEventListener("keydown", esc); document.body.classList.remove("noscroll"); };
   }, []);
-  function onMoveBackdrop(e: React.PointerEvent) {
-    const inside = panel.current?.contains(e.target as Node);
-    if (inside) { armed.current = true; window.clearTimeout(closeTimer.current); closeTimer.current = undefined; return; }
-    if (e.pointerType !== "mouse" || editing || !armed.current || closeTimer.current) return;
-    const at = { x: e.clientX, y: e.clientY };
-    closeTimer.current = window.setTimeout(() => onClose(at), 160);
-  }
-  return <div className="overlay" onPointerMove={onMoveBackdrop} onClick={e => { if (!panel.current?.contains(e.target as Node)) onClose(null); }}>
-    <div className={`overlaypanel${editing ? " editing" : ""}`} ref={panel} role="dialog" aria-modal="true" aria-label={chartTitle(chart)}>
+  return <div className="overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={`overlaypanel${editing ? " editing" : ""}`} role="dialog" aria-modal="true" aria-label={chartTitle(chart)}>
       <header>
         <div><h2>{chartTitle(chart)}</h2><p className="subtitle">{KIND_SPECS[chart.kind].subtitle(chart)}</p></div>
         <div className="actions">
           <button className={editing ? "" : "secondary"} onClick={() => setEditing(!editing)}>{editing ? "Done" : "Customize"}</button>
-          <button className="secondary" ref={closeBtn} aria-label="Close" onClick={() => onClose(null)}>✕</button>
+          <button className="secondary" ref={closeBtn} aria-label="Close" onClick={onClose}>✕</button>
         </div>
       </header>
       <div className="overlaybody">

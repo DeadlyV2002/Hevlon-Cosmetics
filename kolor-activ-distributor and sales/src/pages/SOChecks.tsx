@@ -1,3 +1,4 @@
+import { Select } from "../components/Select";
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, SalesOfficer, KIND_LABEL, fetchAll, fmt, plural, money, errText } from "../lib/supabase";
@@ -134,18 +135,18 @@ export default function SOChecks({ locations, products, officers, canManage, onC
 
   return <>
     <section className="card">
-      <div className="checkfilters">
+      <div className="checkbar">
         <DateRange value={range} onChange={setRange} />
-        <select value={so} onChange={e => setSo(e.target.value)} aria-label="Sales officer"><option value="">All SOs</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</select>
-        <label className="inline">Stock unsold for over <input type="number" min={7} max={365} value={agedDays} onChange={e => setAgedDays(Math.max(7, Number(e.target.value) || 60))} /> days</label>
-        <label className="inline">No data for over <input type="number" min={1} max={180} value={staleDays} onChange={e => setStaleDays(Math.max(1, Number(e.target.value) || 15))} /> days</label>
+        <Select value={so} onChange={e => setSo(e.target.value)} aria-label="Sales officer"><option value="">All SOs</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</Select>
       </div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={["DISTRIBUTOR", "SUPER_STOCKIST"]} saveKey="so-checks" />
       {err && <div className="status err">{err}</div>}
-      <div className="tabs checks" role="tablist">{TABS.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
-        {t.label} <span className={`count${t.count ? " has" : ""}`}>{t.count}</span></button>)}</div>
-      <div className={loading ? "loading" : ""}>
-        <div className="rowhead"><p className="hint">{current.help}</p>
+      <div className="checktiles" role="tablist">{TABS.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} className={`checktile${tab === t.id ? " on" : ""}${t.count ? " has" : ""}`} onClick={() => setTab(t.id)}>
+        <b>{t.count}</b><span>{t.label}</span></button>)}</div>
+      <div className={`checkpanel${loading ? " loading" : ""}`}>
+        <div className="checkhead"><div><h3>{current.label}</h3><p className="hint">{current.help}</p>
+          {tab === "aged" && <label className="inline">Unsold for over <input type="number" min={7} max={365} value={agedDays} onChange={e => setAgedDays(Math.max(7, Number(e.target.value) || 60))} /> days</label>}
+          {tab === "stale" && <label className="inline">No data for over <input type="number" min={1} max={180} value={staleDays} onChange={e => setStaleDays(Math.max(1, Number(e.target.value) || 15))} /> days</label>}</div>
           <button className="secondary" onClick={() => download(rowsFor[tab](), current.label)} disabled={!current.count}>Download this list</button></div>
         <div className="tablewrap">
           {tab === "oversell" && <table><thead><tr><th>Date</th><th>SO(s)</th><th>Distributor</th><th>Product</th><th>SO sales that day</th><th>SO sales so far</th><th>Distributor had</th><th>Sold without stock</th></tr></thead>

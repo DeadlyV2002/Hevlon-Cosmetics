@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { supabase, Role, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Role, plural, errText } from "../lib/supabase";
+import Reminders from "../components/Reminders";
 
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
 
-interface Props { role: Role | null; testingMode: boolean; onTestingMode: (on: boolean) => void; onChanged: () => Promise<void>; notify: (m: string) => void }
+interface Props { role: Role | null; locations?: Distributor[]; testingMode: boolean; onTestingMode: (on: boolean) => void; onChanged: () => Promise<void>; notify: (m: string) => void }
 
 export default function Settings({ role, testingMode, onTestingMode, onChanged, notify }: Props) {
   const admin = role === "HO_ADMIN", manager = admin || role === "STATE_MANAGER";
@@ -64,6 +65,8 @@ export default function Settings({ role, testingMode, onTestingMode, onChanged, 
       <div className="actions wrap"><label className="inline">Type DELETE to confirm <input value={word} onChange={e => setWord(e.target.value)} aria-label="Type DELETE to confirm" /></label>
         <button className="danger" disabled={word !== "DELETE" || busy === "clear"} onClick={clearAll}>{busy === "clear" ? "Clearing…" : "Clear all data"}</button></div>
     </section>}
+
+    <Reminders canEdit={manager} />
 
     {manager && <section className="card">
       <h2>Unused products</h2>

@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Distributor, Kind, KIND_LABEL, KIND_PLURAL } from "../lib/supabase";
 
@@ -70,14 +71,14 @@ export default function FilterBar({ locations, value, onChange, kinds, rank, sav
   const changed = value.kind !== (kinds.length === 1 ? kinds[0] : "") || value.state || value.region || value.ss || value.ids.length;
 
   return <div className="filterbar">
-    {kinds.length > 1 && <select value={value.kind} onChange={e => set({ kind: e.target.value as Kind | "" })} aria-label="Type">
-      <option value="">All types</option>{kinds.map(k => <option key={k} value={k}>{KIND_PLURAL[k]}</option>)}</select>}
-    <select value={value.state} onChange={e => set({ state: e.target.value })} aria-label="State">
-      <option value="">All states</option>{states.map(s => <option key={s} value={s}>{s}</option>)}</select>
-    <select value={value.region} onChange={e => set({ region: e.target.value })} disabled={!regions.length} aria-label="Region">
-      <option value="">All regions</option>{regions.map(s => <option key={s} value={s}>{s}</option>)}</select>
-    {supers.length > 0 && kinds.includes("DISTRIBUTOR") && <select value={value.ss} onChange={e => set({ ss: e.target.value })} aria-label="Super stockist">
-      <option value="">All super stockists</option>{supers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+    {kinds.length > 1 && <Select value={value.kind} onChange={e => set({ kind: e.target.value as Kind | "" })} aria-label="Type">
+      <option value="">All types</option>{kinds.map(k => <option key={k} value={k}>{KIND_PLURAL[k]}</option>)}</Select>}
+    <Select value={value.state} onChange={e => set({ state: e.target.value })} aria-label="State">
+      <option value="">All states</option>{states.map(s => <option key={s} value={s}>{s}</option>)}</Select>
+    <Select value={value.region} onChange={e => set({ region: e.target.value })} disabled={!regions.length} aria-label="Region">
+      <option value="">All regions</option>{regions.map(s => <option key={s} value={s}>{s}</option>)}</Select>
+    {supers.length > 0 && kinds.includes("DISTRIBUTOR") && <Select value={value.ss} onChange={e => set({ ss: e.target.value })} aria-label="Super stockist">
+      <option value="">All super stockists</option>{supers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>}
     <Picker pool={pool} picked={picked} value={value} onChange={onChange} rank={rank} saveKey={saveKey} locations={locations}
       noun={value.kind ? KIND_PLURAL[value.kind].toLowerCase() : kinds.length === 1 ? KIND_PLURAL[kinds[0]].toLowerCase() : "locations"} />
     {changed ? <button className="link" onClick={() => onChange(emptyScope(kinds.length === 1 ? kinds[0] : ""))}>Reset</button> : null}

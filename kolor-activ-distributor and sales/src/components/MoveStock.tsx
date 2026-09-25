@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { useMemo, useState } from "react";
 import { supabase, Distributor, Product, StockLine, KINDS, KIND_PLURAL, fmt, plural, errText } from "../lib/supabase";
 import { today } from "../lib/parse";
@@ -57,8 +58,8 @@ export default function MoveStock({ locations, products, stock, onMoved, notify 
       <button className="secondary" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? "Hide" : "Move stock"}</button></div>
     {open && <>
       <div className="bulk">
-        <label>From<select value={from} onChange={e => pickFrom(e.target.value)}><option value="">Choose…</option>{options("")}</select></label>
-        <label>To<select value={to} onChange={e => setTo(e.target.value)} disabled={!from}><option value="">Choose…</option>{options(from)}</select></label>
+        <label>From<Select value={from} onChange={e => pickFrom(e.target.value)}><option value="">Choose…</option>{options("")}</Select></label>
+        <label>To<Select value={to} onChange={e => setTo(e.target.value)} disabled={!from}><option value="">Choose…</option>{options(from)}</Select></label>
         <label>Date<input type="date" value={date} onChange={e => e.target.value && setDate(e.target.value)} /></label>
         <label>Note or invoice no.<input value={note} onChange={e => setNote(e.target.value)} placeholder="optional" /></label>
       </div>
@@ -66,8 +67,8 @@ export default function MoveStock({ locations, products, stock, onMoved, notify 
       {from && heldProducts.length > 0 && <>
         <div className="tablewrap"><table className="edit"><thead><tr><th>Product</th><th>There now</th><th>Move</th><th /></tr></thead>
           <tbody>{lines.map((l, i) => <tr key={i} className={problems[i] ? "bad" : ""}>
-            <td><select value={l.productId} onChange={e => setLine(i, { productId: e.target.value })}><option value="">Choose…</option>
-              {heldProducts.map(p => <option key={p.id} value={p.id} disabled={p.id !== l.productId && lines.some(x => x.productId === p.id)}>{p.item_name}</option>)}</select></td>
+            <td><Select value={l.productId} onChange={e => setLine(i, { productId: e.target.value })}><option value="">Choose…</option>
+              {heldProducts.map(p => <option key={p.id} value={p.id} disabled={p.id !== l.productId && lines.some(x => x.productId === p.id)}>{p.item_name}</option>)}</Select></td>
             <td>{l.productId ? fmt(held.get(l.productId)) : ""}</td>
             <td><input type="number" min={0} value={l.qty} onChange={e => setLine(i, { qty: e.target.value })} />{problems[i] && <small className="missing">{problems[i]}</small>}</td>
             <td><button className="del" aria-label="Remove line" onClick={() => setLines(ls => ls.filter((_, j) => j !== i))}>✕</button></td></tr>)}</tbody></table></div>

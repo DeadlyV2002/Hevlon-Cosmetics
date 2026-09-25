@@ -1,3 +1,4 @@
+import { Select } from "../components/Select";
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText } from "../lib/supabase";
@@ -26,6 +27,7 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
   const [scope, setScope] = useState<Scope>(emptyScope());
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"tree" | "table">("tree");
+  const [openDist, setOpenDist] = useState<string | null>(null);
   const [editing, setEditing] = useState<Retailer | null>(null);
   const [form, setForm] = useState<Form>(blank);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -157,9 +159,9 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
         <label className="button secondary">Import from Excel<input hidden type="file" accept=".xlsx,.xls,.xlsm,.ods,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) readImport(x); e.target.value = ""; }} /></label></div>
       <div className="formgrid">
         <label>Retailer name *<input {...f("name")} /></label>
-        <label>Distributor *<select {...f("distributor_id")}><option value="">Choose…</option>
+        <label>Distributor *<Select {...f("distributor_id")}><option value="">Choose…</option>
           {(["DISTRIBUTOR", "SUPER_STOCKIST"] as const).map(k => <optgroup key={k} label={k === "DISTRIBUTOR" ? "Distributors" : "Super stockists (selling direct)"}>
-            {sellers.filter(s => s.kind === k).map(s => <option key={s.id} value={s.id}>{s.name} ({s.code}){s.territory ? ` · ${s.territory}` : ""}</option>)}</optgroup>)}</select></label>
+            {sellers.filter(s => s.kind === k).map(s => <option key={s.id} value={s.id}>{s.name} ({s.code}){s.territory ? ` · ${s.territory}` : ""}</option>)}</optgroup>)}</Select></label>
         <label>Owner<input {...f("owner_name")} /></label>
         <label>Phone<input {...f("phone")} inputMode="tel" /></label>
         <label>Area / beat<input {...f("territory")} /></label>
@@ -176,11 +178,11 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
         <div className="actions"><button className="secondary" onClick={() => setPreview(null)}>Cancel</button>
           <button onClick={confirmImport} disabled={busy || !good.length}>{busy ? "Importing…" : `Import ${plural(good.length, "retailer")}`}</button></div></div>
       <div className="tablewrap"><table className="map"><tbody><tr>{preview.labels.map((l, i) => <td key={i}><small>{l || `column ${i + 1}`}</small>
-        <select value={preview.mapping[i]} onChange={e => setPreview({ ...preview, mapping: preview.mapping.map((m, j) => (j === i ? e.target.value as RField : m === e.target.value ? "ignore" : m)) })}>
-          {(Object.keys(R_LABELS) as (RField | "ignore")[]).map(k => <option key={k} value={k}>{R_LABELS[k]}</option>)}</select></td>)}</tr></tbody></table></div>
+        <Select value={preview.mapping[i]} onChange={e => setPreview({ ...preview, mapping: preview.mapping.map((m, j) => (j === i ? e.target.value as RField : m === e.target.value ? "ignore" : m)) })}>
+          {(Object.keys(R_LABELS) as (RField | "ignore")[]).map(k => <option key={k} value={k}>{R_LABELS[k]}</option>)}</Select></td>)}</tr></tbody></table></div>
       {!preview.mapping.includes("distributor") && <label className="inline">No distributor column. They all work under:
-        <select value={preview.forAll} onChange={e => setPreview({ ...preview, forAll: e.target.value })}><option value="">choose…</option>
-          {sellers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}</select></label>}
+        <Select value={preview.forAll} onChange={e => setPreview({ ...preview, forAll: e.target.value })}><option value="">choose…</option>
+          {sellers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}</Select></label>}
       <div className="tablewrap"><table><thead><tr><th /><th>Retailer</th><th>Distributor</th><th>Owner</th><th>Phone</th><th>Area / beat</th><th>Code</th><th>Check</th></tr></thead>
         <tbody>{importRows.slice(0, 500).map((x, i) => <tr key={i} className={x.problem ? "bad" : ""}><td><span className={`pill ${x.status === "new" ? "input" : "count"}`}>{x.status}</span></td>
           <td>{x.row.name}</td><td>{x.distName}</td><td>{x.row.owner_name}</td><td>{x.row.phone}</td><td>{x.row.territory}</td><td>{x.row.code}</td>
@@ -195,27 +197,36 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
           <input className="search" placeholder="Search retailers…" value={search} onChange={e => setSearch(e.target.value)} />
           <button className="secondary" onClick={exportList} disabled={!list.length}>Export to Excel</button></div></div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={["DISTRIBUTOR", "SUPER_STOCKIST"]} saveKey="retailers" />
-      {view === "tree" ? <div className="tree">
+      {view === "tree" ? <div className="rtree">
         {tree.states.map(([state, supers]) => {
           const n = [...supers.values()].flat().reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
-          return <details key={state} open={tree.states.length <= 3}>
-            <summary><b>{state}</b> <small>{plural(n, "retailer")}</small></summary>
-            {[...supers.entries()].sort((a, b) => (byId.get(a[0])?.name || "~").localeCompare(byId.get(b[0])?.name || "~")).map(([ssId, dists]) => {
-              const ss = byId.get(ssId), m = dists.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
-              return <details key={ssId || "none"} className="lvl2" open={supers.size <= 3}>
-                <summary>{ss ? <><span className="kind">SS</span> {ss.name}</> : <em>No super stockist</em>} <small>{plural(dists.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")} · {plural(m, "retailer")}</small></summary>
-                {[...dists].sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : a.name.localeCompare(b.name))).map(d => {
-                  const rs = tree.byDist.get(d.id) || [];
-                  return <details key={d.id} className="lvl3">
-                    <summary>{d.kind === "SUPER_STOCKIST" ? <em>Sold direct by {d.name}</em> : d.name} <small>{d.code}{d.territory ? ` · ${d.territory}` : ""} · {plural(rs.length, "retailer")}</small></summary>
-                    {rs.length ? <div className="tablewrap">{retailerTable(rs)}</div> : <p className="empty">No retailers yet.</p>}
-                  </details>;
-                })}
-              </details>;
-            })}
+          return <details key={state} className="rt-state" open>
+            <summary><h3>{state}</h3><span className="rt-badge">{plural(supers.size, "super stockist")}</span><span className="rt-badge">{plural(n, "retailer")}</span></summary>
+            <div className="rt-branch">
+              {[...supers.entries()].sort((a, b) => (byId.get(a[0])?.name || "~").localeCompare(byId.get(b[0])?.name || "~")).map(([ssId, dists]) => {
+                const ss = byId.get(ssId), m = dists.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
+                const ordered = [...dists].sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : a.name.localeCompare(b.name)));
+                return <details key={ssId || "none"} className="rt-ss" open>
+                  <summary><span className="kind">SS</span><b>{ss ? ss.name : "No super stockist"}</b>{ss?.territory && <small>{ss.territory}</small>}
+                    <span className="rt-badge">{plural(dists.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span><span className="rt-badge">{plural(m, "retailer")}</span></summary>
+                  <div className="rt-dists">{ordered.map(d => {
+                    const rs = [...(tree.byDist.get(d.id) || [])].sort((a, b) => a.name.localeCompare(b.name)), open = openDist === d.id;
+                    return <div key={d.id} className={`rt-dist${open ? " open" : ""}`}>
+                      <button className="rt-distbtn" aria-expanded={open} onClick={() => setOpenDist(open ? null : d.id)}>
+                        <b>{d.kind === "SUPER_STOCKIST" ? `Sold direct by ${d.name}` : d.name}</b>
+                        <span className="rt-count">{rs.length}<small>{rs.length === 1 ? "retailer" : "retailers"}</small></span>
+                        <small>{[d.territory, d.owner_name, d.phone].filter(Boolean).join(" · ") || d.code}</small>
+                      </button>
+                      {!open && rs.length > 0 && <div className="rt-chips">{rs.slice(0, 4).map(x => <span key={x.id} className="rt-chip">{x.name}</span>)}{rs.length > 4 && <span className="rt-chip more">+{rs.length - 4} more</span>}</div>}
+                      {open && (rs.length ? <div className="tablewrap">{retailerTable(rs)}</div> : <p className="empty">No retailers yet.</p>)}
+                    </div>;
+                  })}</div>
+                </details>;
+              })}
+            </div>
           </details>;
         })}
-        {!tree.states.length && <p className="empty">No {KIND_LABEL.DISTRIBUTOR.toLowerCase()}s or retailers match.</p>}
+        {!tree.states.length && <p className="empty">No distributors or retailers match.</p>}
       </div> : <div className="tablewrap"><table><thead><tr><th>Retailer</th><th>Code</th><th>Distributor</th><th>Super stockist</th><th>State</th><th>Region</th><th>Area / beat</th><th>Owner</th><th>Phone</th><th>First seen</th>{canManage && <th />}</tr></thead>
         <tbody>{list.slice(0, 2000).map(r => {
           const d = byId.get(r.distributor_id || ""), ss = d?.kind === "SUPER_STOCKIST" ? d : byId.get(d?.parent_id || "");

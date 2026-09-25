@@ -18,7 +18,7 @@ export interface Distributor {
   id: string; code: string; name: string; kind: Kind; parent_id: string | null;
   company_name: string | null; owner_name: string | null; super_stockist: string | null;
   state: string | null; region: string | null; territory: string | null; phone: string | null;
-  aliases: string[]; created_at?: string;
+  aliases: string[]; created_at?: string; email?: string | null; so_id?: string | null;
 }
 export interface Retailer { id: string; distributor_id: string | null; code: string | null; name: string; territory: string | null; owner_name: string | null; phone: string | null; created_at: string }
 export interface SalesOfficer { id: string; code: string; name: string; phone: string | null; state: string | null; region: string | null; aliases: string[]; active: boolean }
@@ -68,7 +68,17 @@ export function missingFields(d: Partial<Record<Required, string | null>> & { ki
   return REQUIRED[d.kind].filter(f => !String(d[f] ?? "").trim()).map(f => REQUIRED_LABEL[f]);
 }
 /** Indian mobile or landline: 8 to 13 digits once spaces, dashes and +91 are ignored. */
-export const validPhone = (s: string) => { const n = s.replace(/\D/g, "").length; return n >= 8 && n <= 13; };
+export const validPhone = (s: string) => s.split(/,\s*/).every(p => { const n = p.replace(/\D/g, "").length; return n >= 8 && n <= 13; });
+/** "+91 98765 43210 / 919876543211" → "9876543210, 9876543211": each number kept, 91 or 0 in front dropped. */
+export function cleanPhones(v: unknown): string {
+  return String(v ?? "").split(/[/,;&\n]|\s{2,}/).map(p => {
+    let d = p.replace(/\D/g, "");
+    if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+    else if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
+    return d;
+  }).filter(Boolean).join(", ");
+}
+export const validEmail = (s: string) => s.split(/[,;]\s*/).filter(Boolean).every(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
 
 // ---------- loading ----------
 const PAGE = 1000;

@@ -33,6 +33,8 @@ export default function App() {
   const [testingMode, setTestingMode] = useState(false);
   const [margins, setMargins] = useState<Margins>({ ss: 10, distributor: 15 });
   const [schemes, setSchemes] = useState<Scheme[]>([]);
+  /** Only logins listed in pricing_access see the Pricing page. */
+  const [canPrice, setCanPrice] = useState(false);
   /** Goes up after every reload, so charts and alerts know to fetch fresh numbers. */
   const [version, setVersion] = useState(0);
   const [openKind, setOpenKind] = useState<ChartKind | null>(null);
@@ -52,7 +54,7 @@ export default function App() {
     /** One list failing (say, before the latest database step is run) shouldn't blank the others. */
     const all = <T,>(label: string, page: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) =>
       fetchAll<T>(page).catch(e => { failed.push(`${label}: ${errText(e)}`); return null; });
-    const [prof, d, p, s, r, al, so, cc, settings, sch] = await Promise.all([
+    const [prof, d, p, s, r, al, so, cc, settings, sch, cp] = await Promise.all([
       sb.from("profiles").select("role").eq("id", session.user.id).maybeSingle(),
       all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
       all<Omit<Product, "purchase_rate">>("products", (a, z) => sb.from("products").select("id,sku,item_name,unit_price,ss_rate,mrp").order("item_name").order("id").range(a, z)),
@@ -62,7 +64,8 @@ export default function App() {
       all<SalesOfficer>("sales officers", (a, z) => sb.from("sales_officers").select("*").order("name").order("id").range(a, z)),
       all<{ distributor_id: string; n: number }>("comments", (a, z) => sb.from("distributor_comment_counts").select("distributor_id,n").order("distributor_id").range(a, z)),
       sb.from("app_settings").select("key,value").in("key", ["testing_mode", "margins"]),
-      all<Scheme>("schemes", (a, z) => sb.from("schemes").select("*").order("starts_on", { ascending: false }).order("id").range(a, z)),
+      all<Scheme>("pricing schemes", (a, z) => sb.from("schemes").select("*").order("starts_on", { ascending: false }).order("id").range(a, z)),
+      sb.rpc("can_price"),
     ]);
     setRole(((prof.data as any)?.role as Role) ?? null);
     if (d) setLocations(d.map(x => ({ ...x, kind: x.kind || "DISTRIBUTOR" })));
@@ -78,6 +81,7 @@ export default function App() {
     const m = setting("margins");
     if (m) setMargins({ ss: Number(m.ss ?? 10), distributor: Number(m.distributor ?? 15) });
     if (sch) setSchemes(sch);
+    setCanPrice(cp.data === true);
     if (failed.length) setMessage(`Could not load ${failed.join("; ")}. If this mentions a missing table or column, run the latest database step (supabase/migrations) in Supabase.`);
     clearInsightCache();
     setVersion(v => v + 1);
@@ -111,7 +115,7 @@ export default function App() {
     <div className="app">
       <aside>
         <div className="logo">KA</div><strong>Kolor Activ</strong><small>Distributor control</small>
-        <nav>{NAV.map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); }}>{n}</button>)}</nav>
+        <nav>{NAV.filter(n => n !== "Pricing" || canPrice).map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); }}>{n}</button>)}</nav>
         <button className="secondary logout" onClick={() => supabase!.auth.signOut()}>Sign out</button>
       </aside>
       <main>
@@ -124,14 +128,14 @@ export default function App() {
         {page === "Dashboard" && <Dashboard ctx={ctx} userId={session.user.id} version={version} openKind={openKind} onOpened={() => setOpenKind(null)} />}
         {page === "Inventory" && <Inventory locations={locations} products={products} aliases={aliases} stock={stock} officers={officers} retailers={retailers}
           canManage={canManage} onPosted={refreshAll} onListsChanged={refreshAll} notify={setMessage} />}
-        {page === "Distributors" && <Distributors locations={locations} stock={stock} retailers={retailers} commentCounts={commentCounts} canManage={canManage}
+        {page === "Distributors" && <Distributors locations={locations} stock={stock} retailers={retailers} officers={officers} commentCounts={commentCounts} canManage={canManage}
           testingMode={testingMode} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
         {page === "Retailers" && <Retailers retailers={retailers} locations={locations} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} locations={locations} />}
-        {page === "Pricing" && <Pricing products={products} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Pricing" && canPrice && <Pricing products={products} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
-        {page === "Settings" && <Settings role={role} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Settings" && <Settings role={role} locations={locations} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>
     </div>
   );

@@ -179,7 +179,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       {running.map(s => <p key={s.id} className="hint">Running today: {effect(s)}</p>)}
       {canManage ? <button disabled={!mDirty || mBad || busy === "margins"} onClick={saveMargins}>{busy === "margins" ? "Saving…" : "Save margins"}</button>
         : <p className="hint">Only HO admins and state managers can change margins.</p>}
-      {mBad && <p className="hint">Margins must be numbers from 0 to 99.99.</p>}
+      <p className="hint reserve">{mBad ? "Margins must be numbers from 0 to 99.99." : ""}</p>
     </section>
 
     <section className="card">
@@ -203,7 +203,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
         {!form.all && (ssList.length ? <div className="actions wrap">{ssList.map(s => <label key={s.id} className="inline"><input type="checkbox" checked={form.applies_to.includes(s.id)}
           onChange={e => setForm({ ...form, applies_to: e.target.checked ? [...form.applies_to, s.id] : form.applies_to.filter(x => x !== s.id) })} /> {s.name}</label>)}</div>
           : <p className="hint">No super stockists yet. Add them on the Distributors page.</p>)}
-        {formProblem && <p className="hint">{formProblem}</p>}
+        <p className="hint reserve">{formProblem}</p>
         <div className="actions"><button disabled={!!formProblem || busy === "scheme"} onClick={saveScheme}>{busy === "scheme" ? "Saving…" : "Save scheme"}</button>
           <button className="secondary" onClick={() => setForm(null)}>Cancel</button></div>
       </div>}
@@ -251,7 +251,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       {canManage && <div className="actions">
         <button disabled={!drafts.size || badDraft || busy === "prices"} onClick={savePrices}>{busy === "prices" ? "Saving…" : drafts.size ? `Save prices (${plural(drafts.size, "product")})` : "Save prices"}</button>
         {drafts.size > 0 && <button className="secondary" onClick={() => setDrafts(new Map())}>Discard changes</button>}
-        {badDraft && <span className="hint">Prices must be numbers of 0 or more.</span>}
+        <span className="hint reserve">{badDraft ? "Prices must be numbers of 0 or more." : ""}</span>
       </div>}
     </section>
   </>;

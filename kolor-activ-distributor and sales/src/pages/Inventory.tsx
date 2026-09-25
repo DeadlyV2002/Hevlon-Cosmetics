@@ -1,3 +1,4 @@
+import { Select, Combo } from "../components/Select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mode, Row, Field, Table, Layout, Skipped, FIELD_LABELS, emptyRow, today, localDate, isValidDate,
@@ -35,6 +36,7 @@ interface Props {
 export default function Inventory({ locations, products, aliases, stock, officers, retailers, canManage, onPosted, onListsChanged, notify }: Props) {
   const [type, setType] = useState<FileType>("COUNT");
   const [detection, setDetection] = useState<Detection | null>(null);
+  const productOptions = useMemo(() => products.map(p => ({ value: `${p.sku} — ${p.item_name}` })), [products]);
   const [table, setTable] = useState<Table | null>(null);
   const [sheet, setSheet] = useState(0);
   const [layout, setLayout] = useState<Layout | null>(null);
@@ -376,13 +378,13 @@ export default function Inventory({ locations, products, aliases, stock, officer
       {type === "COUNT" && <p className="hint">From Tally: <b>Stock Summary</b> → <b>Alt+F5</b> (Detailed) → <b>Alt+E</b> Export → Excel or XML.</p>}
       <div className="bulk">
         <label>{type === "SO" ? "Distributor for all rows" : "Whose stock"}
-          <select value={holderLoc?.code || ""} onChange={e => (e.target.value ? setAll("distributor", e.target.value) : setHolder(""))}>
+          <Select value={holderLoc?.code || ""} onChange={e => (e.target.value ? setAll("distributor", e.target.value) : setHolder(""))}>
             <option value="">{holder && !holderLoc ? `"${holder}" — not in your list` : type === "SO" || showLocCol ? "As in each row" : "Choose…"}</option>
             {locOptions(type === "SO")}
-          </select></label>
-        {type === "SO" && <label>SO for all rows<select value={matchSO(soDefault, officers)?.code || ""} onChange={e => (e.target.value ? setAll("so", e.target.value) : setSoDefault(""))}>
+          </Select></label>
+        {type === "SO" && <label>SO for all rows<Select value={matchSO(soDefault, officers)?.code || ""} onChange={e => (e.target.value ? setAll("so", e.target.value) : setSoDefault(""))}>
           <option value="">{soDefault && !matchSO(soDefault, officers) ? `"${soDefault}" — not in your list` : "As in each row"}</option>
-          {officers.map(o => <option key={o.id} value={o.code}>{o.name} ({o.code})</option>)}</select></label>}
+          {officers.map(o => <option key={o.id} value={o.code}>{o.name} ({o.code})</option>)}</Select></label>}
         <label>{type === "COUNT" ? "Stock count date" : "Date for rows with no date in the file"}<input type="date" value={date} onChange={e => setAll("date", e.target.value)} /></label>
       </div>
       {!locations.length && <p className="warn">No locations yet. Add your godown, super stockists and distributors on the Distributors page first.</p>}
@@ -391,7 +393,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
 
     {table && layout && <section className="card">
       <div className="rowhead"><h2>Columns in {file?.name}</h2>
-        {table.sheets.length > 1 && <label className="inline">Sheet <select value={sheet} onChange={e => changeSheet(Number(e.target.value))}>{table.sheets.map((s, i) => <option key={i} value={i}>{s.name}</option>)}</select></label>}
+        {table.sheets.length > 1 && <label className="inline">Sheet <Select value={sheet} onChange={e => changeSheet(Number(e.target.value))}>{table.sheets.map((s, i) => <option key={i} value={i}>{s.name}</option>)}</Select></label>}
       </div>
       <p className="hint">{savedFormat
         ? <><span className="tag">saved format</span> Columns set the same way as the last file with these headings.</>
@@ -399,9 +401,9 @@ export default function Inventory({ locations, products, aliases, stock, officer
       {file?.heading && <p className="hint">File heading: <b>{file.heading.slice(0, 160)}</b></p>}
       <div className="tablewrap"><table className="map"><tbody>
         <tr>{layout.labels.map((l, i) => <td key={i}><small>{l || `column ${i + 1}`}</small>
-          <select value={layout.mapping[i] || "ignore"} onChange={e => changeColumn(i, e.target.value as Field)}>
+          <Select value={layout.mapping[i] || "ignore"} onChange={e => changeColumn(i, e.target.value as Field)}>
             {(Object.keys(FIELD_LABELS) as Field[]).map(f => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
-          </select>
+          </Select>
           <small className="sample">{cellText(grid[layout.headerRow + Math.max(layout.headerRows, 1)]?.[i]).slice(0, 24)}</small></td>)}</tr>
       </tbody></table></div>
     </section>}
@@ -418,8 +420,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
           <b>{unknownLocs.length ? `Not in your list: ${unknownLocs.map(n => `"${n}"`).join(", ")}` : "Whose stock is this file? Choose above."}</b>
           {canManage && unknownLocs.slice(0, 5).map(name => <div className="fixrow" key={name}>
             <span className="fixname">{name}</span>
-            <label>It is the same as…<select value={fix[`loc:${name}`] || ""} onChange={e => setFix({ ...fix, [`loc:${name}`]: e.target.value })}>
-              <option value="">choose…</option>{locOptions(type === "SO")}</select></label>
+            <label>It is the same as…<Select value={fix[`loc:${name}`] || ""} onChange={e => setFix({ ...fix, [`loc:${name}`]: e.target.value })}>
+              <option value="">choose…</option>{locOptions(type === "SO")}</Select></label>
             <button disabled={!fix[`loc:${name}`]} onClick={() => saveLocationAlias(name, fix[`loc:${name}`])}>Save as its other name</button>
             <span className="or">or add as new</span>
             {(type === "SO" ? (["DISTRIBUTOR", "SUPER_STOCKIST"] as Kind[]) : KINDS).map(k => <button key={k} className="secondary small" onClick={() => setAdding({ name, kind: k })}>{KIND_LABEL[k]}</button>)}
@@ -430,8 +432,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
           <b>{unknownParties.length} {type === "OUT" ? "receiver" : "sender"}{unknownParties.length > 1 ? "s aren't" : " isn't"} in your list</b>, so {unknownParties.length > 1 ? "they're" : "it's"} treated as {type === "OUT" ? "a retailer or outside buyer" : "an outside supplier"}. If {unknownParties.length > 1 ? "any is" : "it's"} one of your super stockists or distributors, say which:
           {canManage && unknownParties.slice(0, 8).map(name => <div className="fixrow" key={name}>
             <span className="fixname">{name}</span>
-            <label>Same as…<select value={fix[`party:${name}`] || ""} onChange={e => setFix({ ...fix, [`party:${name}`]: e.target.value })}>
-              <option value="">choose…</option>{locOptions(false)}</select></label>
+            <label>Same as…<Select value={fix[`party:${name}`] || ""} onChange={e => setFix({ ...fix, [`party:${name}`]: e.target.value })}>
+              <option value="">choose…</option>{locOptions(false)}</Select></label>
             <button disabled={!fix[`party:${name}`]} onClick={() => saveLocationAlias(name, fix[`party:${name}`])}>Save as its other name</button>
             <button className="secondary small" onClick={() => setAdding({ name, kind: "DISTRIBUTOR" })}>Add as new distributor</button>
           </div>)}
@@ -441,8 +443,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
           <b>Sales officers not in your list: {unknownSOs.map(n => `"${n}"`).join(", ")}</b>
           {canManage ? unknownSOs.slice(0, 5).map(name => <div className="fixrow" key={name}>
             <span className="fixname">{name}</span>
-            <label>Same SO as…<select value={fix[`so:${name}`] || ""} onChange={e => setFix({ ...fix, [`so:${name}`]: e.target.value })}>
-              <option value="">choose…</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name} ({o.code})</option>)}</select></label>
+            <label>Same SO as…<Select value={fix[`so:${name}`] || ""} onChange={e => setFix({ ...fix, [`so:${name}`]: e.target.value })}>
+              <option value="">choose…</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name} ({o.code})</option>)}</Select></label>
             <button disabled={!fix[`so:${name}`]} onClick={() => saveSOAlias(name, fix[`so:${name}`])}>Save as their other name</button>
             <span className="or">or</span>
             <button className="secondary" onClick={() => addSO(name)}>Add “{name.slice(0, 30)}” as a new SO</button>
@@ -471,7 +473,6 @@ export default function Inventory({ locations, products, aliases, stock, officer
       </div>}
       {nExcluded > 0 && <p className="hint">{nExcluded} row{nExcluded > 1 ? "s were" : " was"} already recorded from the other side of the transfer, so {nExcluded > 1 ? "they're" : "it's"} skipped. Tick “save anyway” on a row to include it.</p>}
       {newProducts > 0 && <p className="hint">{newProducts} product name{newProducts > 1 ? "s aren't" : " isn't"} in your product list and will be created. If a name is just how this file writes one of your products, pick the product under “Same as”; the app remembers it.</p>}
-      <datalist id="products-dl">{products.map(p => <option key={p.id} value={`${p.sku} — ${p.item_name}`} />)}</datalist>
       <div className="tablewrap"><table className="edit"><thead><tr>
         {cols.map(h => <th key={h}>{COL_LABEL[h]}</th>)}
         {type === "COUNT" && <><th>Current</th><th>Change</th></>}
@@ -486,7 +487,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
             {cols.map(k => <td key={k}><input className={k} type={k === "quantity" || k === "unit_price" ? "number" : k === "date" ? "date" : "text"} value={r[k]} onChange={e => updateRow(i, k, e.target.value)} /></td>)}
             {type === "COUNT" && <><td>{fmt(ck.cur)}</td><td className={diff > 0 ? "in" : diff < 0 ? "out" : ""}>{diff > 0 ? "+" : ""}{fmt(diff)}</td></>}
             <td>{ck.p && !plan ? <small>{ck.p.item_name}</small>
-              : <input className="match" list="products-dl" placeholder={type === "OUT" || type === "SO" ? "pick your product…" : "new product, or pick…"}
+              : <Combo className="match" options={productOptions} placeholder={type === "OUT" || type === "SO" ? "pick your product…" : "new product, or pick…"}
                   defaultValue={planned ? `${planned.sku} — ${planned.item_name}` : ""} onChange={e => matchTo(r.item_name, e.target.value)} />}</td>
             <td className="check">
               {ck.excluded ? <span className="muted">{ck.notes.join("; ")}</span>

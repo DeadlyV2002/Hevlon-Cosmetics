@@ -1,3 +1,4 @@
+import { Combo } from "./Select";
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, StockLine, KINDS, KIND_LABEL, fetchAll, fmt, errText, locLabel } from "../lib/supabase";
@@ -102,8 +103,7 @@ export default function StockDownload({ locations, products, stock, notify }: { 
     <div className="rowhead"><h2>Download stock</h2></div>
     <p className="hint">Type a distributor, super stockist or godown to download its stock, or narrow by state, region and super stockist to download several at once.</p>
     <div className="bulk">
-      <label>Location<input list="dl-locations" value={typed} onChange={e => type(e.target.value)} placeholder="Type a name…" />
-        <datalist id="dl-locations">{KINDS.flatMap(k => locations.filter(d => d.kind === k)).map(d => <option key={d.id} value={locLabel(d)}>{KIND_LABEL[d.kind]}{d.territory ? ` · ${d.territory}` : ""}</option>)}</datalist></label>
+      <label>Location<Combo value={typed} onChange={e => type(e.target.value)} placeholder="Type a name…" options={KINDS.flatMap(k => locations.filter(d => d.kind === k)).map(d => ({ value: locLabel(d), hint: `${KIND_LABEL[d.kind]}${d.territory ? ` · ${d.territory}` : ""}` }))} /></label>
       <div className="periodpick">
         <span className="lbl">Stock</span>
         <label className="inline"><input type="radio" name="period" checked={period === "latest"} onChange={() => setPeriod("latest")} /> Latest</label>

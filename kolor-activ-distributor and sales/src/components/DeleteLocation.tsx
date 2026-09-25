@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { useEffect, useRef, useState } from "react";
 import { supabase, Distributor, StockLine, KINDS, KIND_LABEL, KIND_PLURAL, money, plural, errText } from "../lib/supabase";
 
@@ -15,7 +16,7 @@ export default function DeleteLocation({ location: d, locations, stock, retailer
   const [kidsTo, setKidsTo] = useState("");
   const [dropProducts, setDropProducts] = useState(testingMode);
   const [busy, setBusy] = useState(false), [err, setErr] = useState("");
-  const first = useRef<HTMLSelectElement | HTMLButtonElement>(null);
+  const first = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     (first.current as HTMLElement | null)?.focus();
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -46,15 +47,15 @@ export default function DeleteLocation({ location: d, locations, stock, retailer
         {units > 0 && <fieldset>
           <legend>It holds {plural(units, "unit")} of {plural(lines.length, "product")} ({money(value)}). What happens to that stock?</legend>
           <label className="inline"><input type="radio" name="stock" checked={!discard} onChange={() => setDiscard(false)} /> Move it to</label>
-          <select ref={first as React.RefObject<HTMLSelectElement>} value={stockTo} disabled={discard} onChange={e => setStockTo(e.target.value)}>
-            <option value="">choose where…</option>{others(KINDS)}</select>
+          <Select ref={first} value={stockTo} disabled={discard} onChange={e => setStockTo(e.target.value)}>
+            <option value="">choose where…</option>{others(KINDS)}</Select>
           <label className="inline"><input type="radio" name="stock" checked={discard} onChange={() => setDiscard(true)} /> Delete it along with {d.name}{testingMode ? " (test data)" : ""}</label>
         </fieldset>}
         {kids.length > 0 && <fieldset>
           <legend>{plural(kids.length, "distributor")} work{kids.length === 1 ? "s" : ""} under this super stockist.</legend>
-          <select value={kidsTo} onChange={e => setKidsTo(e.target.value)}>
+          <Select value={kidsTo} onChange={e => setKidsTo(e.target.value)}>
             <option value="">Leave them without a super stockist for now</option>
-            {locations.filter(l => l.kind === "SUPER_STOCKIST" && l.id !== d.id).map(l => <option key={l.id} value={l.id}>Move them to {l.name}</option>)}</select>
+            {locations.filter(l => l.kind === "SUPER_STOCKIST" && l.id !== d.id).map(l => <option key={l.id} value={l.id}>Move them to {l.name}</option>)}</Select>
         </fieldset>}
         <label className="inline"><input type="checkbox" checked={dropProducts} onChange={e => setDropProducts(e.target.checked)} /> Also delete products that nothing else uses afterwards</label>
         {err && <div className="status err">{err}</div>}

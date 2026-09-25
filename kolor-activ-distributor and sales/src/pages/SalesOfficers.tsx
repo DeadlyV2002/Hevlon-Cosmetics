@@ -1,3 +1,4 @@
+import { Select } from "../components/Select";
 import { useEffect, useState } from "react";
 import { supabase, SalesOfficer, validPhone, fmt, errText } from "../lib/supabase";
 import { normName } from "../lib/parse";
@@ -51,7 +52,7 @@ export default function SalesOfficers({ officers, canManage, onChanged, notify }
         <div className="formgrid">
           <label>SO name *<input {...f("name")} /></label>
           <label>Phone<input {...f("phone")} inputMode="tel" /></label>
-          <label>State<select {...f("state")}><option value="">Choose…</option>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+          <label>State<Select {...f("state")}><option value="">Choose…</option>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</Select></label>
           <label>Region / HQ<input {...f("region")} /></label>
           <label className="wide">Other names in their sheets <small>(optional, comma-separated)</small><input {...f("aliases")} /></label>
           {editing && <label className="inline"><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Still working</label>}

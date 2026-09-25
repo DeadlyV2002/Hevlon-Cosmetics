@@ -48,6 +48,24 @@ SQL Editor → New query → paste all of `supabase/migrations/006_delete_testin
 ### Step 1.3f — Run the pricing update (after 1.3e, before the pricing code goes live)
 SQL Editor → New query → paste all of `supabase/migrations/007_pricing_margins_schemes.sql` → Run → **Run this query** on the warning. It adds the SS rate and MRP on products, the margins setting (10% and 15% to start), and the schemes table, and switches stock values to the SS rate. Products have no SS rate until the next godown dispatch to a super stockist carries one or you set it on the Pricing page; until then they're valued at the last purchase rate, as before.
 
+### Step 1.3g — Run the v7 update and set up reminders (after 1.3f, before the v7 code goes live)
+1. SQL Editor → New query → paste all of `supabase/migrations/008_pricing_lock_contacts_reminders.sql` → Run → **Run this query** on the warning. It locks the Pricing page to your login (vedantdaga2002@gmail.com), adds email and SO / ASE to distributors, and adds the reminder tables. To give someone else pricing access later: `insert into pricing_access(user_id) select id from auth.users where email = 'their@email';`
+2. Email: make a free account at resend.com, verify your domain there, and create an API key.
+3. WhatsApp: in Meta WhatsApp Manager, create a message template named `stock_update_reminder` (category Utility, language English) with the body: "Dear {{1}}, please send your closing stock statement for {{2}}. Reply here with your Tally stock summary or an Excel sheet. Kolor Activ". Wait for approval. Note the phone number ID and create a permanent access token (System user).
+4. Supabase → Edge Functions → Deploy a new function → Via editor → name it `stock-reminders` → paste all of `supabase/functions/stock-reminders/index.ts` → Deploy. In its settings, turn **Enforce JWT verification** off (the function checks the login or the schedule's secret itself).
+5. Edge Functions → Secrets → add: `RESEND_API_KEY`, `REMINDER_FROM` (for example `Kolor Activ <stock@yourdomain.com>`), `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, and `CRON_SECRET` (any long random text).
+6. Database → Extensions → turn on `pg_cron` and `pg_net`. Then SQL Editor → run, with your project ref and the same CRON_SECRET:
+```sql
+select cron.schedule('stock-reminders', '30 4 * * *', $
+  select net.http_post(
+    url := 'https://<project-ref>.supabase.co/functions/v1/stock-reminders',
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', '<CRON_SECRET>'),
+    body := '{}'::jsonb)
+$);
+```
+This runs every day at 10:00 IST. It only sends anything when reminders are switched on in the app (Settings → Monthly stock reminders).
+7. In the app, fill in distributors' emails (Distributors page, or an Email column in the DB List sheet), switch reminders on in Settings, and press **Send due reminders now** once to check the table shows no errors.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

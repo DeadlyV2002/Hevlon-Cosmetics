@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { localDate, today } from "../lib/parse";
 
 export interface Range { from: string; to: string }
@@ -21,10 +22,10 @@ export const defaultRange = (id = "30") => PRESETS.find(p => p.id === id)!.range
 export default function DateRange({ value, onChange }: { value: Range; onChange: (r: Range) => void }) {
   const preset = PRESETS.find(p => { const r = p.range(); return r.from === value.from && r.to === value.to; })?.id || "custom";
   return <div className="daterange">
-    <select value={preset} aria-label="Date range" onChange={e => { const p = PRESETS.find(x => x.id === e.target.value); if (p) onChange(p.range()); }}>
+    <Select value={preset} aria-label="Date range" onChange={e => { const p = PRESETS.find(x => x.id === e.target.value); if (p) onChange(p.range()); }}>
       {PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
       <option value="custom" disabled>Custom range</option>
-    </select>
+    </Select>
     <input type="date" aria-label="From" value={value.from} max={value.to} onChange={e => e.target.value && onChange({ ...value, from: e.target.value })} />
     <span>to</span>
     <input type="date" aria-label="To" value={value.to} min={value.from} onChange={e => e.target.value && onChange({ ...value, to: e.target.value })} />

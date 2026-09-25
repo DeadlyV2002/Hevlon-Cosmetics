@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { ChartConfig, Ctx, KIND_SPECS } from "../lib/insights";
 import FilterBar, { emptyScope } from "./FilterBar";
 
@@ -18,14 +19,14 @@ export default function ChartEditor({ chart, ctx, first, last, onChange, onMove,
         <div className="seg" role="group" aria-label="Measure">
           <button className={chart.metric !== "units" ? "on" : ""} onClick={() => set({ metric: "value" })}>Value ₹</button>
           <button className={chart.metric === "units" ? "on" : ""} onClick={() => set({ metric: "units" })}>Units</button></div></div>;
-      if (o.key === "top") return <label key={i}>Bars to show<select value={chart.top ?? 10} onChange={e => set({ top: Number(e.target.value) })}>
-        {[5, 10, 15, 20, 30].map(n => <option key={n} value={n}>Top {n}</option>)}</select></label>;
+      if (o.key === "top") return <label key={i}>Bars to show<Select value={chart.top ?? 10} onChange={e => set({ top: Number(e.target.value) })}>
+        {[5, 10, 15, 20, 30].map(n => <option key={n} value={n}>Top {n}</option>)}</Select></label>;
       if (o.key === "labels") return <label key={i} className="inline"><input type="checkbox" checked={chart.labels !== false} onChange={e => set({ labels: e.target.checked })} /> Show values on the chart</label>;
       if (o.key === "scope") return <div key={i} className="field"><span>Which locations</span>
         <FilterBar locations={ctx.locations} value={chart.scope || emptyScope()} onChange={s => set({ scope: s })} kinds={o.kinds} /></div>;
       if (o.key === "groupBy" || o.key === "split") return <label key={i}>{o.label}
-        <select value={(chart[o.key] as string) ?? o.choices[0].id} onChange={e => set({ [o.key]: e.target.value })}>
-          {o.choices.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>;
+        <Select value={(chart[o.key] as string) ?? o.choices[0].id} onChange={e => set({ [o.key]: e.target.value })}>
+          {o.choices.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</Select></label>;
       if (o.key === "series") {
         const on = chart.series?.length ? chart.series : o.choices.map(c => c.id);
         return <div key={i} className="field"><span>{o.label}</span>{o.choices.map(c => <label key={c.id} className="inline">

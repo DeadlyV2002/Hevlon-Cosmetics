@@ -1,5 +1,16 @@
 # Deployment Package Audit
 
+## v8 (25 Sep 2026) — run `supabase/migrations/009_collections_dsr_reports.sql` after 008
+- Collections page: record payments (distributor to super stockist, super stockist to company) or import them from Excel; billing vs collection per party with collection %, outstanding, last bill and payment, and flags (heavy orders with low payment, under half paid, no payment in 45+ days). Billing is stock received from the supplier at the invoice rate, or the SS rate plus margins.
+- SO Reports page: upload the whole DSR workbook daily; each SO sheet's days replace what was there. Attendance comes from an Attendance column if present, otherwise from the remark and calls. Per-SO summary (present, leave, off, calls, productive calls, strike rate, secondary sales, sales per call and per working day, flags against the team average), an attendance grid, the daily log and products sold. The DSR product list and SS rates per dozen are stored.
+- Distributor report (click any name): contact details, stock, last bill and sale, MoM and YoY, collection %, monthly chart and table; Present (full screen), Print and Export Chart (PNG).
+- Excel-style column filters and sorting on the distributor list, collections, SO reports and payments.
+- Comments open in a centred dialog; the location picker panel stays on screen in any window size.
+- Super stockists outside the chosen state or region are greyed out in the filter bar and the distributor form.
+- Retailers tree: distributor counts per state and SS; retailer counts hidden until retailer data exists; cards show stock, billing and collection %, sortable best to worst.
+- Sheets with a stray value in the last Excel row (row 1,048,575) no longer freeze uploads; only cells with content are read.
+- Tested with the real Odisha DSR (857 SO-days, 6 SOs, 151 products, 51.5 lakh), a payment, the report, comments and column filters at 900 px.
+
 ## v7 (25 Sep 2026) — run `supabase/migrations/008_pricing_lock_contacts_reminders.sql` after 007, then set up reminders (DEPLOY-STEPS 1.3g)
 - The distributor import reads the DB List sheet as the template: DB Name is the distributor and its company name, DB Town its city, HQ its region, SS Name and SS Town its super stockist (created if new), SO/ASE Name its SO (created if new), Contact.No its phone, Contact Person its owner, and an optional Email column. Before, SO/ASE Name was read as the distributor's name and DB Name was skipped, so every row looked incomplete and nothing imported.
 - Phone numbers lose a leading 91 (or 0); two numbers in one cell are both kept, separated by a comma.

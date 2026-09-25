@@ -277,8 +277,24 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
 }
 
 // ---------- readers that produce grids ----------
+/** A sheet as rows of cells, limited to the cells that hold something. Some sheets claim a range down
+ * to row 1,048,575 because of stray formatting; reading that range would build a million empty rows. */
+export function sheetRows(ws: XLSX.WorkSheet, blankrows = true): Cell[][] {
+  let maxR = -1, maxC = -1;
+  for (const k of Object.keys(ws)) {
+    if (k[0] === "!") continue;
+    const v = (ws[k] as XLSX.CellObject).v;
+    if (v === undefined || v === null || (typeof v === "string" && !v.trim())) continue;
+    const a = XLSX.utils.decode_cell(k);
+    if (a.r > maxR) maxR = a.r;
+    if (a.c > maxC) maxC = a.c;
+  }
+  if (maxR < 0) return [];
+  return XLSX.utils.sheet_to_json<Cell[]>(ws, { header: 1, raw: true, defval: "", blankrows, range: { s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } } });
+}
+
 export function workbookToTable(wb: XLSX.WorkBook, source: string): Table {
-  const sheets = wb.SheetNames.map(name => ({ name, grid: XLSX.utils.sheet_to_json<Cell[]>(wb.Sheets[name], { header: 1, raw: true, defval: "", blankrows: false }) }))
+  const sheets = wb.SheetNames.map(name => ({ name, grid: sheetRows(wb.Sheets[name], false) }))
     .filter(s => s.grid.some(r => r.some(c => cellText(c))));
   // Largest sheet first.
   sheets.sort((a, b) => b.grid.length - a.grid.length);

@@ -66,6 +66,9 @@ $);
 This runs every day at 10:00 IST. It only sends anything when reminders are switched on in the app (Settings → Monthly stock reminders).
 7. In the app, fill in distributors' emails (Distributors page, or an Email column in the DB List sheet), switch reminders on in Settings, and press **Send due reminders now** once to check the table shows no errors.
 
+### Step 1.3h — Run the v8 update (after 1.3g, before the v8 code goes live)
+SQL Editor → New query → paste all of `supabase/migrations/009_collections_dsr_reports.sql` → Run → **Run this query** on the warning. It adds payments (Collections page), billing vs collection figures, the SO daily report (DSR) tables and the month-by-month data for distributor reports. No existing data changes.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

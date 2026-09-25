@@ -11,10 +11,12 @@ import Reports from "./pages/Reports";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
 import Pricing from "./pages/Pricing";
+import Collections from "./pages/Collections";
+import SOReports from "./pages/SOReports";
 import AlertsBell from "./components/AlertsBell";
 
-export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
-const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "SO checks", "Reports", "Pricing", "History", "Settings"];
+export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "Collections" | "SO reports" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
+const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "Collections", "SO reports", "SO checks", "Reports", "Pricing", "History", "Settings"];
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
 
 export default function App() {
@@ -130,7 +132,9 @@ export default function App() {
           canManage={canManage} onPosted={refreshAll} onListsChanged={refreshAll} notify={setMessage} />}
         {page === "Distributors" && <Distributors locations={locations} stock={stock} retailers={retailers} officers={officers} commentCounts={commentCounts} canManage={canManage}
           testingMode={testingMode} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
-        {page === "Retailers" && <Retailers retailers={retailers} locations={locations} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Retailers" && <Retailers retailers={retailers} locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Collections" && <Collections locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "SO reports" && <SOReports officers={officers} locations={locations} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} locations={locations} />}
         {page === "Pricing" && canPrice && <Pricing products={products} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}

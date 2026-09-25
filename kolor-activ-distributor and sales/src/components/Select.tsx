@@ -20,7 +20,7 @@ function collect(children: ReactNode, out: Opt[] = [], group?: string): Opt[] {
 const fake = (value: string) => ({ target: { value }, currentTarget: { value } });
 
 /** Keeps a popup attached to its field while the page scrolls or the window changes size. */
-function usePlace(anchor: React.RefObject<HTMLElement>, open: boolean, rows: number) {
+export function usePlace(anchor: React.RefObject<HTMLElement>, open: boolean, rows: number, maxH = 300, minW = 260) {
   const [pos, setPos] = useState<React.CSSProperties>({});
   useLayoutEffect(() => {
     if (!open) return;
@@ -28,10 +28,10 @@ function usePlace(anchor: React.RefObject<HTMLElement>, open: boolean, rows: num
       const r = anchor.current?.getBoundingClientRect();
       if (!r) return;
       const vw = document.documentElement.clientWidth, vh = window.innerHeight;
-      const want = Math.min(300, rows * 36 + 12), below = vh - r.bottom - 8, above = r.top - 8;
+      const want = Math.min(maxH, rows * 36 + 12), below = vh - r.bottom - 8, above = r.top - 8;
       const up = below < want && above > below;
-      const width = Math.min(Math.max(r.width, 260), vw - 16);
-      setPos({ left: Math.max(8, Math.min(r.left, vw - width - 8)), width, maxHeight: Math.max(120, Math.min(300, up ? above : below)),
+      const width = Math.min(Math.max(r.width, minW), vw - 16);
+      setPos({ left: Math.max(8, Math.min(r.left, vw - width - 8)), width, maxHeight: Math.max(120, Math.min(maxH, up ? above : below)),
         ...(up ? { bottom: vh - r.top + 4 } : { top: r.bottom + 4 }) });
     };
     place();
@@ -41,7 +41,7 @@ function usePlace(anchor: React.RefObject<HTMLElement>, open: boolean, rows: num
   }, [open, rows]);
   return pos;
 }
-function useOutside(open: boolean, refs: React.RefObject<HTMLElement>[], close: () => void) {
+export function useOutside(open: boolean, refs: React.RefObject<HTMLElement>[], close: () => void) {
   useEffect(() => {
     if (!open) return;
     const down = (e: PointerEvent) => { if (!refs.some(r => r.current?.contains(e.target as Node))) close(); };

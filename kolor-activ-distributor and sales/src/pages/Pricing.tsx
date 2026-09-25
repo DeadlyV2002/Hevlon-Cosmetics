@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, Margins, Scheme, schemesOn, marginsOn, matchProduct, fmt, plural, errText } from "../lib/supabase";
-import { cellText, parseNum, today } from "../lib/parse";
+import { cellText, parseNum, today, sheetRows } from "../lib/parse";
 
 interface Props {
   products: Product[]; locations: Distributor[]; margins: Margins; schemes: Scheme[];
@@ -129,7 +129,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
   async function upload(file: File) {
     try {
       const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
-      const grid = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" }) as any[][];
+      const grid = sheetRows(wb.Sheets[wb.SheetNames[0]]) as any[][];
       const hi = grid.findIndex(r => r.some(c => /\bss\b|mrp/i.test(cellText(c))));
       if (hi < 0) return say("err", "No column called “SS rate” or “MRP” in the first sheet. Download the price list to see the layout.");
       const head = grid[hi].map(c => cellText(c).toLowerCase());

@@ -32,6 +32,9 @@ export default function LocationForm({ kind, editing, prefillName, locations, of
   const noun = KIND_LABEL[kind].toLowerCase();
   const f = (k: keyof Form) => ({ value: form[k], onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value }) });
 
+  /** A super stockist fits the chosen state and region if it sits there or already supplies a distributor there. */
+  const fitsArea = (x?: Distributor) => !!x && (!form.state || x.state === form.state) && (!form.region.trim() || (x.region || "").toLowerCase() === form.region.trim().toLowerCase());
+  const servesArea = (s: Distributor) => (!form.state && !form.region.trim()) || fitsArea(s) || locations.some(x => x.parent_id === s.id && fitsArea(x)) || s.id === form.parent_id;
   function pickSuper(id: string) {
     const ss = supers.find(s => s.id === id);
     // A new distributor usually sits in its super stockist's state and region.
@@ -74,7 +77,7 @@ export default function LocationForm({ kind, editing, prefillName, locations, of
       {kind === "DISTRIBUTOR" && <label>Super stockist *
         <Select value={form.parent_id} onChange={e => pickSuper(e.target.value)}>
           <option value="">{supers.length ? "Choose…" : "Add super stockists first"}</option>
-          {supers.map(s => <option key={s.id} value={s.id}>{s.name}{s.state ? ` · ${s.state}` : ""}</option>)}
+          {supers.map(s => <option key={s.id} value={s.id} disabled={!servesArea(s)}>{s.name}{s.state ? ` · ${s.state}` : ""}</option>)}
         </Select></label>}
       <label>State *<Select {...f("state")}>
         <option value="">Choose…</option>
@@ -82,7 +85,7 @@ export default function LocationForm({ kind, editing, prefillName, locations, of
         {STATES.map(s => <option key={s} value={s}>{s}</option>)}</Select></label>
       <label>Region{kind === "DISTRIBUTOR" ? " *" : ""}<Combo {...f("region")} options={regions.map(r => ({ value: r }))} /></label>
       <label>City / area *<input {...f("territory")} /></label>
-      <label>Phone{kind === "GODOWN" ? "" : " *"} <small>two numbers: separate with a comma</small><input {...f("phone")} inputMode="tel" /></label>
+      <label>Phone{kind === "GODOWN" ? "" : " *"} <small>a second number is optional; add it after a comma</small><input {...f("phone")} inputMode="tel" /></label>
       <label>Email <small>for stock reminders</small><input {...f("email")} type="email" /></label>
       {kind === "DISTRIBUTOR" && <label>SO / ASE<Select value={form.so_id} onChange={e => setForm({ ...form, so_id: e.target.value })}>
         <option value="">None</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name}{o.state ? ` · ${o.state}` : ""}</option>)}</Select></label>}

@@ -1,4 +1,4 @@
-import { Select } from "./Select";
+import { Select, usePlace } from "./Select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Distributor, Kind, KIND_LABEL, KIND_PLURAL } from "../lib/supabase";
 
@@ -51,17 +51,21 @@ export default function FilterBar({ locations, value, onChange, kinds, rank, sav
   const byState = inKinds.filter(d => !value.state || d.state === value.state);
   const states = uniq(inKinds.map(d => d.state));
   const regions = uniq(byState.map(d => d.region));
-  const supers = locations.filter(d => d.kind === "SUPER_STOCKIST" && (!value.state || d.state === value.state || byState.some(x => x.parent_id === d.id)))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  // Every super stockist is listed; those with nothing in the chosen state or region are greyed out.
+  const inArea = (d: Distributor) => (!value.state || d.state === value.state) && (!value.region || d.region === value.region);
+  const serves = (ss: Distributor) => (!value.state && !value.region) || inArea(ss) || locations.some(x => x.parent_id === ss.id && inArea(x));
+  const supers = locations.filter(d => d.kind === "SUPER_STOCKIST")
+    .sort((a, b) => Number(serves(b)) - Number(serves(a)) || a.name.localeCompare(b.name));
   const pool = scopePool(inKinds, value);
   const picked = value.ids.length ? pool.filter(d => value.ids.includes(d.id)) : pool;
 
   /** Changing a filter drops hand-picked locations that no longer match it. */
   function set(patch: Partial<Scope>) {
     const next = { ...value, ...patch };
-    if ("state" in patch) {
-      next.region = "";
-      const ssHere = !next.state || locations.find(l => l.id === next.ss)?.state === next.state || inKinds.some(x => x.parent_id === next.ss && x.state === next.state);
+    if ("state" in patch || "region" in patch) {
+      if ("state" in patch) next.region = "";
+      const fits = (x?: Distributor) => !!x && (!next.state || x.state === next.state) && (!next.region || x.region === next.region);
+      const ssHere = (!next.state && !next.region) || fits(locations.find(l => l.id === next.ss)) || locations.some(x => x.parent_id === next.ss && fits(x));
       if (next.ss && !ssHere) next.ss = "";
     }
     const keep = new Set(scopePool(inKinds, next).map(d => d.id));
@@ -78,7 +82,7 @@ export default function FilterBar({ locations, value, onChange, kinds, rank, sav
     <Select value={value.region} onChange={e => set({ region: e.target.value })} disabled={!regions.length} aria-label="Region">
       <option value="">All regions</option>{regions.map(s => <option key={s} value={s}>{s}</option>)}</Select>
     {supers.length > 0 && kinds.includes("DISTRIBUTOR") && <Select value={value.ss} onChange={e => set({ ss: e.target.value })} aria-label="Super stockist">
-      <option value="">All super stockists</option>{supers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>}
+      <option value="">All super stockists</option>{supers.map(s => <option key={s.id} value={s.id} disabled={!serves(s)}>{s.name}</option>)}</Select>}
     <Picker pool={pool} picked={picked} value={value} onChange={onChange} rank={rank} saveKey={saveKey} locations={locations}
       noun={value.kind ? KIND_PLURAL[value.kind].toLowerCase() : kinds.length === 1 ? KIND_PLURAL[kinds[0]].toLowerCase() : "locations"} />
     {changed ? <button className="link" onClick={() => onChange(emptyScope(kinds.length === 1 ? kinds[0] : ""))}>Reset</button> : null}
@@ -91,7 +95,8 @@ function Picker({ pool, picked, value, onChange, rank, saveKey, noun, locations 
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [saved, setSaved] = useState<Saved[]>(() => (saveKey ? readSaved(`ka.scopes.${saveKey}`) : []));
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDivElement>(null), btn = useRef<HTMLButtonElement>(null);
+  const pos = usePlace(btn, open, 12, 460, 340);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
@@ -119,8 +124,8 @@ function Picker({ pool, picked, value, onChange, rank, saveKey, noun, locations 
   const known = new Set(locations.map(d => d.id));
 
   return <div className="picker" ref={ref}>
-    <button type="button" className="secondary pickbtn" aria-expanded={open} onClick={() => setOpen(o => !o)}>{label} ▾</button>
-    {open && <div className="pickpanel" role="dialog" aria-label={`Choose ${noun}`}>
+    <button type="button" ref={btn} className="secondary pickbtn" aria-expanded={open} onClick={() => setOpen(o => !o)}>{label} ▾</button>
+    {open && pos.left !== undefined && <div className="pickpanel" style={{ ...pos, maxHeight: undefined }} role="dialog" aria-label={`Choose ${noun}`}>
       <input className="search" autoFocus placeholder={`Search ${noun}…`} value={q} onChange={e => setQ(e.target.value)} />
       <div className="quick">
         <button className="secondary small" onClick={() => pick([])}>All</button>

@@ -1,5 +1,5 @@
 import { Select } from "../components/Select";
-import { Fragment, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
 import { readAnyFile } from "../lib/readers";
@@ -10,6 +10,9 @@ import FilterBar, { Scope, emptyScope, applyScope } from "../components/FilterBa
 import LocationForm, { splitAliases } from "../components/LocationForm";
 import Comments from "../components/Comments";
 import DeleteLocation from "../components/DeleteLocation";
+import Modal from "../components/Modal";
+import DistributorReport from "../components/DistributorReport";
+import { useColumnFilters, Col } from "../components/ColumnFilter";
 
 interface Props {
   locations: Distributor[]; stock: StockLine[]; retailers: Retailer[]; officers: SalesOfficer[]; commentCounts: Map<string, number>; canManage: boolean; testingMode: boolean; userId: string;
@@ -58,6 +61,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
   const [search, setSearch] = useState("");
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [openComments, setOpenComments] = useState<string | null>(null);
+  const [report, setReport] = useState<Distributor | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<Preview | null>(null);
   const [withIncomplete, setWithIncomplete] = useState(false);
@@ -216,6 +220,22 @@ export default function Distributors({ locations, stock, retailers, officers, co
   }
 
   const cols = tab === "GODOWN" ? 13 : tab === "DISTRIBUTOR" ? 16 : 15;
+  const dcols: Col<Distributor>[] = [
+    { key: "code", label: "Code", value: x => x.code }, { key: "name", label: KIND_LABEL[tab], value: x => x.name },
+    { key: "company", label: "Company", value: x => x.company_name },
+    ...(tab !== "GODOWN" ? [{ key: "owner", label: "Owner", value: (x: Distributor) => x.owner_name }] : []),
+    ...(tab === "DISTRIBUTOR" ? [{ key: "ss", label: "Super Stockist", value: (x: Distributor) => byId.get(x.parent_id || "")?.name }] : []),
+    { key: "state", label: "State", value: x => x.state }, { key: "region", label: "Region", value: x => x.region }, { key: "city", label: "City / Area", value: x => x.territory },
+    { key: "phone", label: "Phone", value: x => x.phone }, { key: "email", label: "Email", value: x => x.email },
+    ...(tab === "DISTRIBUTOR" ? [{ key: "so", label: "SO", value: (x: Distributor) => officers.find(o => o.id === x.so_id)?.name }] : []),
+    { key: "aliases", label: "Other Names", value: x => (x.aliases || []).join(", ") },
+    ...(tab === "SUPER_STOCKIST" ? [{ key: "kids", label: "Distributors", value: (x: Distributor) => kids.get(x.id) || 0, num: true }] : []),
+    { key: "units", label: "Stock Units", value: x => Math.round(totals.get(x.id)?.units || 0), num: true },
+    { key: "value", label: "Value ₹", value: x => Math.round(totals.get(x.id)?.value || 0), num: true },
+    { key: "last", label: "Last Movement", value: x => totals.get(x.id)?.last || null },
+  ];
+  const dt = useColumnFilters(list, dcols);
+  const commentsFor = openComments ? byId.get(openComments) : undefined;
   const addCard = <div ref={formRef} className="scrollpad">
     {canManage ? <section className="card upload">
       <div className="rowhead"><h2>{editing ? `Edit ${editing.name}` : `Add ${KIND_LABEL[tab].toLowerCase()}`}</h2>
@@ -267,27 +287,17 @@ export default function Distributors({ locations, stock, retailers, officers, co
           {nIncomplete > 0 && <label className="inline"><input type="checkbox" checked={onlyIncomplete} onChange={e => setOnlyIncomplete(e.target.checked)} /> Only incomplete ({nIncomplete})</label>}
         </div></div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={[tab]} rank={rank} saveKey={`distributors-${tab}`} />
-      <div className="tablewrap"><table><thead><tr><th>Code</th><th>{KIND_LABEL[tab]}</th><th>Company</th>{tab !== "GODOWN" && <th>Owner</th>}
-        {tab === "DISTRIBUTOR" && <th>Super stockist</th>}<th>State</th><th>Region</th><th>City / area</th><th>Phone</th><th>Email</th>{tab === "DISTRIBUTOR" && <th>SO</th>}<th>Other names</th>
-        {tab === "SUPER_STOCKIST" && <th>Distributors</th>}<th>Stock units</th><th>Value ₹</th><th>Last movement</th><th>Comments</th>{canManage && <th />}</tr></thead>
-        <tbody>{list.map(d => {
-          const t = totals.get(d.id), miss = incomplete(d);
-          return <Fragment key={d.id}><tr>
-            <td>{d.code}</td>
-            <td><b>{d.name}</b>{miss.length > 0 && <small className="missing">missing: {miss.join(", ")}</small>}</td>
-            <td className="wrap">{d.company_name}</td>{tab !== "GODOWN" && <td>{d.owner_name}</td>}
-            {tab === "DISTRIBUTOR" && <td>{byId.get(d.parent_id || "")?.name}</td>}
-            <td>{d.state}</td><td>{d.region}</td><td>{d.territory}</td><td className="wrap">{d.phone}</td><td>{d.email}</td>{tab === "DISTRIBUTOR" && <td>{officers.find(o => o.id === d.so_id)?.name}</td>}<td className="wrap">{(d.aliases || []).join(", ")}</td>
-            {tab === "SUPER_STOCKIST" && <td>{kids.get(d.id) || 0}</td>}
-            <td>{fmt(t?.units)}</td><td>{fmt(t?.value)}</td><td>{t?.last || "—"}</td>
-            <td><button className={`secondary small${openComments === d.id ? " on" : ""}`} aria-expanded={openComments === d.id} onClick={() => setOpenComments(o => (o === d.id ? null : d.id))}>
-              💬 {count(d.id)}</button></td>
+      {dt.active > 0 && <p className="hint">{plural(dt.rows.length, "row")} shown by the column filters. <button className="link" onClick={dt.clear}>Clear Filters</button></p>}
+      <div className="tablewrap"><table><thead><tr>{dcols.map(c => dt.head(c.key))}<th>Comments</th>{canManage && <th />}</tr></thead>
+        <tbody>{dt.rows.map(d => {
+          const miss = incomplete(d);
+          return <tr key={d.id}>{dcols.map(c => <td key={c.key} className={["company", "phone", "aliases"].includes(c.key) ? "wrap" : ""}>
+            {c.key === "name" ? <><button className="link strong" onClick={() => setReport(d)}>{d.name}</button>{miss.length > 0 && <small className="missing">missing: {miss.join(", ")}</small>}</>
+              : c.key === "value" ? fmt(c.value(d)) : c.key === "units" ? fmt(c.value(d)) : c.value(d) ?? ""}</td>)}
+            <td><button className="secondary small" onClick={() => setOpenComments(d.id)}>💬 {count(d.id)}</button></td>
             {canManage && <td className="actions"><button className="secondary small" onClick={() => { setEditing(d); setMsg(null); toForm(); }}>Edit</button>
               <button className="del" title="Delete" aria-label={`Delete ${d.name}`} onClick={() => setDeleting(d)}>✕</button></td>}
-          </tr>
-          {openComments === d.id && <tr><td colSpan={cols + (canManage ? 1 : 0)} className="sub">
-            <Comments location={d} userId={userId} canManage={canManage} onCount={n => setCounts(c => ({ ...c, [d.id]: n }))} />
-          </td></tr>}</Fragment>;
+          </tr>;
         })}</tbody></table>
         {!list.length && <p className="empty">No {KIND_PLURAL[tab].toLowerCase()}{ofKind.length ? " match" : " yet"}.</p>}</div>
     </section>
@@ -301,6 +311,9 @@ export default function Distributors({ locations, stock, retailers, officers, co
     </section>
 
     {listFirst ? <>{listCard}{addCard}</> : <>{addCard}{listCard}</>}
+    {commentsFor && <Modal title={`Comments — ${commentsFor.name}`} subtitle={`${commentsFor.code}${commentsFor.territory ? ` · ${commentsFor.territory}` : ""}`} onClose={() => setOpenComments(null)}>
+      <Comments location={commentsFor} userId={userId} canManage={canManage} onCount={n => setCounts(c => ({ ...c, [commentsFor.id]: n }))} /></Modal>}
+    {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} onClose={() => setReport(null)} />}
     {deleting && <DeleteLocation location={deleting} locations={locations} stock={stock} testingMode={testingMode}
       retailers={retailers.filter(r => r.distributor_id === deleting.id).length} comments={count(deleting.id)}
       onClose={() => setDeleting(null)} onDeleted={async m => { setDeleting(null); if (editing?.id === deleting.id) setEditing(null); show("ok", m); await onChanged(); }} />}

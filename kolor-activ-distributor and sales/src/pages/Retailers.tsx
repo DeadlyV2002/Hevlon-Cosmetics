@@ -1,10 +1,12 @@
 import { Select } from "../components/Select";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText, proper, properOrNull, cleanPhones } from "../lib/supabase";
+import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText, proper, properOrNull, cleanPhones, StockLine, SalesOfficer, money, fmt } from "../lib/supabase";
 import { readAnyFile } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
+import DateRange, { PRESETS, Range } from "../components/DateRange";
+import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
 import FilterBar, { Scope, emptyScope, applyScope, scopeLabel } from "../components/FilterBar";
 
 type RField = "name" | "distributor" | "owner_name" | "phone" | "territory" | "code";
@@ -21,13 +23,35 @@ interface Preview { file: string; grid: Grid; headerRow: number; labels: string[
 type Form = { name: string; distributor_id: string; owner_name: string; phone: string; territory: string; code: string };
 const blank: Form = { name: "", distributor_id: "", owner_name: "", phone: "", territory: "", code: "" };
 
-interface Props { retailers: Retailer[]; locations: Distributor[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
+const ORDERS = [{ id: "name", label: "Name (A to Z)" }, { id: "billed", label: "Billing (highest first)" }, { id: "best", label: "Collection % (best first)" }, { id: "worst", label: "Collection % (worst first)" }, { id: "stock", label: "Stock value (highest first)" }];
+interface Props { retailers: Retailer[]; locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
 
-export default function Retailers({ retailers, locations, canManage, onChanged, notify }: Props) {
+export default function Retailers({ retailers, locations, stock, officers, canManage, onChanged, notify }: Props) {
   const [scope, setScope] = useState<Scope>(emptyScope());
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"tree" | "table">("tree");
   const [openDist, setOpenDist] = useState<string | null>(null);
+  const [report, setReport] = useState<Distributor | null>(null);
+  const [order, setOrder] = useState("name");
+  const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "fy")!.range());
+  const [bills, setBills] = useState<Billing[]>([]);
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.rpc("billing_summary", { p_from: range.from, p_to: range.to }).then(({ data }) => setBills((data || []) as Billing[]));
+  }, [range.from, range.to]);
+  // Retailer counts only mean something once retailers are loaded; until then the tree shows distributors.
+  const hasRetailers = retailers.length > 0;
+  const billMap = useMemo(() => new Map(bills.map(b => [`${b.party_type}|${b.party_id}`, b])), [bills]);
+  const billOf = (id: string, t = "LOCATION") => billMap.get(`${t}|${id}`);
+  const pctOf = (id: string, t = "LOCATION") => collectionPct(billOf(id, t));
+  const stockVal = useMemo(() => { const m = new Map<string, number>(); stock.forEach(s => m.set(s.distributor_id, (m.get(s.distributor_id) || 0) + Number(s.stock_value || 0))); return m; }, [stock]);
+  const stockOf = (id: string) => stockVal.get(id) || 0;
+  const rankBy = (a: Distributor, b: Distributor) => {
+    const by = (f: (d: Distributor) => number | null, dir: 1 | -1) => { const x = f(a), y = f(b); return x === null ? (y === null ? 0 : 1) : y === null ? -1 : (x - y) * dir; };
+    const v = order === "stock" ? by(d => stockOf(d.id), -1) : order === "billed" ? by(d => Number(billOf(d.id)?.billed || 0), -1)
+      : order === "best" ? by(d => pctOf(d.id), -1) : order === "worst" ? by(d => pctOf(d.id), 1) : 0;
+    return v || a.name.localeCompare(b.name);
+  };
   const [editing, setEditing] = useState<Retailer | null>(null);
   const [form, setForm] = useState<Form>(blank);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -148,10 +172,11 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
   }
 
   const f = (k: keyof Form) => ({ value: form[k], onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value }) });
-  const retailerTable = (rs: Retailer[]) => <table className="inner"><thead><tr><th>Retailer</th><th>Code</th><th>Owner</th><th>Phone</th><th>Area / beat</th><th>First seen</th>{canManage && <th />}</tr></thead>
-    <tbody>{[...rs].sort((a, b) => a.name.localeCompare(b.name)).map(r => <tr key={r.id}><td>{r.name}</td><td>{r.code}</td><td>{r.owner_name}</td><td>{r.phone}</td><td>{r.territory}</td>
+  const retailerTable = (rs: Retailer[]) => <table className="inner"><thead><tr><th>Retailer</th><th>Code</th><th>Owner</th><th>Phone</th><th>Area / beat</th><th>Billed</th><th>Paid</th><th>Collection %</th><th>First seen</th>{canManage && <th />}</tr></thead>
+    <tbody>{[...rs].sort((a, b) => a.name.localeCompare(b.name)).map(r => { const rb = billOf(r.id, "RETAILER"), rp = pctOf(r.id, "RETAILER"); return <tr key={r.id}><td>{r.name}</td><td>{r.code}</td><td>{r.owner_name}</td><td>{r.phone}</td><td>{r.territory}</td>
+      <td>{rb ? money(rb.billed) : "—"}</td><td>{rb ? money(rb.collected) : "—"}</td><td>{rp === null ? "—" : <span className={`pctbar${rp < 50 ? " low" : rp < 80 ? " mid" : " good"}`}>{fmt(rp)}%</span>}</td>
       <td>{String(r.created_at || "").slice(0, 10)}</td>
-      {canManage && <td className="actions"><button className="secondary small" onClick={() => edit(r)}>Edit</button><button className="del" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>✕</button></td>}</tr>)}</tbody></table>;
+      {canManage && <td className="actions"><button className="secondary small" onClick={() => edit(r)}>Edit</button><button className="del" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>✕</button></td>}</tr>; })}</tbody></table>;
 
   return <>
     {canManage && <section className="card upload">
@@ -197,28 +222,40 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
           <input className="search" placeholder="Search retailers…" value={search} onChange={e => setSearch(e.target.value)} />
           <button className="secondary" onClick={exportList} disabled={!list.length}>Export to Excel</button></div></div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={["DISTRIBUTOR", "SUPER_STOCKIST"]} saveKey="retailers" />
+      {view === "tree" && <div className="rt-sort">
+        <label className="inline">Order distributors by <Select value={order} onChange={e => setOrder(e.target.value)} aria-label="Order distributors by">
+          {ORDERS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}</Select></label>
+        <DateRange value={range} onChange={setRange} />
+        <small className="muted">Billing and collection over this period.</small>
+      </div>}
       {view === "tree" ? <div className="rtree">
         {tree.states.map(([state, supers]) => {
-          const n = [...supers.values()].flat().reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
+          const all = [...supers.values()].flat(), n = all.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
           return <details key={state} className="rt-state" open>
-            <summary><h3>{state}</h3><span className="rt-badge">{plural(supers.size, "super stockist")}</span><span className="rt-badge">{plural(n, "retailer")}</span></summary>
+            <summary><h3>{state}</h3><span className="rt-badge">{plural(supers.size, "super stockist")}</span><span className="rt-badge">{plural(all.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span>
+              {hasRetailers && <span className="rt-badge">{plural(n, "retailer")}</span>}</summary>
             <div className="rt-branch">
               {[...supers.entries()].sort((a, b) => (byId.get(a[0])?.name || "~").localeCompare(byId.get(b[0])?.name || "~")).map(([ssId, dists]) => {
-                const ss = byId.get(ssId), m = dists.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
-                const ordered = [...dists].sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : a.name.localeCompare(b.name)));
+                const ss = byId.get(ssId), m = dists.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0), ssPct = ss ? pctOf(ss.id) : null;
+                const ordered = [...dists].sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : rankBy(a, b)));
                 return <details key={ssId || "none"} className="rt-ss" open>
-                  <summary><span className="kind">SS</span><b>{ss ? ss.name : "No super stockist"}</b>{ss?.territory && <small>{ss.territory}</small>}
-                    <span className="rt-badge">{plural(dists.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span><span className="rt-badge">{plural(m, "retailer")}</span></summary>
+                  <summary><span className="kind">SS</span>{ss ? <button className="link strong" onClick={e => { e.preventDefault(); setReport(ss); }}>{ss.name}</button> : <b>No super stockist</b>}{ss?.territory && <small>{ss.territory}</small>}
+                    <span className="rt-badge">{plural(dists.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span>
+                    {hasRetailers && <span className="rt-badge">{plural(m, "retailer")}</span>}
+                    {ssPct !== null && <span className={`pctbar${ssPct < 50 ? " low" : ssPct < 80 ? " mid" : " good"}`} title="Collection %">{fmt(ssPct)}% collected</span>}</summary>
                   <div className="rt-dists">{ordered.map(d => {
-                    const rs = [...(tree.byDist.get(d.id) || [])].sort((a, b) => a.name.localeCompare(b.name)), open = openDist === d.id;
+                    const rs = [...(tree.byDist.get(d.id) || [])].sort((a, b) => a.name.localeCompare(b.name)), open = openDist === d.id, p = pctOf(d.id), b = billOf(d.id);
                     return <div key={d.id} className={`rt-dist${open ? " open" : ""}`}>
-                      <button className="rt-distbtn" aria-expanded={open} onClick={() => setOpenDist(open ? null : d.id)}>
+                      <button className="rt-distbtn" onClick={() => setReport(d)} title="Open report">
                         <b>{d.kind === "SUPER_STOCKIST" ? `Sold direct by ${d.name}` : d.name}</b>
-                        <span className="rt-count">{rs.length}<small>{rs.length === 1 ? "retailer" : "retailers"}</small></span>
+                        {hasRetailers ? <span className="rt-count">{rs.length}<small>{rs.length === 1 ? "retailer" : "retailers"}</small></span>
+                          : <span className={`rt-count${p === null ? " none" : p < 50 ? " low" : p < 80 ? " mid" : " good"}`}>{p === null ? "—" : `${fmt(p)}%`}<small>collected</small></span>}
                         <small>{[d.territory, d.owner_name, d.phone].filter(Boolean).join(" · ") || d.code}</small>
                       </button>
-                      {!open && rs.length > 0 && <div className="rt-chips">{rs.slice(0, 4).map(x => <span key={x.id} className="rt-chip">{x.name}</span>)}{rs.length > 4 && <span className="rt-chip more">+{rs.length - 4} more</span>}</div>}
-                      {open && (rs.length ? <div className="tablewrap">{retailerTable(rs)}</div> : <p className="empty">No retailers yet.</p>)}
+                      <div className="rt-stats"><span className="rt-badge">Stock {money(stockOf(d.id))}</span>{b && <span className="rt-badge">Billed {money(b.billed)}</span>}{b && <span className="rt-badge">Paid {money(b.collected)}</span>}</div>
+                      {hasRetailers && rs.length > 0 && !open && <div className="rt-chips">{rs.slice(0, 4).map(x => <span key={x.id} className="rt-chip">{x.name}</span>)}
+                        <button className="rt-chip more" onClick={() => setOpenDist(d.id)}>{rs.length > 4 ? `+${rs.length - 4} More` : "Show Retailers"}</button></div>}
+                      {open && <><div className="tablewrap">{retailerTable(rs)}</div><button className="link" onClick={() => setOpenDist(null)}>Hide Retailers</button></>}
                     </div>;
                   })}</div>
                 </details>;
@@ -226,7 +263,7 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
             </div>
           </details>;
         })}
-        {!tree.states.length && <p className="empty">No distributors or retailers match.</p>}
+        {!tree.states.length && <p className="empty">No distributors match.</p>}
       </div> : <div className="tablewrap"><table><thead><tr><th>Retailer</th><th>Code</th><th>Distributor</th><th>Super stockist</th><th>State</th><th>Region</th><th>Area / beat</th><th>Owner</th><th>Phone</th><th>First seen</th>{canManage && <th />}</tr></thead>
         <tbody>{list.slice(0, 2000).map(r => {
           const d = byId.get(r.distributor_id || ""), ss = d?.kind === "SUPER_STOCKIST" ? d : byId.get(d?.parent_id || "");
@@ -237,5 +274,6 @@ export default function Retailers({ retailers, locations, canManage, onChanged, 
         {list.length > 2000 && <p className="hint">Showing 2,000 of {list.length}. Narrow the filters or export to Excel for all of them.</p>}
         {!list.length && <p className="empty">No retailers match.</p>}</div>}
     </section>
+    {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} onClose={() => setReport(null)} />}
   </>;
 }

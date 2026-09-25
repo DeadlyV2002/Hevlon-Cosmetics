@@ -6,7 +6,8 @@ import { Scope, applyScope, emptyScope } from "../components/FilterBar";
 import { localDate, today } from "./parse";
 
 export type ChartKind = "stock_trend" | "stock_where" | "aged" | "so_spikes" | "reorders" | "flows" | "no_stock_sales"
-  | "running_low" | "stale" | "count_losses" | "top_products" | "slow_products" | "so_claims" | "new_outlets";
+  | "running_low" | "stale" | "count_losses" | "top_products" | "slow_products" | "so_claims" | "new_outlets"
+  | "dsr_trend" | "dsr_people" | "dsr_products" | "dsr_attendance" | "collection";
 
 export interface ChartConfig {
   id: string; kind: ChartKind;
@@ -14,8 +15,10 @@ export interface ChartConfig {
   scope?: Scope; metric?: "value" | "units"; top?: number;
   days?: number; weeks?: number; threshold?: number;
   groupBy?: string; split?: string; series?: string[];
+  /** Pinned charts stay in place on the dashboard; the others take turns in the rotating area. */
+  pinned?: boolean;
 }
-export type Unit = "money" | "units" | "days" | "percent" | "count";
+export type Unit = "money" | "units" | "days" | "percent" | "count" | "pct";
 export interface SeriesDef { key: string; name: string; slot: 1 | 2 | 3 }
 export interface BarRow { key: string; label: string; sub?: string; values: number[] }
 export type ChartData =
@@ -27,6 +30,7 @@ export function formatValue(unit: Unit, n: number): string {
   if (unit === "money") return money(n);
   if (unit === "days") return `${n < 10 ? n.toFixed(1).replace(/\.0$/, "") : fmt(n)} ${n === 1 ? "day" : "days"}`;
   if (unit === "percent") return `+${fmt(n)}%`;
+  if (unit === "pct") return `${fmt(n)}%`;
   return fmt(n);
 }
 
@@ -126,6 +130,16 @@ const load = {
   outlets: (days: number) => once(`outlets:${days}`, () => fetchAll<OutletRow>((a, b) => supabase!.from("so_line_details").select("so_name,distributor_id,retailer_name")
     .eq("retailer_status", "UNKNOWN").gte("report_date", daysAgo(days - 1)).lte("report_date", today()).order("id").range(a, b))),
 };
+
+// ---------- SO daily reports and collections ----------
+interface DsrRow { so_id: string; day: string; state: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number; distributor_id: string | null }
+interface BillRow { party_type: string; party_id: string; billed: number; collected: number; billed_all: number; collected_all: number }
+const dsr = (days: number) => once(`dsr:${days}`, () => fetchAll<DsrRow>((a, b) => supabase!.from("dsr_days")
+  .select("so_id,day,state,attendance,total_calls,productive_calls,sale_value,distributor_id").gte("day", daysAgo(days - 1)).lte("day", today()).order("day").order("id").range(a, b)));
+const dsrProducts = (days: number) => rpc<{ product: string; category: string | null; qty: number; value: number }>("dsr_product_totals", { p_from: daysAgo(days - 1), p_to: today(), p_sos: null, p_state: null });
+const bills = (days: number) => rpc<BillRow>("billing_summary", { p_from: daysAgo(days - 1), p_to: today() });
+const person = (ctx: Ctx, id: string) => ctx.officers.find(o => o.id === id);
+const WORKDAY = new Set(["Present", "Half Day", "Meeting"]);
 
 // ---------- what can be changed on a chart ----------
 export type OptionDef =
@@ -467,16 +481,103 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
         summary: total ? `${plural(total, "outlet")} to verify.` : "" };
     },
   },
+  dsr_trend: {
+    name: "Secondary sales day by day", blurb: "What the sales team booked each day from their daily reports, by zone.",
+    title: "Secondary sales day by day",
+    subtitle: c => `Secondary sales from SO daily reports over the last ${c.days ?? 30} days${c.split === "zone" ? ", top zones" : ""}.`,
+    defaults: { days: 30, split: "zone", labels: false },
+    options: [{ key: "days", label: "Look back", min: 7, max: 365, suffix: "days" }, { key: "split", label: "Lines", choices: [{ id: "zone", label: "Top 3 zones and the rest" }, { id: "none", label: "One line for everyone" }] }, { key: "labels" }],
+    empty: "No SO daily reports in this period. Upload DSRs on the SO Reports page.",
+    async load(c, ctx) {
+      const rows = await dsr(c.days ?? 30), days = [...Array(c.days ?? 30)].map((_, i) => daysAgo((c.days ?? 30) - 1 - i));
+      const zoneOf = (r: DsrRow) => person(ctx, r.so_id)?.zone || r.state || "Other";
+      const tot = new Map<string, number>(); rows.forEach(r => tot.set(zoneOf(r), (tot.get(zoneOf(r)) || 0) + Number(r.sale_value)));
+      const top = c.split === "none" ? [] : [...tot].sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
+      const keys = c.split === "none" ? ["All"] : [...top, ...(tot.size > top.length ? ["Other zones"] : [])];
+      const values = keys.map(k => days.map(d => rows.filter(r => r.day === d && (k === "All" || (k === "Other zones" ? !top.includes(zoneOf(r)) : zoneOf(r) === k))).reduce((a, r) => a + Number(r.sale_value), 0)));
+      const total = rows.reduce((a, r) => a + Number(r.sale_value), 0);
+      return { type: "lines", unit: "money", series: keys.map((k, i) => ({ key: k, name: k, slot: (Math.min(i, 2) + 1) as 1 | 2 | 3 })), x: days.map(shortDate), values,
+        summary: total ? `${money(total)} booked by the sales team in ${c.days ?? 30} days.` : "" };
+    },
+  },
+  dsr_people: {
+    name: "Best and weakest sales staff", blurb: "Secondary sales by person, zone or senior, from the daily reports.",
+    title: "Secondary sales by person",
+    subtitle: c => `Secondary sales in the last ${c.days ?? 30} days, by ${c.groupBy === "zone" ? "zone" : c.groupBy === "boss" ? "senior (ASM or ASE) and their team" : "person"}${c.split === "asc" ? ", lowest first" : ""}.`,
+    defaults: { days: 30, groupBy: "so", split: "desc", top: 10, labels: true },
+    options: [{ key: "days", label: "Look back", min: 1, max: 365, suffix: "days" },
+      { key: "groupBy", label: "One bar for", choices: [{ id: "so", label: "Each person" }, { id: "zone", label: "Each zone" }, { id: "boss", label: "Each senior and team" }] },
+      { key: "split", label: "Order", choices: [{ id: "desc", label: "Highest first" }, { id: "asc", label: "Lowest first" }] }, { key: "top" }, { key: "labels" }],
+    empty: "No SO daily reports in this period.",
+    async load(c, ctx) {
+      const rows = await dsr(c.days ?? 30);
+      const items = rows.map(r => {
+        const p = person(ctx, r.so_id), boss = p?.manager_id ? person(ctx, p.manager_id) : undefined;
+        const g = c.groupBy === "zone" ? { key: p?.zone || r.state || "Other", label: p?.zone || r.state || "Other" }
+          : c.groupBy === "boss" ? { key: boss?.id || r.so_id, label: boss ? `${boss.name}'s team` : p?.name || "Unknown", sub: boss?.designation || undefined }
+          : { key: r.so_id, label: p?.name || "Unknown", sub: [p?.designation, p?.hq].filter(Boolean).join(" · ") || undefined };
+        return { ...g, values: [Number(r.sale_value)] };
+      });
+      const r = rank(items, c.top ?? 10, c.split === "asc" ? "asc" : "desc");
+      const total = items.reduce((a, it) => a + it.values[0], 0);
+      return { type: "bars", unit: "money", series: [{ key: "sec", name: "Secondary", slot: 1 }], ...r, summary: total ? `${money(total)} in ${c.days ?? 30} days.` : "" };
+    },
+  },
+  dsr_products: {
+    name: "What the sales team is selling", blurb: "Products or categories in the daily reports, by value or dozens.",
+    title: "What the sales team is selling",
+    subtitle: c => `Products in SO daily reports over the last ${c.days ?? 30} days, by ${c.groupBy === "category" ? "category" : "product"}.`,
+    defaults: { days: 30, groupBy: "product", top: 10, labels: true },
+    options: [{ key: "days", label: "Look back", min: 1, max: 365, suffix: "days" }, { key: "groupBy", label: "One bar for", choices: [{ id: "product", label: "Each product" }, { id: "category", label: "Each category" }] }, { key: "top" }, { key: "labels" }],
+    empty: "No product lines in the daily reports for this period.",
+    async load(c) {
+      const rows = await dsrProducts(c.days ?? 30);
+      const items = rows.map(p => ({ key: c.groupBy === "category" ? p.category || "Other" : p.product, label: c.groupBy === "category" ? p.category || "Other" : p.product, sub: c.groupBy === "category" ? undefined : p.category || undefined, values: [Number(p.value)] }));
+      const r = rank(items, c.top ?? 10);
+      return { type: "bars", unit: "money", series: [{ key: "v", name: "Sold", slot: 2 }], ...r, summary: r.rows[0] ? `${r.rows[0].label} leads with ${money(r.rows[0].values[0])}.` : "" };
+    },
+  },
+  dsr_attendance: {
+    name: "Days worked by the sales team", blurb: "Working days per person from the daily reports; the fewest first.",
+    title: "Days worked",
+    subtitle: c => `Days each person worked (present, half day or meeting) in the last ${c.days ?? 30} days, fewest first.`,
+    defaults: { days: 30, top: 10, labels: true },
+    options: [{ key: "days", label: "Look back", min: 7, max: 180, suffix: "days" }, { key: "top" }, { key: "labels" }],
+    empty: "No SO daily reports in this period.",
+    async load(c, ctx) {
+      const rows = await dsr(c.days ?? 30);
+      const m = new Map<string, number>(); rows.forEach(r => m.set(r.so_id, (m.get(r.so_id) || 0) + (WORKDAY.has(r.attendance || "") ? (r.attendance === "Half Day" ? 0.5 : 1) : 0)));
+      const items = [...m].map(([id, v]) => ({ key: id, label: person(ctx, id)?.name || "Unknown", sub: person(ctx, id)?.hq || undefined, values: [v || 0.0001] }));
+      const r = rank(items, c.top ?? 10, "asc");
+      return { type: "bars", unit: "count", series: [{ key: "d", name: "Days worked", slot: 3 }], ...r, summary: items.length ? `${plural(items.length, "person", "people")} reported.` : "" };
+    },
+  },
+  collection: {
+    name: "Collection against billing", blurb: "How much of what was billed has been paid, by super stockist or distributor. Low collection with big orders is a red flag.",
+    title: "Collection against billing",
+    subtitle: c => `Payments as a share of billing over the last ${c.days ?? 90} days, by ${c.groupBy === "location" ? "distributor" : "super stockist"}, lowest first.`,
+    defaults: { days: 90, groupBy: "ss", top: 10, labels: true },
+    options: [{ key: "days", label: "Look back", min: 30, max: 365, suffix: "days" }, { key: "groupBy", label: "One bar for", choices: [{ id: "ss", label: "Each super stockist" }, { id: "location", label: "Each distributor" }] }, { key: "top" }, { key: "labels" }],
+    empty: "No bills or payments in this period yet. Record payments on the Collections page.",
+    async load(c, ctx) {
+      const kind = c.groupBy === "location" ? "DISTRIBUTOR" : "SUPER_STOCKIST", { loc } = maps(ctx);
+      const rows = (await bills(c.days ?? 90)).filter(b => b.party_type === "LOCATION" && loc.get(b.party_id)?.kind === kind && Number(b.billed) > 0);
+      const items = rows.map(b => ({ key: b.party_id, label: loc.get(b.party_id)?.name || "Deleted", sub: `${money(b.collected)} of ${money(b.billed)}`, values: [Math.max(0.01, (Number(b.collected) / Number(b.billed)) * 100)] }));
+      const r = rank(items, c.top ?? 10, "asc");
+      const billed = rows.reduce((a, b) => a + Number(b.billed), 0), got = rows.reduce((a, b) => a + Number(b.collected), 0);
+      return { type: "bars", unit: "pct", series: [{ key: "p", name: "Collected", slot: 1 }], ...r, summary: billed ? `${fmt((got / billed) * 100)}% collected overall (${money(got)} of ${money(billed)}).` : "" };
+    },
+  },
 };
 
 export const chartTitle = (c: ChartConfig) => c.title?.trim() || KIND_SPECS[c.kind].title;
 export const newChart = (kind: ChartKind, extra: Partial<ChartConfig> = {}): ChartConfig =>
   ({ id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, kind, ...KIND_SPECS[kind].defaults, ...extra });
-/** The ten charts a new dashboard starts with; the first three are shown large at the top. */
+/** The ten charts that matter most to start with: four pinned (three large), the rest rotating with every other chart. */
 export const defaultCharts = (): ChartConfig[] => [
-  newChart("stock_trend", { focus: true }), newChart("aged", { focus: true }), newChart("so_spikes", { focus: true }),
-  newChart("reorders"), newChart("flows"), newChart("no_stock_sales"), newChart("running_low"),
-  newChart("stock_where"), newChart("stale"), newChart("count_losses"),
+  newChart("dsr_trend", { focus: true, pinned: true }), newChart("collection", { focus: true, pinned: true }), newChart("stock_trend", { focus: true, pinned: true }),
+  newChart("dsr_people", { pinned: true }), newChart("dsr_products"), newChart("aged"), newChart("no_stock_sales"),
+  newChart("running_low"), newChart("dsr_attendance"), newChart("stale"),
 ];
 /** Drops charts of kinds this version doesn't know. */
 export const cleanCharts = (list: unknown): ChartConfig[] =>

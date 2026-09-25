@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { supabase, Distributor, Role, plural, errText } from "../lib/supabase";
 import Reminders from "../components/Reminders";
+import LogBook from "../components/LogBook";
 
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
 
@@ -67,6 +68,8 @@ export default function Settings({ role, testingMode, onTestingMode, onChanged, 
     </section>}
 
     <Reminders canEdit={manager} />
+
+    {admin && <LogBook />}
 
     {manager && <section className="card">
       <h2>Unused products</h2>

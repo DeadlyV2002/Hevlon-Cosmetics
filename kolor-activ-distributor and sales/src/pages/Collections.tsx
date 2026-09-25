@@ -7,7 +7,7 @@ import FilterBar, { Scope, emptyScope, applyScope } from "../components/FilterBa
 import { Select } from "../components/Select";
 import { useColumnFilters, Col } from "../components/ColumnFilter";
 import DistributorReport, { Billing } from "../components/DistributorReport";
-import { readAnyFile } from "../lib/readers";
+import { readAnyFile, ACCEPT } from "../lib/readers";
 import { findHeader } from "../lib/sheet";
 import { cellText, parseNum, toISODate, today, Grid } from "../lib/parse";
 
@@ -151,11 +151,14 @@ function PaymentForm({ parties, byId, onSaved, notify }: { parties: Distributor[
     setMsg({ kind: "ok", text: `Recorded ${money(Number(f.amount))} from ${byId.get(f.payer)?.name}.` });
     setF({ ...blank, date: f.date }); onSaved();
   }
-  async function read(file: File) {
+  /** Reads every sheet of every chosen file; sheets without a payer and an amount column are listed as not used. */
+  async function read(files: File[]) {
     try {
-      const t = await readAnyFile(file), g: Grid = t.sheets[0]?.grid || [];
+      const all: NonNullable<typeof preview>["rows"] = [], unused: string[] = [];
+      for (const file of files) for (const sh of (await readAnyFile(file)).sheets) {
+      const g: Grid = sh.grid;
       const h = findHeader(g, P_RULES, "amount");
-      if (!h || !h.mapping.includes("payer")) throw new Error("The sheet needs columns for who paid and the amount (and ideally Date, Paid To, Mode, Reference).");
+      if (!h || !h.mapping.includes("payer")) { unused.push(`${file.name} › ${sh.name}`); continue; }
       const col = (k: PField) => h.mapping.indexOf(k);
       const rows = g.slice(h.row + 1).map(r => {
         const v = (k: PField) => (col(k) >= 0 ? cellText(r[col(k)]) : "");
@@ -167,7 +170,11 @@ function PaymentForm({ parties, byId, onSaved, notify }: { parties: Distributor[
         const problem = !payer ? `"${payerText}" isn't in your list` : !(amount > 0) ? "no amount" : !date ? "no date" : payee === undefined ? `"${payeeText}" isn't a super stockist` : "";
         return { date, payer, payerText, payee: payee === undefined ? undefined : payee ?? (payeeText ? null : byId.get(defaultPayee(payer?.id || "")) || null), payeeText, amount, mode: v("mode"), reference: v("reference"), note: v("note"), problem };
       }).filter(Boolean) as NonNullable<typeof preview>["rows"];
-      setPreview({ file: file.name, rows });
+      all.push(...rows);
+      }
+      if (!all.length) throw new Error(`No payment rows found. A sheet needs columns for who paid and the amount (and ideally Date, Paid To, Mode, Reference).${unused.length ? ` Sheets read: ${unused.join(", ")}.` : ""}`);
+      setPreview({ file: files.map(f => f.name).join(", "), rows: all });
+      if (unused.length) setMsg({ kind: "ok", text: `Sheets without payment columns, not used: ${unused.join(", ")}.` });
     } catch (e) { setMsg({ kind: "err", text: `Import failed: ${errText(e)}` }); }
   }
   async function post() {
@@ -183,7 +190,7 @@ function PaymentForm({ parties, byId, onSaved, notify }: { parties: Distributor[
 
   return <section className="card upload">
     <div className="rowhead"><h2>Record A Payment</h2>
-      <label className="button secondary">Import Payments From Excel<input hidden type="file" accept=".xlsx,.xls,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) read(x); e.target.value = ""; }} /></label></div>
+      <label className="button secondary">Import Payments<input hidden type="file" multiple accept={ACCEPT} onChange={e => { const x = [...(e.target.files || [])]; if (x.length) read(x); e.target.value = ""; }} /></label></div>
     <div className="formgrid">
       <label>Paid by *<Select value={f.payer} onChange={e => setF({ ...f, payer: e.target.value, payee: defaultPayee(e.target.value) })}>
         <option value="">Choose…</option>

@@ -7,7 +7,7 @@ import {
   treeToGrid, decodeText, cleanXml, domToNode, jsonToNode,
 } from "./parse";
 
-export const ACCEPT = ".xlsx,.xls,.xlsm,.xlsb,.ods,.csv,.tsv,.txt,.asc,.prn,.xml,.json,.html,.htm,.pdf,.png,.jpg,.jpeg,.webp";
+export const ACCEPT = ".xlsx,.xls,.xlsm,.xlsb,.ods,.csv,.tsv,.txt,.asc,.prn,.xml,.json,.html,.htm,.pdf,.png,.jpg,.jpeg,.webp,.docx,.docm";
 
 export async function fileHash(file: File): Promise<string> {
   const d = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
@@ -99,8 +99,22 @@ function fromLines(lines: string[], source: string): Table {
   return single(h, source, h.length > 1 ? "No column headings found, so rows were guessed from the text. Check every row." : undefined);
 }
 
+/** Word: every table's rows, one after another; with no tables, the text line by line. */
+function fromDocx(buf: ArrayBuffer): Table {
+  const zip = XLSX.CFB.read(new Uint8Array(buf), { type: "array" });
+  const entry = XLSX.CFB.find(zip, "word/document.xml") || XLSX.CFB.find(zip, "/word/document.xml");
+  if (!entry?.content) throw new Error("This Word file has no readable text.");
+  const xml = new TextDecoder().decode(entry.content as Uint8Array);
+  const text = (s: string) => (s.match(/<w:t[^>]*>[^<]*<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, "")).join("")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").trim();
+  const rows = (xml.match(/<w:tr[ >][\s\S]*?<\/w:tr>/g) || []).map(tr => (tr.match(/<w:tc[ >][\s\S]*?<\/w:tc>/g) || []).map(text));
+  if (rows.length) return single(rows, "Word table");
+  return fromLines((xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map(text).filter(Boolean), "Word");
+}
+
 export async function readAnyFile(file: File, onProgress: (m: string) => void = () => {}): Promise<Table> {
   const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (ext === "docx" || ext === "docm") return fromDocx(await file.arrayBuffer());
   onProgress(`Reading ${file.name}…`);
 
   if (["xlsx", "xls", "xlsm", "xlsb", "ods"].includes(ext)) {

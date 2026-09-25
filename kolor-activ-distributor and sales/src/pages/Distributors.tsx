@@ -2,7 +2,7 @@ import { Select } from "../components/Select";
 import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
-import { readAnyFile } from "../lib/readers";
+import { readAnyFile, ACCEPT } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
 import { normalizeState } from "../lib/india";
@@ -66,6 +66,8 @@ export default function Distributors({ locations, stock, retailers, officers, co
   const [preview, setPreview] = useState<Preview | null>(null);
   const [withIncomplete, setWithIncomplete] = useState(false);
   const [dropMissing, setDropMissing] = useState(false);
+  const [queue, setQueue] = useState<File[]>([]);
+  function nextImport() { const [f, ...rest] = queue; setQueue(rest); setPreview(null); if (f) readImport(f); }
   const formRef = useRef<HTMLDivElement>(null);
   const toForm = () => setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   const [busy, setBusy] = useState(false);
@@ -207,7 +209,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
       if (dropMissing) for (const d of removable) { const { error } = await supabase.rpc("delete_location", { p_location: d.id }); if (!error) removed++; }
       const skipped = importRows.length - toImport.length;
       show("ok", `Imported ${plural(toImport.length, KIND_LABEL[tab].toLowerCase(), KIND_PLURAL[tab].toLowerCase())} (${inserts.length} new, ${updates.length} updated)${created.length ? `, added ${plural(created.length, "new super stockist")}` : ""}${createdSOs.length ? `, added ${plural(createdSOs.length, "new SO")}` : ""}${removed ? `, removed ${plural(removed, KIND_LABEL[tab].toLowerCase(), KIND_PLURAL[tab].toLowerCase())} not in the sheet` : ""}.${skipped ? ` ${plural(skipped, "row")} with empty fields ${skipped === 1 ? "was" : "were"} skipped.` : ""}`);
-      setPreview(null); await onChanged();
+      setPreview(null); await onChanged(); if (queue.length) nextImport();
     } catch (e: any) {
       show("err", `Import failed: ${e?.code === "42501" ? "only HO admins and state managers can import" : errText(e)}`);
     } finally { setBusy(false); }
@@ -240,7 +242,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
     {canManage ? <section className="card upload">
       <div className="rowhead"><h2>{editing ? `Edit ${editing.name}` : `Add ${KIND_LABEL[tab].toLowerCase()}`}</h2>
         <div className="actions"><button className="secondary" onClick={template}>{tab === "DISTRIBUTOR" ? "Download DB List template" : "Download blank import sheet"}</button>
-          <label className="button secondary">Import from Excel<input hidden type="file" accept=".xlsx,.xls,.xlsm,.ods,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) readImport(x); e.target.value = ""; }} /></label></div></div>
+          <label className="button secondary">Import from Excel<input hidden type="file" multiple accept={ACCEPT} onChange={e => { const [x, ...rest] = [...(e.target.files || [])]; if (x) { readImport(x); setQueue(rest); } e.target.value = ""; }} /></label></div></div>
       <p className="hint">Fields marked * are required. Other names are optional: add the spellings used on their Tally reports so their files match automatically.</p>
       <LocationForm key={editing?.id || `new-${tab}`} kind={tab} editing={editing} locations={locations} officers={officers}
         onCancel={editing ? () => setEditing(null) : undefined}
@@ -250,7 +252,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
 
     {preview && <section className="card">
       <div className="rowhead"><h2>Import preview — {preview.file}</h2>
-        <div className="actions"><button className="secondary" onClick={() => setPreview(null)}>Cancel</button>
+        <div className="actions"><button className="secondary" onClick={() => (queue.length ? nextImport() : setPreview(null))}>{queue.length ? `Skip, Next File (${queue.length} Left)` : "Cancel"}</button>
           <button onClick={confirmImport} disabled={busy || !toImport.length}>{busy ? "Importing…" : `Import ${plural(toImport.length, KIND_LABEL[tab].toLowerCase(), KIND_PLURAL[tab].toLowerCase())}`}</button></div></div>
       <p className="hint">Check what each column is. Existing records (same code or name) are updated, and blank cells keep their current values.</p>
       <div className="tablewrap"><table className="map"><tbody><tr>{preview.labels.map((l, i) => <td key={i}><small>{l || `column ${i + 1}`}</small>

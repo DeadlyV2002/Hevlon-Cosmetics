@@ -69,6 +69,9 @@ This runs every day at 10:00 IST. It only sends anything when reminders are swit
 ### Step 1.3h — Run the v8 update (after 1.3g, before the v8 code goes live)
 SQL Editor → New query → paste all of `supabase/migrations/009_collections_dsr_reports.sql` → Run → **Run this query** on the warning. It adds payments (Collections page), billing vs collection figures, the SO daily report (DSR) tables and the month-by-month data for distributor reports. No existing data changes.
 
+### Step 1.3i — Run the v9 update (after 1.3h, before the v9 code goes live)
+SQL Editor → New query → paste all of `supabase/migrations/010_staff_dsr_logbook.sql` → Run → **Run this query** on the warning. It adds the sales team hierarchy (post, reports to, zone, HQ, areas), DSR uploads that keep days already logged, state totals, product totals by zone, and the log book. No existing data changes.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

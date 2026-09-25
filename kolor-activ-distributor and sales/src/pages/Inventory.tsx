@@ -125,6 +125,9 @@ export default function Inventory({ locations, products, aliases, stock, officer
     setRows(rs => rs.map((r, j) => (j === i ? { ...r, [k]: k === "quantity" || k === "unit_price" ? Number(String(v).replace(/,/g, "")) || 0 : v } : r)));
   }
   function restore(s: Skipped) { if (s.row) { setRows(rs => [...rs, s.row!]); setSkipped(ss => ss.filter(x => x !== s)); } }
+  /** Files chosen together wait here and open one after another. */
+  const [queue, setQueue] = useState<File[]>([]);
+  function nextFile() { if (!queue.length) return; const [f, ...rest] = queue; setQueue(rest); onFile(f); }
   function clearAll() { setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
 
   /** "This name in the file = that existing product": applied to every row with the same name and remembered on save. */
@@ -338,7 +341,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const msg = type === "COUNT" ? `Stock count saved for ${holderLoc?.name}: ${data.increased} products up, ${data.decreased} down, ${data.unchanged} unchanged. Undo is on the History page.`
       : type === "SO" ? `Saved ${plural(data.posted_rows, "SO report line")}. The SO checks page compares them with distributor stock.`
       : `Saved ${plural(data.posted_rows, "row")}${data.transfers ? `, including ${plural(data.transfers, "transfer")}` : ""}.${skippedNote} Undo is on the History page.`;
-    clearAll(); say("ok", msg);
+    clearAll(); say("ok", queue.length ? `${msg} Opening the next file…` : msg);
+    if (queue.length) setTimeout(nextFile, 300);
     await onPosted();
   }
 
@@ -365,10 +369,11 @@ export default function Inventory({ locations, products, aliases, stock, officer
     <section className="card upload">
       <div className="rowhead"><div><h2>Upload a file</h2><p>Drop in any stock file. The app works out what it is and whose stock it is; check its guess below.</p></div></div>
       <label className="drop">
-        <input type="file" accept={ACCEPT} disabled={!!busy} onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
-        <b>{busy || "Choose a file"}</b>
+        <input type="file" multiple accept={ACCEPT} disabled={!!busy} onChange={e => { const [f, ...rest] = [...(e.target.files || [])]; if (f) { onFile(f); setQueue(rest); } e.target.value = ""; }} />
+        <b>{busy || "Choose files"}</b>
         <small>Your Excel format, any Excel / CSV, Tally exports (Excel, XML, JSON, HTML, TXT, PDF), scanned PDFs, photos, SO daily sheets</small>
       </label>
+      {queue.length > 0 && <p className="hint">{queue.length} more {queue.length === 1 ? "file is" : "files are"} waiting: {queue.map(f => f.name).join(", ")}. Each opens after this one is saved. <button className="link" onClick={nextFile}>Skip To Next File</button></p>}
       <div className="tabs types">{TYPES.map(t => <button key={t.id} className={type === t.id ? "active" : ""} onClick={() => changeType(t.id)}>{t.label}</button>)}</div>
       {detection && file ? <div className={`detect${detection.sure ? "" : " unsure"}`}>
         <b>{detection.sure ? "Read as" : "Best guess"}: {TYPES.find(t => t.id === detection.type)!.label.toLowerCase()}{type !== detection.type ? ` (you changed it to ${info.label.toLowerCase()})` : ""}</b>

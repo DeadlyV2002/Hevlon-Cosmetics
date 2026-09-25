@@ -2,7 +2,7 @@ import { Select } from "../components/Select";
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText, proper, properOrNull, cleanPhones, StockLine, SalesOfficer, money, fmt } from "../lib/supabase";
-import { readAnyFile } from "../lib/readers";
+import { readAnyFile, ACCEPT } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
 import DateRange, { PRESETS, Range } from "../components/DateRange";
@@ -31,6 +31,13 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"tree" | "table">("tree");
   const [openDist, setOpenDist] = useState<string | null>(null);
+  const [queue, setQueue] = useState<File[]>([]);
+  function nextImport() { const [f, ...rest] = queue; setQueue(rest); setPreview(null); if (f) readImport(f); }
+  /** Search boxes on each state and super stockist branch. */
+  const [bq, setBq] = useState<Record<string, string>>({});
+  const hits = (d: Distributor, t?: string) => !t || `${d.name} ${d.code} ${d.territory || ""} ${d.owner_name || ""} ${d.company_name || ""}`.toLowerCase().includes(t.toLowerCase());
+  const searchBox = (key: string, what: string) => <input className="branchsearch" placeholder={`Search ${what}…`} value={bq[key] || ""} aria-label={`Search ${what}`}
+    onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()} onKeyUp={e => e.preventDefault()} onChange={e => setBq({ ...bq, [key]: e.target.value })} />;
   const [report, setReport] = useState<Distributor | null>(null);
   const [order, setOrder] = useState("name");
   const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "fy")!.range());
@@ -156,7 +163,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
       if (inserts.length) { const { error } = await supabase.from("retailers").insert(inserts); if (error) throw error; }
       if (updates.length) { const { error } = await supabase.from("retailers").upsert(updates, { onConflict: "id" }); if (error) throw error; }
       show("ok", `Imported ${plural(good.length, "retailer")} (${inserts.length} new, ${updates.length} updated).${importRows.length > good.length ? ` ${plural(importRows.length - good.length, "row")} skipped: see the reasons in the preview.` : ""}`);
-      setPreview(null); await onChanged();
+      setPreview(null); await onChanged(); if (queue.length) nextImport();
     } catch (e: any) { show("err", `Import failed: ${e?.code === "42501" ? "only HO admins and state managers can import retailers" : errText(e)}`); }
     finally { setBusy(false); }
   }
@@ -181,7 +188,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
   return <>
     {canManage && <section className="card upload">
       <div className="rowhead"><h2>{editing ? `Edit ${editing.name}` : "Add retailer"}</h2>
-        <label className="button secondary">Import from Excel<input hidden type="file" accept=".xlsx,.xls,.xlsm,.ods,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) readImport(x); e.target.value = ""; }} /></label></div>
+        <label className="button secondary">Import from Excel<input hidden type="file" multiple accept={ACCEPT} onChange={e => { const [x, ...rest] = [...(e.target.files || [])]; if (x) { readImport(x); setQueue(rest); } e.target.value = ""; }} /></label></div>
       <div className="formgrid">
         <label>Retailer name *<input {...f("name")} /></label>
         <label>Distributor *<Select {...f("distributor_id")}><option value="">Choose…</option>
@@ -200,7 +207,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
 
     {preview && <section className="card">
       <div className="rowhead"><h2>Import preview — {preview.file}</h2>
-        <div className="actions"><button className="secondary" onClick={() => setPreview(null)}>Cancel</button>
+        <div className="actions"><button className="secondary" onClick={() => (queue.length ? nextImport() : setPreview(null))}>{queue.length ? `Skip, Next File (${queue.length} Left)` : "Cancel"}</button>
           <button onClick={confirmImport} disabled={busy || !good.length}>{busy ? "Importing…" : `Import ${plural(good.length, "retailer")}`}</button></div></div>
       <div className="tablewrap"><table className="map"><tbody><tr>{preview.labels.map((l, i) => <td key={i}><small>{l || `column ${i + 1}`}</small>
         <Select value={preview.mapping[i]} onChange={e => setPreview({ ...preview, mapping: preview.mapping.map((m, j) => (j === i ? e.target.value as RField : m === e.target.value ? "ignore" : m)) })}>
@@ -233,16 +240,16 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
           const all = [...supers.values()].flat(), n = all.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
           return <details key={state} className="rt-state" open>
             <summary><h3>{state}</h3><span className="rt-badge">{plural(supers.size, "super stockist")}</span><span className="rt-badge">{plural(all.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span>
-              {hasRetailers && <span className="rt-badge">{plural(n, "retailer")}</span>}</summary>
+              {hasRetailers && <span className="rt-badge">{plural(n, "retailer")}</span>}{searchBox(`st:${state}`, `${state} distributors`)}</summary>
             <div className="rt-branch">
-              {[...supers.entries()].sort((a, b) => (byId.get(a[0])?.name || "~").localeCompare(byId.get(b[0])?.name || "~")).map(([ssId, dists]) => {
+              {[...supers.entries()].filter(([ssId, ds]) => !bq[`st:${state}`] || (byId.get(ssId) && hits(byId.get(ssId)!, bq[`st:${state}`])) || ds.some(d => hits(d, bq[`st:${state}`]))).sort((a, b) => (byId.get(a[0])?.name || "~").localeCompare(byId.get(b[0])?.name || "~")).map(([ssId, dists]) => {
                 const ss = byId.get(ssId), m = dists.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0), ssPct = ss ? pctOf(ss.id) : null;
-                const ordered = [...dists].sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : rankBy(a, b)));
+                const ordered = dists.filter(d => (hits(d, bq[`st:${state}`]) || (ss && hits(ss, bq[`st:${state}`]))) && hits(d, bq[`ss:${ssId}`])).sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : rankBy(a, b)));
                 return <details key={ssId || "none"} className="rt-ss" open>
                   <summary><span className="kind">SS</span>{ss ? <button className="link strong" onClick={e => { e.preventDefault(); setReport(ss); }}>{ss.name}</button> : <b>No super stockist</b>}{ss?.territory && <small>{ss.territory}</small>}
                     <span className="rt-badge">{plural(dists.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span>
                     {hasRetailers && <span className="rt-badge">{plural(m, "retailer")}</span>}
-                    {ssPct !== null && <span className={`pctbar${ssPct < 50 ? " low" : ssPct < 80 ? " mid" : " good"}`} title="Collection %">{fmt(ssPct)}% collected</span>}</summary>
+                    {ssPct !== null && <span className={`pctbar${ssPct < 50 ? " low" : ssPct < 80 ? " mid" : " good"}`} title="Collection %">{fmt(ssPct)}% collected</span>}{searchBox(`ss:${ssId}`, "distributors")}</summary>
                   <div className="rt-dists">{ordered.map(d => {
                     const rs = [...(tree.byDist.get(d.id) || [])].sort((a, b) => a.name.localeCompare(b.name)), open = openDist === d.id, p = pctOf(d.id), b = billOf(d.id);
                     return <div key={d.id} className={`rt-dist${open ? " open" : ""}`}>

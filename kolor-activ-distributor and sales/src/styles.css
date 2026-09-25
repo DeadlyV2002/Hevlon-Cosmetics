@@ -438,7 +438,7 @@ table.map button.select{width:100%;margin:4px 0}
 .rowhead>.actions .search{flex:0 1 240px;min-width:140px}
 
 /* Button labels in Title Case ("Download Excel", "Move Stock"); dropdowns and cards holding data keep their own text. */
-button:not(.select):not(.galleryitem):not(.rt-distbtn):not(.link),label.button,label.filebtn,.galleryitem b{text-transform:capitalize}
+button:not(.select):not(.galleryitem):not(.rt-distbtn):not(.st-head):not(.link),label.button,label.filebtn,.galleryitem b{text-transform:capitalize}
 .scrollpad{scroll-margin-top:12px}
 
 /* v8: dialogs, column filters, reports, collections, SO reports */
@@ -506,3 +506,25 @@ tr.muted td{color:#64748b}
 }
 .rt-count.low{color:#b91c1c}.rt-count.mid{color:#b45309}.rt-count.good{color:#15803d}.rt-count.none{color:#94a3b8}
 button.rt-chip{border:0;cursor:pointer;font:inherit;font-size:12px}
+/* v9: sales team tree, branch search */
+.st-tree{display:flex;flex-direction:column;gap:12px;margin:12px 0 16px}
+.st-node{position:relative}
+.st-kids{margin:6px 0 0 18px;padding-left:14px;border-left:2px dashed #e2e8f0;display:flex;flex-direction:column;gap:6px}
+.st-head{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:10px;align-items:center;width:100%;padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;cursor:pointer}
+.st-head:hover{border-color:#93c5fd}
+.st-head:focus-visible{outline:2px solid #2563eb}
+.st-node.on>.st-head{border-color:#2563eb;background:#eff6ff}
+.st-head b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-head>small{grid-column:2;color:#64748b;font-size:12px}
+.st-post{grid-row:1/3;font-size:11px;font-weight:800;padding:3px 7px;border-radius:6px;background:#f1f5f9;color:#334155}
+.st-post.p-ASM{background:#1d4ed8;color:#fff}.st-post.p-ASE{background:#dbeafe;color:#1d4ed8}
+.st-num{grid-column:3;grid-row:1/3;text-align:right;font-weight:700;display:flex;flex-direction:column}
+.st-num small{font-weight:400;color:#64748b;font-size:12px}
+.branchsearch{margin:0 0 0 auto;max-width:220px;padding:5px 9px;font-size:13px}
+.dashkpis{margin-bottom:16px}
+.cardtools{display:flex;align-items:center;gap:6px}
+.pin{background:none;padding:2px 4px;font-size:14px;opacity:.35;filter:grayscale(1);text-transform:none}
+.pin:hover{opacity:.8}
+.pin.on{opacity:1;filter:none}
+.rotating{margin-top:8px;padding-top:8px;border-top:1px dashed #cbd5e1}
+.rotating h2{font-size:17px}

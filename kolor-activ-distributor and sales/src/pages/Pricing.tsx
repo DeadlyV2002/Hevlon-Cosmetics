@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, Margins, Scheme, schemesOn, marginsOn, matchProduct, fmt, plural, errText } from "../lib/supabase";
-import { cellText, parseNum, today, sheetRows } from "../lib/parse";
+import { cellText, parseNum, today } from "../lib/parse";
+import { readAnyFile, ACCEPT } from "../lib/readers";
 
 interface Props {
   products: Product[]; locations: Distributor[]; margins: Margins; schemes: Scheme[];
@@ -126,31 +127,35 @@ export default function Pricing({ products, locations, margins, schemes, canMana
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Prices");
     XLSX.writeFile(wb, `price-list-${day}.xlsx`);
   }
-  async function upload(file: File) {
-    try {
-      const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
-      const grid = sheetRows(wb.Sheets[wb.SheetNames[0]]) as any[][];
-      const hi = grid.findIndex(r => r.some(c => /\bss\b|mrp/i.test(cellText(c))));
-      if (hi < 0) return say("err", "No column called “SS rate” or “MRP” in the first sheet. Download the price list to see the layout.");
-      const head = grid[hi].map(c => cellText(c).toLowerCase());
-      const col = (re: RegExp) => head.findIndex(h => re.test(h));
-      const cSku = col(/sku|code/), cName = col(/product|item|name/), cSs = col(/\bss\b/), cMrp = col(/mrp/);
-      let n = 0; const unknown: string[] = [];
-      const next = new Map(drafts);
-      for (const r of grid.slice(hi + 1)) {
-        const sku = cSku >= 0 ? cellText(r[cSku]) : "", name = cName >= 0 ? cellText(r[cName]) : "";
-        if (!sku && !name) continue;
-        const p = matchProduct(sku, name, products);
-        if (!p) { unknown.push(name || sku); continue; }
-        const ss = cSs >= 0 ? parseNum(r[cSs]) : null, mrp = cMrp >= 0 ? parseNum(r[cMrp]) : null;
-        if (ss === null && mrp === null) continue;
-        const cur = next.get(p.id) || { ss_rate: val(p, "ss_rate"), mrp: val(p, "mrp") };
-        next.set(p.id, { ss_rate: ss !== null ? String(ss) : cur.ss_rate, mrp: mrp !== null ? String(mrp) : cur.mrp });
-        n++;
-      }
-      setDrafts(next);
-      say(n ? "ok" : "err", `${n ? `Read prices for ${plural(n, "product")}. Check them below, then press Save prices.` : "No prices were read."}${unknown.length ? ` ${plural(unknown.length, "row")} didn't match a product: ${unknown.slice(0, 5).join(", ")}${unknown.length > 5 ? "…" : ""}.` : ""}`);
-    } catch (e) { say("err", `Couldn't read ${file.name}: ${errText(e)}`); }
+  /** Reads every sheet of every chosen file (Excel, CSV, PDF, Word…) that has an SS rate or MRP column. */
+  async function upload(files: File[]) {
+    let n = 0; const unknown: string[] = [], unused: string[] = [];
+    const next = new Map(drafts);
+    for (const file of files) {
+      try {
+        for (const sh of (await readAnyFile(file)).sheets) {
+          const grid = sh.grid;
+          const hi = grid.findIndex(r => r.some(c => /ss|mrp/i.test(cellText(c))));
+          if (hi < 0) { unused.push(`${file.name} › ${sh.name}`); continue; }
+          const head = grid[hi].map(c => cellText(c).toLowerCase());
+          const col = (re: RegExp) => head.findIndex(h => re.test(h));
+          const cSku = col(/sku|code/), cName = col(/product|item|name/), cSs = col(/ss/), cMrp = col(/mrp/);
+          for (const r of grid.slice(hi + 1)) {
+            const sku = cSku >= 0 ? cellText(r[cSku]) : "", name = cName >= 0 ? cellText(r[cName]) : "";
+            if (!sku && !name) continue;
+            const p = matchProduct(sku, name, products);
+            if (!p) { unknown.push(name || sku); continue; }
+            const ss = cSs >= 0 ? parseNum(r[cSs]) : null, mrp = cMrp >= 0 ? parseNum(r[cMrp]) : null;
+            if (ss === null && mrp === null) continue;
+            const cur = next.get(p.id) || { ss_rate: val(p, "ss_rate"), mrp: val(p, "mrp") };
+            next.set(p.id, { ss_rate: ss !== null ? String(ss) : cur.ss_rate, mrp: mrp !== null ? String(mrp) : cur.mrp });
+            n++;
+          }
+        }
+      } catch (e) { unused.push(`${file.name} (${errText(e)})`); }
+    }
+    setDrafts(next);
+    say(n ? "ok" : "err", `${n ? `Read prices for ${plural(n, "product")}. Check them below, then press Save prices.` : "No prices were read."}${unknown.length ? ` ${plural(unknown.length, "row")} didn't match a product: ${unknown.slice(0, 5).join(", ")}${unknown.length > 5 ? "…" : ""}.` : ""}${unused.length ? ` Not used (no SS rate or MRP column): ${unused.join(", ")}.` : ""}`);
   }
 
   /** "gives North Star a 2% billing discount and sets the distributor margin to 18%" */
@@ -224,7 +229,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
     <section className="card">
       <div className="rowhead"><h2>Product prices</h2>
         <div className="actions wrap"><button className="secondary" onClick={download}>Download price list</button>
-          {canManage && <label className="filebtn">Upload price list<input type="file" accept=".xlsx,.xls,.csv" hidden onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} /></label>}</div></div>
+          {canManage && <label className="filebtn">Upload price list<input type="file" multiple accept={ACCEPT} hidden onChange={e => { const f = [...(e.target.files || [])]; if (f.length) upload(f); e.target.value = ""; }} /></label>}</div></div>
       <p>The SS rate is set automatically the first time a godown dispatch to a super stockist carries a rate. Change it here when your price list changes. Distributor and retailer prices use today's margins; schemes for particular super stockists aren't included.</p>
       {missing.length > 0 && <p className="warn">{plural(missing.length, "product")} {missing.length === 1 ? "has" : "have"} no SS rate and {missing.length === 1 ? "is" : "are"} valued at the last purchase rate for now.
         {canManage && <> <button className="secondary" onClick={fillFromPurchase}>Use purchase rate as SS rate</button></>}</p>}

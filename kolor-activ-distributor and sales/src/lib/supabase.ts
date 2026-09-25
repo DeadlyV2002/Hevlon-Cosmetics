@@ -21,7 +21,10 @@ export interface Distributor {
   aliases: string[]; created_at?: string; email?: string | null; so_id?: string | null;
 }
 export interface Retailer { id: string; distributor_id: string | null; code: string | null; name: string; territory: string | null; owner_name: string | null; phone: string | null; created_at: string }
-export interface SalesOfficer { id: string; code: string; name: string; phone: string | null; state: string | null; region: string | null; aliases: string[]; active: boolean }
+export interface SalesOfficer {
+  id: string; code: string; name: string; phone: string | null; state: string | null; region: string | null; aliases: string[]; active: boolean;
+  designation?: string | null; manager_id?: string | null; hq?: string | null; zone?: string | null; areas?: string | null;
+}
 export interface ProductAlias { product_id: string; alias: string }
 /** unit_price is the rate stock is valued at: the SS rate, or the last purchase rate until that's set. */
 export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number }

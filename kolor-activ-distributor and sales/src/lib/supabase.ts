@@ -23,7 +23,23 @@ export interface Distributor {
 export interface Retailer { id: string; distributor_id: string | null; code: string | null; name: string; territory: string | null; owner_name: string | null; phone: string | null; created_at: string }
 export interface SalesOfficer { id: string; code: string; name: string; phone: string | null; state: string | null; region: string | null; aliases: string[]; active: boolean }
 export interface ProductAlias { product_id: string; alias: string }
-export interface Product { id: string; sku: string; item_name: string; unit_price: number }
+/** unit_price is the rate stock is valued at: the SS rate, or the last purchase rate until that's set. */
+export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number }
+/** Standard margins in percent: what the super stockist and the distributor add when they bill onwards. */
+export interface Margins { ss: number; distributor: number }
+export interface Scheme {
+  id: string; name: string; starts_on: string; ends_on: string; ss_discount: number;
+  ss_margin: number | null; distributor_margin: number | null; applies_to: string[] | null; note: string | null;
+}
+/** Schemes running on a date; the latest-starting one wins when margins overlap. */
+export function schemesOn(schemes: Scheme[], day: string) {
+  return schemes.filter(s => s.starts_on <= day && day <= s.ends_on).sort((a, b) => b.starts_on.localeCompare(a.starts_on));
+}
+/** Margins on a date for one super stockist's chain; without one, only schemes covering every super stockist count. */
+export function marginsOn(m: Margins, schemes: Scheme[], day: string, ss?: string): Margins {
+  const on = schemesOn(schemes, day).filter(s => !s.applies_to?.length || (!!ss && s.applies_to.includes(ss)));
+  return { ss: Number(on.find(s => s.ss_margin !== null)?.ss_margin ?? m.ss), distributor: Number(on.find(s => s.distributor_margin !== null)?.distributor_margin ?? m.distributor) };
+}
 export interface StockLine {
   distributor_id: string; distributor_code: string; distributor_name: string; product_id: string; sku: string; item_name: string; unit_price: number;
   total_input: number; total_output: number; current_stock: number; stock_value: number; last_movement: string; last_in: string | null; last_out: string | null; kind: Kind;

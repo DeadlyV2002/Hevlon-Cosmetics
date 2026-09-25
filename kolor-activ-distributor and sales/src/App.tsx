@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { supabase, Distributor, Product, ProductAlias, StockLine, Retailer, SalesOfficer, Role, fetchAll, errText } from "./lib/supabase";
+import { supabase, Distributor, Product, ProductAlias, StockLine, Retailer, SalesOfficer, Role, Margins, Scheme, fetchAll, errText } from "./lib/supabase";
 import { Alert, ChartKind, Ctx, clearInsightCache } from "./lib/insights";
 import Dashboard from "./pages/Dashboard";
 import Inventory from "./pages/Inventory";
@@ -10,10 +10,11 @@ import SOChecks from "./pages/SOChecks";
 import Reports from "./pages/Reports";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
+import Pricing from "./pages/Pricing";
 import AlertsBell from "./components/AlertsBell";
 
-export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "SO checks" | "Reports" | "History" | "Settings";
-const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "SO checks", "Reports", "History", "Settings"];
+export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
+const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "SO checks", "Reports", "Pricing", "History", "Settings"];
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
 
 export default function App() {
@@ -30,6 +31,8 @@ export default function App() {
   const [officers, setOfficers] = useState<SalesOfficer[]>([]);
   const [commentCounts, setCommentCounts] = useState<Map<string, number>>(new Map());
   const [testingMode, setTestingMode] = useState(false);
+  const [margins, setMargins] = useState<Margins>({ ss: 10, distributor: 15 });
+  const [schemes, setSchemes] = useState<Scheme[]>([]);
   /** Goes up after every reload, so charts and alerts know to fetch fresh numbers. */
   const [version, setVersion] = useState(0);
   const [openKind, setOpenKind] = useState<ChartKind | null>(null);
@@ -49,26 +52,32 @@ export default function App() {
     /** One list failing (say, before the latest database step is run) shouldn't blank the others. */
     const all = <T,>(label: string, page: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) =>
       fetchAll<T>(page).catch(e => { failed.push(`${label}: ${errText(e)}`); return null; });
-    const [prof, d, p, s, r, al, so, cc, settings] = await Promise.all([
+    const [prof, d, p, s, r, al, so, cc, settings, sch] = await Promise.all([
       sb.from("profiles").select("role").eq("id", session.user.id).maybeSingle(),
       all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
-      all<Product>("products", (a, z) => sb.from("products").select("id,sku,item_name,unit_price").order("item_name").order("id").range(a, z)),
+      all<Omit<Product, "purchase_rate">>("products", (a, z) => sb.from("products").select("id,sku,item_name,unit_price,ss_rate,mrp").order("item_name").order("id").range(a, z)),
       all<StockLine>("stock", (a, z) => sb.from("distributor_stock_summary").select("*").order("distributor_id").order("product_id").range(a, z)),
       all<Retailer>("retailers", (a, z) => sb.from("retailers").select("id,distributor_id,code,name,territory,owner_name,phone,created_at").order("name").order("id").range(a, z)),
       all<ProductAlias>("product names", (a, z) => sb.from("product_aliases").select("product_id,alias").order("id").range(a, z)),
       all<SalesOfficer>("sales officers", (a, z) => sb.from("sales_officers").select("*").order("name").order("id").range(a, z)),
       all<{ distributor_id: string; n: number }>("comments", (a, z) => sb.from("distributor_comment_counts").select("distributor_id,n").order("distributor_id").range(a, z)),
-      sb.from("app_settings").select("value").eq("key", "testing_mode").maybeSingle(),
+      sb.from("app_settings").select("key,value").in("key", ["testing_mode", "margins"]),
+      all<Scheme>("schemes", (a, z) => sb.from("schemes").select("*").order("starts_on", { ascending: false }).order("id").range(a, z)),
     ]);
     setRole(((prof.data as any)?.role as Role) ?? null);
     if (d) setLocations(d.map(x => ({ ...x, kind: x.kind || "DISTRIBUTOR" })));
-    if (p) setProducts(p);
+    // Stock is valued at the SS rate; the last purchase rate stands in until it's set.
+    if (p) setProducts(p.map(x => ({ ...x, purchase_rate: Number(x.unit_price) || 0, unit_price: Number(x.ss_rate) || Number(x.unit_price) || 0 })));
     if (s) setStock(s);
     if (r) setRetailers(r);
     if (al) setAliases(al);
     if (so) setOfficers(so);
     if (cc) setCommentCounts(new Map(cc.map(x => [x.distributor_id, Number(x.n)])));
-    setTestingMode(settings.data?.value === true);
+    const setting = (k: string) => (settings.data as { key: string; value: any }[] | null)?.find(x => x.key === k)?.value;
+    setTestingMode(setting("testing_mode") === true);
+    const m = setting("margins");
+    if (m) setMargins({ ss: Number(m.ss ?? 10), distributor: Number(m.distributor ?? 15) });
+    if (sch) setSchemes(sch);
     if (failed.length) setMessage(`Could not load ${failed.join("; ")}. If this mentions a missing table or column, run the latest database step (supabase/migrations) in Supabase.`);
     clearInsightCache();
     setVersion(v => v + 1);
@@ -120,6 +129,7 @@ export default function App() {
         {page === "Retailers" && <Retailers retailers={retailers} locations={locations} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} locations={locations} />}
+        {page === "Pricing" && <Pricing products={products} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Settings" && <Settings role={role} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>

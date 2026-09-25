@@ -45,6 +45,9 @@ SQL Editor → New query → paste all of `supabase/migrations/005_locations_tra
 ### Step 1.3e — Run the v5 update (before the v5 code goes live)
 SQL Editor → New query → paste all of `supabase/migrations/006_delete_testing_dashboard.sql` → Run → **Run this query** on the warning. It adds deleting locations, testing mode, dashboard layouts and the dashboard functions. No data is changed, and the v4 app keeps working after it runs.
 
+### Step 1.3f — Run the pricing update (after 1.3e, before the pricing code goes live)
+SQL Editor → New query → paste all of `supabase/migrations/007_pricing_margins_schemes.sql` → Run → **Run this query** on the warning. It adds the SS rate and MRP on products, the margins setting (10% and 15% to start), and the schemes table, and switches stock values to the SS rate. Products have no SS rate until the next godown dispatch to a super stockist carries one or you set it on the Pricing page; until then they're valued at the last purchase rate, as before.
+
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.
 2. Paste and click **Run**:

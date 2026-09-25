@@ -153,7 +153,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
   stock_trend: {
     name: "Stock held, week by week", blurb: "Is total stock across godowns, super stockists and distributors rising or falling?",
     title: "How much stock you hold, week by week",
-    subtitle: c => `${c.metric === "units" ? "Units" : "Value"} of all stock at the end of each week${c.split === "state" ? ", split by state" : c.split === "none" ? "" : ", split into godowns, super stockists and distributors"}. Last ${c.weeks ?? 12} weeks.`,
+    subtitle: c => `${c.metric === "units" ? "Units" : "Value at SS rate"} of all stock at the end of each week${c.split === "state" ? ", split by state" : c.split === "none" ? "" : ", split into godowns, super stockists and distributors"}. Last ${c.weeks ?? 12} weeks.`,
     defaults: { weeks: 12, split: "kind", metric: "value", labels: true },
     options: [{ key: "metric" }, { key: "weeks", label: "Weeks to show", min: 4, max: 52, suffix: "weeks" },
       { key: "split", label: "Split the bars", choices: [{ id: "kind", label: "Godowns, SS and distributors" }, { id: "state", label: "Top 2 states and the rest" }, { id: "none", label: "Don't split" }] },
@@ -184,7 +184,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
   stock_where: {
     name: "Where your stock is sitting", blurb: "Current stock by state, region, super stockist, location or product.",
     title: "Where your stock is sitting right now",
-    subtitle: c => `Current stock ${c.metric === "units" ? "units" : "value"} in each ${groupWord(c.groupBy || "state")}${c.split === "none" ? "" : ", split into godowns, super stockists and distributors"}.`,
+    subtitle: c => `Current stock ${c.metric === "units" ? "units" : "value at SS rate"} in each ${groupWord(c.groupBy || "state")}${c.split === "none" ? "" : ", split into godowns, super stockists and distributors"}.`,
     defaults: { groupBy: "state", split: "kind", metric: "value", top: 10, labels: true },
     options: [{ key: "metric" }, { key: "groupBy", label: "One bar for", choices: groupChoices("state", "region", "ss", "location", "product") },
       { key: "split", label: "Split the bars", choices: [{ id: "kind", label: "Godowns, SS and distributors" }, { id: "none", label: "Don't split" }] },

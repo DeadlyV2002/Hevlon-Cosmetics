@@ -95,10 +95,20 @@ export default function Pricing({ products, locations, margins, schemes, canMana
     return n;
   });
   const missing = products.filter(p => !Number(p.ss_rate));
+  const [pstatus, setPstatus] = useState<"ALL" | "ACTIVE" | "DORMANT">("ALL");
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
-    return products.filter(p => (!onlyMissing || !Number(p.ss_rate)) && (!t || p.item_name.toLowerCase().includes(t) || p.sku.toLowerCase().includes(t)));
-  }, [products, q, onlyMissing]);
+    return products.filter(p => (!onlyMissing || !Number(p.ss_rate)) && (pstatus === "ALL" || (p.status || "ACTIVE") === pstatus) && (!t || p.item_name.toLowerCase().includes(t) || p.sku.toLowerCase().includes(t)));
+  }, [products, q, onlyMissing, pstatus]);
+  /** Dormant products stay listed: distributors still return old stock of them. */
+  async function setStatus(p: Product) {
+    if (!supabase) return;
+    const next = p.status === "DORMANT" ? "ACTIVE" : "DORMANT";
+    const { error } = await supabase.rpc("set_product_status", { p_ids: [p.id], p_status: next });
+    if (error) return say("err", `Not changed: ${errText(error)}. Run database step 012.`);
+    say("ok", `${p.item_name} is now ${next === "DORMANT" ? "dormant (kept in the list for returns and old stock)" : "active"}.`);
+    await onChanged();
+  }
   const badDraft = [...drafts.values()].some(d => [d.ss_rate, d.mrp].some(v => v.trim() !== "" && (isNaN(Number(v)) || Number(v) < 0)));
   async function savePrices() {
     if (!supabase || !drafts.size || badDraft) return;
@@ -248,13 +258,16 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       <div className="actions wrap">
         <input placeholder="Search products" value={q} onChange={e => setQ(e.target.value)} className="pricing-search" />
         <label className="inline"><input type="checkbox" checked={onlyMissing} onChange={e => setOnlyMissing(e.target.checked)} /> Only products without an SS rate</label>
+        <div className="seg" role="group" aria-label="Show">{(["ALL", "ACTIVE", "DORMANT"] as const).map(k => <button key={k} className={pstatus === k ? "on" : ""} onClick={() => setPstatus(k)}>
+          {k === "ALL" ? `All (${products.length})` : k === "ACTIVE" ? `Active (${products.filter(p => p.status !== "DORMANT").length})` : `Dormant (${products.filter(p => p.status === "DORMANT").length})`}</button>)}</div>
       </div>
-      {products.length ? <div className="tablewrap"><table className="edit"><thead><tr><th>SKU</th><th>Product</th><th>Last purchase rate</th><th>SS rate</th><th>To distributor</th><th>To retailer</th><th>MRP</th><th>MRP ÷ SS rate</th></tr></thead>
+      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>Last purchase rate</th><th>SS rate</th><th>To distributor</th><th>To retailer</th><th>MRP</th><th>MRP ÷ SS rate</th></tr></thead>
         <tbody>{shown.map(p => {
           const ss = Number(val(p, "ss_rate")) || 0, mrp = Number(val(p, "mrp")) || 0;
           const d = up(ss, now.ss), r = up(d, now.distributor);
           return <tr key={p.id} className={drafts.has(p.id) ? "changed" : undefined}>
             <td>{p.sku}</td><td>{p.item_name}</td>
+            <td><button className={`statuspill ${p.status === "DORMANT" ? "dormant" : "active"}`} disabled={!canManage} onClick={() => setStatus(p)} title={canManage ? "Click to change" : undefined}>{p.status === "DORMANT" ? "Dormant" : "Active"}</button></td>
             <td>{p.purchase_rate ? rs(p.purchase_rate) : <span className="muted">none</span>}</td>
             <td><input inputMode="decimal" aria-label={`SS rate for ${p.item_name}`} value={val(p, "ss_rate")} disabled={!canManage} placeholder="not set" onChange={e => setVal(p, "ss_rate", e.target.value)} /></td>
             <td>{ss ? rs(d) : ""}</td>

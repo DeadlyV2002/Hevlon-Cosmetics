@@ -54,7 +54,15 @@ export default function App() {
   useEffect(() => { if (session) refreshAll(); }, [session?.user.id]);
   useSessionLog(session?.user.id, session?.user.email);
 
+  /** True while lists load: shows the bar at the top and the working cursor. */
+  const [dataLoading, setDataLoading] = useState(false);
+  useEffect(() => { document.body.classList.toggle("busy", dataLoading); }, [dataLoading]);
   async function refreshAll() {
+    if (!supabase || !session) return;
+    setDataLoading(true);
+    try { await loadAll(); } finally { setDataLoading(false); }
+  }
+  async function loadAll() {
     if (!supabase || !session) return;
     const sb = supabase, failed: string[] = [];
     /** One list failing (say, before the latest database step is run) shouldn't blank the others. */
@@ -63,7 +71,7 @@ export default function App() {
     const [prof, d, p, s, r, al, so, cc, settings, sch, cp] = await Promise.all([
       sb.from("profiles").select("role").eq("id", session.user.id).maybeSingle(),
       all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
-      all<Omit<Product, "purchase_rate">>("products", (a, z) => sb.from("products").select("id,sku,item_name,unit_price,ss_rate,mrp").order("item_name").order("id").range(a, z)),
+      all<Omit<Product, "purchase_rate">>("products", (a, z) => sb.from("products").select("*").order("item_name").order("id").range(a, z)),
       all<StockLine>("stock", (a, z) => sb.from("distributor_stock_summary").select("*").order("distributor_id").order("product_id").range(a, z)),
       all<Retailer>("retailers", (a, z) => sb.from("retailers").select("id,distributor_id,code,name,territory,owner_name,phone,created_at").order("name").order("id").range(a, z)),
       all<ProductAlias>("product names", (a, z) => sb.from("product_aliases").select("product_id,alias").order("id").range(a, z)),
@@ -145,6 +153,7 @@ export default function App() {
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Settings" && <Settings role={role} locations={locations} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>
+      {dataLoading && <div className="topbar" role="progressbar" aria-label="Loading" />}
       <ClearButton />
       <AskHost />
     </div>

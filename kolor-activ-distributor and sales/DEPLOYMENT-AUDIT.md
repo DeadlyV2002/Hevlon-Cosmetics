@@ -1,5 +1,14 @@
 # Deployment Package Audit
 
+## v12 (26 Sep 2026) — migration 012 now also covers products and DSR linking
+- Save All: when several stock files are chosen, one button reads, checks and saves each in turn, and stops at any file that needs a decision (a Save All log lists each file). Tested: all 11 closing stock statements saved in 17 seconds.
+- A progress bar names the current step (reading the file, finding the table and whose stock it is, matching products and rates, saving, opening the next file) and shows file N of M. A thin bar at the top and a working cursor show while lists load; clickable things show a pointer.
+- The clear (✕) button only appears in the box being typed in, and not in table cells, so it no longer jumps around or covers stock figures.
+- Distributor names are also matched with spaces removed ("G A ENTERPRISES" = "GA Enterprises"), preferring one whose town appears on the sheet.
+- Products have Active / Dormant status on the Pricing page (dormant ones stay listed for returned old stock); only the status can be changed outside the pricing lock.
+- SO Reports › Stock Checks: link DSR DB-name spellings to distributors, with the closest distributor in the same state suggested; linked spellings are saved as other names for future uploads.
+- Faster: retailer tree branches build their cards only when opened; SO team totals are worked out once.
+
 ## v11 (26 Sep 2026) — run `supabase/migrations/012_distributor_status.sql` after 011
 - Every confirmation (save stock, move stock, delete, undo, merge, import, testing mode) is now asked inside the page. Browser pop-ups were blocked in some windows, so Save Stock Count and other buttons did nothing there.
 - A stock count can be saved again from the same file any number of times (it sets stock to the counted figures, so nothing is counted twice). Purchase and sales files still warn before being counted twice.

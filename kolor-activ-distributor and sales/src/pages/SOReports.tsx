@@ -9,6 +9,7 @@ import { ChartView } from "../components/Charts";
 import { ChartData } from "../lib/insights";
 import Staff, { rankOf } from "../components/Staff";
 import SOReport from "../components/SOReport";
+import DsrLinker from "../components/DsrLinker";
 import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
 import { readDsr, mergeBooks, DsrBook, DsrDay } from "../lib/dsr";
 import { exportPng } from "../lib/present";
@@ -166,7 +167,9 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
 
   // ---------- tree: zone → ASM → ASE → SO ----------
   const sumOf = useMemo(() => new Map(sums.map(s => [s.soId, s])), [sums]);
-  const teamTotal = (id: string) => { let v = 0, c = 0, p = 0; below(id).forEach(x => { const s = sumOf.get(x); if (s) { v += s.value; c += s.calls; p += s.pc; } }); return { v, c, p }; };
+  // Team totals worked out once per change, not on every comparison while sorting the tree.
+  const teamTotals = useMemo(() => new Map(officers.map(o => { let v = 0, c = 0, p = 0; below(o.id).forEach(x => { const s = sumOf.get(x); if (s) { v += s.value; c += s.calls; p += s.pc; } }); return [o.id, { v, c, p }]; })), [officers, sumOf, kids]);
+  const teamTotal = (id: string) => teamTotals.get(id) || { v: 0, c: 0, p: 0 };
   const hasData = (id: string) => [...below(id)].some(x => sumOf.has(x));
   const roots = officers.filter(o => inView.has(o.id) && (!o.manager_id || !inView.has(o.manager_id)) && (showIdle || hasData(o.id)))
     .sort((a, b) => zoneOf(a).localeCompare(zoneOf(b)) || rankOf(a.designation) - rankOf(b.designation) || a.name.localeCompare(b.name));
@@ -334,6 +337,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     </section>}
 
     {tab === "checks" && <>
+      <DsrLinker locations={locations} canManage={canManage} notify={notify} onLinked={() => setReload(x => x + 1)} />
       <section className="card">
         <div className="rowhead"><h2>SO Bookings Against Distributor Stock</h2><DateRange value={checkRange} onChange={setCheckRange} /></div>
         <p className="hint">For each distributor, what SOs booked product by product in this period against what the distributor had: stock before the period plus stock received during it. Upload each distributor's month-end stock and bills, then check the month. Quantities are in dozens.</p>

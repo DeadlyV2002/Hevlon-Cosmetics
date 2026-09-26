@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 const TYPES = new Set(["text", "search", "email", "tel", "number", "url", ""]);
 const clearable = (el: EventTarget | null): el is HTMLInputElement | HTMLTextAreaElement =>
-  (el instanceof HTMLInputElement && TYPES.has(el.type) && !el.readOnly && !el.disabled && !el.closest(".noclear")) || el instanceof HTMLTextAreaElement;
+  // Not in table cells (stock rows): the boxes there are small and the button would cover the figure.
+  (el instanceof HTMLInputElement && TYPES.has(el.type) && !el.readOnly && !el.disabled && !el.closest(".noclear, td") && el.getBoundingClientRect().width >= 120) || el instanceof HTMLTextAreaElement;
 
-/** A ✕ inside whichever text box is in use (or under the mouse) that empties it, for every box in the app. */
+/** A ✕ inside the text box being typed in that empties it, for every box in the app. */
 export default function ClearButton() {
   const [box, setBox] = useState<{ el: HTMLInputElement | HTMLTextAreaElement; top: number; left: number; h: number } | null>(null);
-  const hovered = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const place = (el: HTMLInputElement | HTMLTextAreaElement | null) => {
       if (!el || !el.value || !el.isConnected) return setBox(null);
@@ -15,17 +15,15 @@ export default function ClearButton() {
       if (!r.width) return setBox(null);
       setBox({ el, top: r.top, left: r.right - 26, h: Math.min(r.height, 40) });
     };
-    const current = () => (clearable(document.activeElement) ? document.activeElement : clearable(hovered.current) ? hovered.current : null);
+    const current = () => (clearable(document.activeElement) ? document.activeElement : null);
     const update = () => place(current());
-    const over = (e: Event) => { hovered.current = clearable(e.target) ? (e.target as HTMLElement) : null; update(); };
     document.addEventListener("focusin", update);
     document.addEventListener("focusout", () => setTimeout(update, 0));
     document.addEventListener("input", update, true);
-    document.addEventListener("pointerover", over);
     window.addEventListener("scroll", update, true);
     window.addEventListener("resize", update);
     return () => {
-      document.removeEventListener("focusin", update); document.removeEventListener("input", update, true); document.removeEventListener("pointerover", over);
+      document.removeEventListener("focusin", update); document.removeEventListener("input", update, true);
       window.removeEventListener("scroll", update, true); window.removeEventListener("resize", update);
     };
   }, []);

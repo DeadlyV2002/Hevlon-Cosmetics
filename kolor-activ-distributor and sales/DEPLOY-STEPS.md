@@ -76,7 +76,7 @@ SQL Editor → New query → paste all of `supabase/migrations/010_staff_dsr_log
 SQL Editor → New query → paste all of `supabase/migrations/011_products_stock_checks_merge.sql` → Run → **Run this query** on the warning. It adds building the product list from the DSR price list, the check of SO bookings against distributor stock, and merging duplicate staff entries.
 
 ### Step 1.3k — Run the v11 update (after 1.3j)
-SQL Editor → New query → paste all of `supabase/migrations/012_distributor_status.sql` → Run. It adds Active / Dormant status to distributors and super stockists; dormant ones get no stock reminders.
+SQL Editor → New query → paste all of `supabase/migrations/012_distributor_status.sql` → Run. It adds Active / Dormant status to distributors, super stockists and products (dormant ones get no stock reminders; dormant products stay in the product list for returns), and linking DSR DB-name spellings to distributors.
 
 ### Step 1.4 — Make yourself admin
 1. SQL Editor → **+** new query.

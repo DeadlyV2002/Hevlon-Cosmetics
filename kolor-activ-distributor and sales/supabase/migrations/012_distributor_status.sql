@@ -23,3 +23,40 @@ language sql stable security definer set search_path=public as $$
   where coalesce(d.status, 'ACTIVE') = 'ACTIVE'
     and (d.kind = 'DISTRIBUTOR' or (d.kind = 'SUPER_STOCKIST' and coalesce((select ss from s), true)))
 $$;
+
+-- ---------- Products: active / dormant ----------
+-- Dormant products stay in the product list (distributors still return old stock of them).
+alter table public.products add column if not exists status text not null default 'ACTIVE';
+do $$ begin
+  alter table public.products add constraint products_status_check check (status in ('ACTIVE', 'DORMANT'));
+exception when duplicate_object then null; end $$;
+-- Only the status changes here, so the pricing lock on the rest of the product stays in force.
+create or replace function public.set_product_status(p_ids uuid[], p_status text) returns int
+language sql security definer set search_path=public as $$
+  with u as (update products set status = p_status where id = any(p_ids) and is_manager() and p_status in ('ACTIVE', 'DORMANT') returning 1)
+  select count(*)::int from u
+$$;
+revoke all on function public.set_product_status(uuid[], text) from public, anon;
+grant execute on function public.set_product_status(uuid[], text) to authenticated;
+
+-- ---------- Linking DSR "DB Name" spellings to distributors ----------
+-- p_map: [{db_name, distributor_id}]. Every DSR day with that DB name (and no distributor yet)
+-- is linked, and the spelling is saved as the distributor's other name so later uploads match.
+create or replace function public.link_dsr_distributors(p_map jsonb) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare m jsonb; k int; days int := 0; names int := 0;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can link distributors.'; end if;
+  for m in select * from jsonb_array_elements(p_map) loop
+    update dsr_days set distributor_id = (m->>'distributor_id')::uuid
+     where distributor_id is null and norm_name(db_name) = norm_name(m->>'db_name');
+    get diagnostics k = row_count; days := days + k;
+    update distributors set aliases = array_append(coalesce(aliases, '{}'), m->>'db_name')
+     where id = (m->>'distributor_id')::uuid and norm_name(name) <> norm_name(m->>'db_name')
+       and not exists (select 1 from unnest(coalesce(aliases, '{}')) a where norm_name(a) = norm_name(m->>'db_name'));
+    names := names + 1;
+  end loop;
+  return jsonb_build_object('days', days, 'names', names);
+end $$;
+revoke all on function public.link_dsr_distributors(jsonb) from public, anon;
+grant execute on function public.link_dsr_distributors(jsonb) to authenticated;

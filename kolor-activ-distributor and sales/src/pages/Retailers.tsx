@@ -32,6 +32,8 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"tree" | "table">("tree");
   const [openDist, setOpenDist] = useState<string | null>(null);
+  /** Super stockist branches the user opened; their distributor cards are only built when open. */
+  const [openSS, setOpenSS] = useState<Set<string>>(new Set());
   const [queue, setQueue] = useState<File[]>([]);
   function nextImport() { const [f, ...rest] = queue; setQueue(rest); setPreview(null); if (f) readImport(f); }
   /** Search boxes on each state and super stockist branch. */
@@ -246,12 +248,13 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
               {[...supers.entries()].filter(([ssId, ds]) => !bq[`st:${state}`] || (byId.get(ssId) && hits(byId.get(ssId)!, bq[`st:${state}`])) || ds.some(d => hits(d, bq[`st:${state}`]))).sort((a, b) => (byId.get(a[0])?.name || "~").localeCompare(byId.get(b[0])?.name || "~")).map(([ssId, dists]) => {
                 const ss = byId.get(ssId), m = dists.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0), ssPct = ss ? pctOf(ss.id) : null;
                 const ordered = dists.filter(d => (hits(d, bq[`st:${state}`]) || (ss && hits(ss, bq[`st:${state}`]))) && hits(d, bq[`ss:${ssId}`])).sort((a, b) => (a.kind === "SUPER_STOCKIST" ? -1 : b.kind === "SUPER_STOCKIST" ? 1 : rankBy(a, b)));
-                return <details key={ssId || "none"} className="rt-ss" open>
+                const ssKey = `${state}|${ssId}`, ssOpen = openSS.has(ssKey) || !!bq[`st:${state}`] || !!q;
+                return <details key={ssId || "none"} className="rt-ss" open={ssOpen} onToggle={e => { const o = (e.currentTarget as HTMLDetailsElement).open; if (o !== ssOpen) setOpenSS(x => { const n = new Set(x); o ? n.add(ssKey) : n.delete(ssKey); return n; }); }}>
                   <summary><span className="kind">SS</span>{ss ? <button className="link strong" onClick={e => { e.preventDefault(); setReport(ss); }}>{ss.name}</button> : <b>No super stockist</b>}{ss?.territory && <small>{ss.territory}</small>}
                     <span className="rt-badge">{plural(dists.filter(d => d.kind === "DISTRIBUTOR").length, "distributor")}</span>
                     {hasRetailers && <span className="rt-badge">{plural(m, "retailer")}</span>}
                     {ssPct !== null && <span className={`pctbar${ssPct < 50 ? " low" : ssPct < 80 ? " mid" : " good"}`} title="Collection %">{fmt(ssPct)}% collected</span>}{searchBox(`ss:${ssId}`, "distributors")}</summary>
-                  <div className="rt-dists">{ordered.map(d => {
+                  {ssOpen && <div className="rt-dists">{ordered.map(d => {
                     const rs = [...(tree.byDist.get(d.id) || [])].sort((a, b) => a.name.localeCompare(b.name)), open = openDist === d.id, p = pctOf(d.id), b = billOf(d.id);
                     return <div key={d.id} className={`rt-dist${open ? " open" : ""}`}>
                       <button className="rt-distbtn" onClick={() => setReport(d)} title="Open report">
@@ -265,7 +268,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
                         <button className="rt-chip more" onClick={() => setOpenDist(d.id)}>{rs.length > 4 ? `+${rs.length - 4} More` : "Show Retailers"}</button></div>}
                       {open && <><div className="tablewrap">{retailerTable(rs)}</div><button className="link" onClick={() => setOpenDist(null)}>Hide Retailers</button></>}
                     </div>;
-                  })}</div>
+                  })}</div>}
                 </details>;
               })}
             </div>

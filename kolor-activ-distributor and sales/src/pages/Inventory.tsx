@@ -102,9 +102,11 @@ export default function Inventory({ locations, products, aliases, stock, officer
     try {
       const [t, hash] = await Promise.all([readAnyFile(f, setBusy), fileHash(f)]);
       if (!t.sheets.length) throw new Error("The file is empty.");
+      setBusy(`Finding the product table and whose stock ${f.name} is…`); await new Promise(r => setTimeout(r, 0));
       const g = t.sheets[0].grid, l0 = detectLayout(g, "COUNT");
       const det = detectFile(g, l0, titleText(g, l0), f.name, locations, officers);
       setDetection(det); setType(det.type); setTable(t); setSheet(0);
+      setBusy("Reading the rows and matching products and rates…"); await new Promise(r => setTimeout(r, 0));
       const { l, res } = await load(t, 0, det.type, { name: f.name, hash }, det);
       if (l.headerRow < 0) say("info", `Couldn't find column headings in ${f.name}. Pick what each column is under "Columns"; the app remembers it for next time.`);
       else say("info", `${plural(res.rows.length, "row")} read from ${f.name}.${res.skipped.length ? ` ${plural(res.skipped.length, "line")} left out (totals, groups, blanks).` : ""} Check them, then save.`);
@@ -133,7 +135,11 @@ export default function Inventory({ locations, products, aliases, stock, officer
   function restore(s: Skipped) { if (s.row) { setRows(rs => [...rs, s.row!]); setSkipped(ss => ss.filter(x => x !== s)); } }
   /** Files chosen together wait here and open one after another. */
   const [queue, setQueue] = useState<File[]>([]);
-  function nextFile() { if (!queue.length) return; const [f, ...rest] = queue; setQueue(rest); onFile(f); }
+  /** Which file of the batch is open (for the progress bar), and Save All mode. */
+  const [fileNo, setFileNo] = useState(0), [fileTotal, setFileTotal] = useState(0);
+  const [auto, setAuto] = useState(false), [autoLog, setAutoLog] = useState<{ file: string; ok: boolean; text: string }[]>([]);
+  function nextFile() { if (!queue.length) return; const [f, ...rest] = queue; setQueue(rest); setFileNo(n => n + 1); onFile(f); }
+  function startFiles(list: File[]) { const [f, ...rest] = list; if (!f) return; setQueue(rest); setFileNo(1); setFileTotal(list.length); setAutoLog([]); setAuto(false); onFile(f); }
   // DSR products not yet in the product list (so stock files can match the DSR names and rates).
   const [dsrMissing, setDsrMissing] = useState(0);
   useEffect(() => {
@@ -352,7 +358,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     : problemRows.length ? `${problemRows.length} row${problemRows.length > 1 ? "s" : ""} need fixing: see the red "Check" column${unknownLocs.length || unknownSOs.length || (type === "COUNT" && !holderLoc) ? " and the yellow box above the table" : ""}.`
     : "";
 
-  async function post(allowDuplicate = false): Promise<void> {
+  async function post(allowDuplicate = false, quiet = false): Promise<void> {
     if (!supabase) return;
     if (blocker) {
       say("err", blocker);
@@ -363,7 +369,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const what = type === "COUNT" ? `Set stock at ${holderLoc?.name} to the counted quantities of ${send.length} products?`
       : type === "SO" ? `Save ${send.length} SO report lines?`
       : `Save ${plural(send.length, "row")} of stock ${type === "IN" ? "received" : "sent out"}${nTransfers ? `, including ${plural(nTransfers, "transfer")} between your locations` : ""}?`;
-    if (!allowDuplicate && !await ask(`${what}${newProducts ? `\n\n${plural(newProducts, "new product")} will be created.` : ""}${nExcluded ? (type === "COUNT" ? `\n\n${plural(nExcluded, "product")} with none in stock ${nExcluded === 1 ? "is" : "are"} left as ${nExcluded === 1 ? "it is" : "they are"}.` : `\n\n${plural(nExcluded, "row")} already recorded will be skipped.`) : ""}`)) return;
+    if (!allowDuplicate && !quiet && !await ask(`${what}${newProducts ? `\n\n${plural(newProducts, "new product")} will be created.` : ""}${nExcluded ? (type === "COUNT" ? `\n\n${plural(nExcluded, "product")} with none in stock ${nExcluded === 1 ? "is" : "are"} left as ${nExcluded === 1 ? "it is" : "they are"}.` : `\n\n${plural(nExcluded, "row")} already recorded will be skipped.`) : ""}`)) return;
     setBusy("Saving…"); setStatus({ kind: "info", text: "Saving…" });
     const clean = send.map(({ include: _, ...r }) => ({ ...r, distributor: r.distributor.trim(), sku: r.sku.trim(), item_name: r.item_name.trim(), retailer: r.retailer.trim(), so: r.so.trim() }));
     const common = { p_source_file: file?.name ?? "manual entry", p_file_hash: file?.hash ?? null, p_allow_duplicate: allowDuplicate || type === "COUNT" };
@@ -375,6 +381,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     setBusy("");
     if (error) {
       if (error.message.startsWith("DUPLICATE_FILE")) {
+        if (quiet) { logAuto(false, "already saved before; skipped so it isn't counted twice"); clearAll(); if (queue.length) setTimeout(nextFile, 200); else setAuto(false); return; }
         if (await ask(`${error.message.replace("DUPLICATE_FILE: ", "")}.\n\nSaving it again will count it twice. Save anyway?`)) return post(true);
         return say("err", "Not saved: this file was already posted.");
       }
@@ -393,8 +400,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
       const so = matchSO(sheetInfo.person, officers);
       if (so) await supabase.from("distributors").update({ so_id: so.id }).eq("id", holderLoc.id);
     }
+    if (auto) logAuto(true, msg);
     clearAll(); say("ok", queue.length ? `${msg} Opening the next file…` : msg);
-    if (queue.length) setTimeout(nextFile, 300);
+    if (queue.length) { setBusy("Opening the next file…"); setTimeout(nextFile, 300); }
+    else if (auto) { setAuto(false); setFileTotal(0); }
     await onPosted();
   }
 
@@ -408,6 +417,20 @@ export default function Inventory({ locations, products, aliases, stock, officer
     retailer: type === "IN" ? "Received from" : type === "OUT" ? "Sent to" : "Retailer",
     sku: "SKU", item_name: "Product (as in file)", quantity: type === "COUNT" ? "Counted qty" : "Qty", unit_price: "Rate",
   };
+  const posting = useRef(false);
+  function logAuto(ok: boolean, text: string) { setAutoLog(l => [...l, { file: file?.name || "file", ok, text }]); }
+  useEffect(() => {
+    if (!auto || busy || !file || !rows.length) return;
+    if (blocker) {
+      setAuto(false);
+      logAuto(false, `needs a look: ${blocker}`);
+      say("err", `Save All stopped at ${file.name}: ${blocker} Fix it and press Save, then Save All again for the rest.`);
+      return;
+    }
+    // Wait for the rows to settle (products matched by similar name update them), then save once.
+    const t = window.setTimeout(() => { if (!posting.current) { posting.current = true; post(false, true).finally(() => { posting.current = false; }); } }, 600);
+    return () => window.clearTimeout(t);
+  }, [auto, busy, file?.hash, rows, blocker]);
   const saveLabel = type === "COUNT" ? "Save stock count" : type === "SO" ? "Save SO report" : `Save stock ${type === "IN" ? "received" : "sent out"}`;
   const info = TYPES.find(t => t.id === type)!;
   const locOptions = (skipGodowns: boolean) => KINDS.filter(k => !(skipGodowns && k === "GODOWN")).map(k => <optgroup key={k} label={KIND_PLURAL[k]}>
@@ -420,8 +443,15 @@ export default function Inventory({ locations, products, aliases, stock, officer
 
     <section className="card upload">
       <div className="rowhead"><div><h2>Upload a file</h2><p>Drop in any stock file. The app works out what it is and whose stock it is; check its guess below.</p></div></div>
+      {(busy || auto) && <div className="progress" role="status" aria-live="polite">
+        <div className="lbl"><span>{busy || (auto ? "Checking the next file…" : "")}</span>{fileTotal > 1 && <span>File {Math.min(fileNo, fileTotal)} of {fileTotal}{auto ? " · saving all" : ""}</span>}</div>
+        <div className="track"><div className={`fill${fileTotal > 1 ? "" : " indet"}`} style={{ width: `${fileTotal > 1 ? Math.round(((fileNo - (busy === "Saving…" ? 0.5 : 1)) / fileTotal) * 100) : 35}%` }} /></div>
+        {auto && <button className="link" onClick={() => setAuto(false)}>Stop After This File</button>}
+      </div>}
+      {autoLog.length > 0 && <details className="rsec"><summary>Save All: {autoLog.filter(x => x.ok).length} saved{autoLog.some(x => !x.ok) ? `, ${autoLog.filter(x => !x.ok).length} need a look` : ""}</summary>
+        <div className="rsecbody tablewrap"><table className="nice"><tbody>{autoLog.map((x, i) => <tr key={i}><td>{x.file}</td><td className={`wrap ${x.ok ? "ok" : "err"}`}>{x.text}</td></tr>)}</tbody></table></div></details>}
       <label className="drop">
-        <input type="file" multiple accept={ACCEPT} disabled={!!busy} onChange={e => { const [f, ...rest] = [...(e.target.files || [])]; if (f) { onFile(f); setQueue(rest); } e.target.value = ""; }} />
+        <input type="file" multiple accept={ACCEPT} disabled={!!busy || auto} onChange={e => { startFiles([...(e.target.files || [])]); e.target.value = ""; }} />
         <b>{busy || "Choose files"}</b>
         <small>Your Excel format, any Excel / CSV, Tally exports (Excel, XML, JSON, HTML, TXT, PDF), scanned PDFs, photos, SO daily sheets</small>
       </label>
@@ -472,7 +502,9 @@ export default function Inventory({ locations, products, aliases, stock, officer
     {(rows.length > 0 || skipped.length > 0) && <section className="card" ref={reviewRef}>
       <div className="rowhead"><h2>Review ({plural(rows.length, "row")}{problemRows.length ? `, ${problemRows.length} need fixing` : ""}{nExcluded ? `, ${nExcluded} already recorded` : ""})</h2>
         <div className="actions"><button className="secondary" onClick={clearAll}>Clear</button>
-          <button onClick={() => post()} disabled={!!busy || !rows.length}>{busy === "Saving…" ? "Saving…" : saveLabel}</button></div></div>
+          <button onClick={() => post()} disabled={!!busy || !rows.length}>{busy === "Saving…" ? "Saving…" : saveLabel}</button>
+        {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}
+          {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}</div></div>
       {status && <div className={`status ${status.kind}`}>{status.text}</div>}
       {!status && blocker && rows.length > 0 && <div className="status err">{blocker}</div>}
       {canManage && newProducts > 0 && dsrMissing > 0 && (type === "COUNT" || type === "IN") && <div className="warn">{plural(newProducts, "product name")} in this file {newProducts === 1 ? "isn't" : "aren't"} in your product list, and {plural(dsrMissing, "DSR product")} {dsrMissing === 1 ? "hasn't" : "haven't"} been added yet. Add the DSR products first so the names match instead of creating new ones.

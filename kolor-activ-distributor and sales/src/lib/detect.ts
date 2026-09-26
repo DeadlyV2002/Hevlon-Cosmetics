@@ -26,6 +26,17 @@ const CLOSING_LABEL = /(^| )(closing|stock in hand|soh|physical stock|current st
 /** When no name matches exactly: the distributor whose distinctive words (allowing small spelling
  * differences) appear in the heading or file name, helped by its town appearing there too. */
 function nearDistributor(title: string, locations: Distributor[]): string {
+  // First: the whole name with spaces removed ("G A ENTERPRISES" = "GA Enterprises"), preferring one whose town is there too.
+  const flat = normName(title).replace(/ /g, "");
+  let flatBest = "", flatScore = 0;
+  for (const d of locations) {
+    const town = d.territory ? flat.includes(normName(d.territory).replace(/ /g, "")) : false;
+    for (const n of [d.name, d.company_name || "", ...(d.aliases || [])]) {
+      const k = normName(n).replace(/ /g, "");
+      if (k.length >= 6 && flat.includes(k)) { const sc = k.length + (town ? 100 : 0); if (sc > flatScore) { flatScore = sc; flatBest = d.code; } }
+    }
+  }
+  if (flatBest) return flatBest;
   const words = normName(title).split(" ").filter(Boolean);
   let best = "", score = 0, tie = false;
   for (const d of locations) {

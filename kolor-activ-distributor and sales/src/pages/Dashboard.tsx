@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ask } from "../lib/ask";
 import { supabase, errText, fetchAll, money, fmt, plural } from "../lib/supabase";
 import { localDate } from "../lib/parse";
 import { ChartConfig, ChartData, ChartKind, Ctx, KIND_SPECS, chartTitle, cleanCharts, defaultCharts, newChart } from "../lib/insights";
@@ -130,7 +131,7 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
       <p className="hint">Click a chart to enlarge it and customise it. 📌 pins a chart so it stays in place; unpinned charts take turns below. Values update whenever new data is entered.</p>
       <div className="actions">
         <button className="secondary" onClick={() => setGallery(true)}>+ Add a chart</button>
-        <button className="secondary" onClick={() => { if (confirm("Put back the ten starting charts? Your changes to charts are lost.")) save(defaultCharts()); }}>Reset charts</button>
+        <button className="secondary" onClick={async () => { if (await ask("Put back the ten starting charts? Your changes to charts are lost.")) save(defaultCharts()); }}>Reset charts</button>
       </div>
     </div>
     <Kpis ctx={ctx} version={version} />
@@ -146,7 +147,7 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
 
     {openChart && <Overlay chart={openChart} ctx={ctx} version={version} editing={editing} setEditing={setEditing} onClose={close}
       first={idx === 0} last={idx === charts.length - 1} onChange={update} onMove={move}
-      onRemove={() => { if (confirm(`Remove "${chartTitle(openChart)}" from your dashboard?`)) { save(charts.filter(c => c.id !== openChart.id)); close(); } }} />}
+      onRemove={async () => { if (await ask(`Remove "${chartTitle(openChart)}" from your dashboard?`)) { save(charts.filter(c => c.id !== openChart.id)); close(); } }} />}
     {gallery && <Gallery charts={charts} onClose={() => setGallery(false)}
       onAdd={kind => { const c = newChart(kind); save([...charts, c]); setGallery(false); setOpenId(c.id); setEditing(true); }} />}
   </>;

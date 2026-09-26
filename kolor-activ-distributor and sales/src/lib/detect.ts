@@ -97,3 +97,26 @@ export function detectFile(grid: Grid, layout: Layout, heading: string, fileName
   if (type === "SO" && so) reasons.push(`SO ${so.name} is named in the heading or file name`);
   return { type, sure, holder, so: so?.code || "", reasons };
 }
+
+// ---------- the details block above a closing stock table ----------
+export interface SheetInfo { name: string; town: string; person: string; post: string; hq: string; month: string; date: string }
+const INFO: [keyof SheetInfo, RegExp][] = [
+  ["name", /(?:ss\s*\/\s*db|db|distributor|stockist|ss|party|firm)\s*name/i], ["town", /\b(?:town|city|place)\b/i],
+  ["person", /\b(so|ase|asm|tso|isr|sr|salesman)\s*name/i], ["hq", /\bh\.?\s*q\b|head\s*quarter/i],
+  ["date", /stock\s*taking\s*date|\bdate\b/i], ["month", /\bmonth\b/i],
+];
+/** Reads "Label: value" details (DB name, town, SO/ASE, HQ, month, date) from the rows above the table headings. */
+export function readSheetInfo(grid: Grid, headerRow: number): SheetInfo {
+  const out: SheetInfo = { name: "", town: "", person: "", post: "", hq: "", month: "", date: "" };
+  const rows = grid.slice(0, Math.max(0, headerRow < 0 ? 10 : headerRow)).map(r => r.map(cellText).filter(Boolean).join("  "));
+  for (const text of rows) {
+    // Every label found on the line, in order; each value runs to the next label.
+    const hits = INFO.flatMap(([k, re]) => { const m = re.exec(text); return m ? [{ k, at: m.index, end: m.index + m[0].length, post: m[1] || "" }] : []; })
+      .sort((a, b) => a.at - b.at).filter((h, i, all) => !all.some((o, j) => j !== i && o.at <= h.at && o.end >= h.end && (o.at < h.at || o.end > h.end)));
+    hits.forEach((h, i) => {
+      const value = text.slice(h.end, hits[i + 1]?.at ?? text.length).replace(/^[\s:.\-–]+/, "").replace(/\s+/g, " ").trim();
+      if (value && !out[h.k]) { out[h.k] = value; if (h.k === "person") out.post = h.post.toUpperCase(); }
+    });
+  }
+  return out;
+}

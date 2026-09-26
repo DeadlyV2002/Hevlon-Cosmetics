@@ -1,4 +1,5 @@
 import { Select } from "../components/Select";
+import { ask } from "../lib/ask";
 import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
@@ -19,14 +20,15 @@ interface Props {
   onChanged: () => Promise<void>; notify: (m: string) => void;
 }
 
-type DField = "code" | "name" | "company_name" | "owner_name" | "super_stockist" | "ss_town" | "so" | "state" | "region" | "territory" | "phone" | "email" | "aliases";
+type DField = "status" | "code" | "name" | "company_name" | "owner_name" | "super_stockist" | "ss_town" | "so" | "state" | "region" | "territory" | "phone" | "email" | "aliases";
 const D_LABELS: Record<DField | "ignore", string> = {
   ignore: "— ignore —", code: "Code", name: "Name", company_name: "Company name", owner_name: "Owner name", super_stockist: "Super stockist",
   state: "State", region: "Region", territory: "City / area", phone: "Phone", aliases: "Other names",
-  ss_town: "Super stockist's town", so: "SO / ASE", email: "Email",
+  ss_town: "Super stockist's town", so: "SO / ASE", email: "Email", status: "Active / dormant",
 };
 // First match wins, so the specific columns come before plain "name".
 const D_RULES: [DField, RegExp][] = [
+  ["status", /^(status|active|dormant|active dormant|working|state of account)$/],
   // The DB List sheet: S.No, State, SO/ASE Name, HQ, SS Name, SS Town, DB Name, DB Town, Contact.No, Contact Person, Email.
   ["name", /^(db|distributor|dist)( name)?$/],
   ["so", /^(so|ase|tsi|asm|so ase|sales ?officer|salesman)( name)?$/],
@@ -60,6 +62,15 @@ export default function Distributors({ locations, stock, retailers, officers, co
   const [scope, setScope] = useState<Scope>(emptyScope("DISTRIBUTOR"));
   const [search, setSearch] = useState("");
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
+  const [showStatus, setShowStatus] = useState<"ALL" | "ACTIVE" | "DORMANT">("ALL");
+  async function toggleStatus(d: Distributor) {
+    if (!supabase) return;
+    const next = d.status === "DORMANT" ? "ACTIVE" : "DORMANT";
+    if (!await ask(next === "DORMANT" ? `Mark ${d.name} as dormant? Their history stays; they get no stock reminders and can be hidden from lists.` : `Mark ${d.name} as active again?`, { ok: next === "DORMANT" ? "Mark Dormant" : "Mark Active" })) return;
+    const { error } = await supabase.from("distributors").update({ status: next }).eq("id", d.id);
+    if (error) return show("err", error.code === "42501" ? "Only HO admins and state managers can change this." : `Not changed: ${error.message}. Run database step 012.`);
+    show("ok", `${d.name} is now ${next === "DORMANT" ? "dormant" : "active"}.`); await onChanged();
+  }
   const [openComments, setOpenComments] = useState<string | null>(null);
   const [report, setReport] = useState<Distributor | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -97,7 +108,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
   const incomplete = (d: Distributor) => missingFields(d);
 
   const ofKind = locations.filter(d => d.kind === tab);
-  const list = applyScope(ofKind, scope).filter(d => (!onlyIncomplete || incomplete(d).length)
+  const list = applyScope(ofKind, scope).filter(d => (!onlyIncomplete || incomplete(d).length) && (showStatus === "ALL" || (d.status || "ACTIVE") === showStatus)
     && `${d.code} ${d.name} ${d.company_name || ""} ${d.owner_name || ""} ${d.state || ""} ${d.region || ""} ${d.territory || ""} ${d.phone || ""} ${(d.aliases || []).join(" ")}`.toLowerCase().includes(search.toLowerCase()));
   const nIncomplete = ofKind.filter(d => incomplete(d).length).length;
 
@@ -125,7 +136,9 @@ export default function Distributors({ locations, stock, retailers, officers, co
     const col = (f: DField) => preview.mapping.indexOf(f);
     const aliasCols = preview.mapping.map((m, i) => (m === "aliases" ? i : -1)).filter(i => i >= 0);
     const byCode = new Map(locations.map(d => [d.code.toUpperCase(), d]));
-    const byName = new Map(locations.filter(d => d.kind === tab).map(d => [normName(d.name), d]));
+    const sameKind = locations.filter(d => d.kind === tab);
+    const byNameTown = new Map(sameKind.map(d => [`${normName(d.name)}|${normName(d.territory || "")}`, d]));
+    const byName = new Map<string, Distributor[]>(); sameKind.forEach(d => byName.set(normName(d.name), [...(byName.get(normName(d.name)) || []), d]));
     const supers = locations.filter(d => d.kind === "SUPER_STOCKIST");
     const taken: { code: string }[] = [...locations];
     const seen = new Set<string>();
@@ -137,7 +150,9 @@ export default function Distributors({ locations, stock, retailers, officers, co
       let code = v("code").toUpperCase();
       const byC = code ? byCode.get(code) : undefined;
       if (byC && byC.kind !== tab) code = ""; // that code belongs to another type
-      const existing = (byC && byC.kind === tab ? byC : undefined) || byName.get(normName(name));
+      const town = proper(v("territory")), named = byName.get(normName(name)) || [];
+      const existing = (byC && byC.kind === tab ? byC : undefined) || byNameTown.get(`${normName(name)}|${normName(town)}`)
+        || (named.length === 1 && (!town || !named[0].territory || normName(named[0].territory) === normName(town)) ? named[0] : undefined);
       if (!code) code = existing?.code || nextCode(tab, taken);
       if (seen.has(code)) code = nextCode(tab, taken);
       seen.add(code); taken.push({ code });
@@ -155,6 +170,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
         ...(tab === "DISTRIBUTOR" ? { so_id: so?.id || existing?.so_id || null } : {}),
         super_stockist: tab === "DISTRIBUTOR" ? ssName || existing?.super_stockist || null : null,
         aliases: [...new Set([...(existing?.aliases || []), ...aliasCols.flatMap(i => splitAliases(cellText(r[i])))])],
+        status: v("status") ? (/dormant|inactive|closed|drop|left|stop|no/i.test(v("status")) ? "DORMANT" : "ACTIVE") : existing?.status || "ACTIVE",
       };
       out.push({ status: existing ? "update" : "new", missing: missingFields({ ...row, parent_id: parent_id || newSS }), newSS, ssTown: proper(v("ss_town")), newSO: soName && !so ? soName : "", row });
     }
@@ -235,6 +251,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
     { key: "units", label: "Stock Units", value: x => Math.round(totals.get(x.id)?.units || 0), num: true },
     { key: "value", label: "Value ₹", value: x => Math.round(totals.get(x.id)?.value || 0), num: true },
     { key: "last", label: "Last Movement", value: x => totals.get(x.id)?.last || null },
+    { key: "status", label: "Status", value: x => (x.status === "DORMANT" ? "Dormant" : "Active") },
   ];
   const dt = useColumnFilters(list, dcols);
   const commentsFor = openComments ? byId.get(openComments) : undefined;
@@ -286,6 +303,8 @@ export default function Distributors({ locations, stock, retailers, officers, co
       <div className="rowhead"><h2>{KIND_PLURAL[tab]} ({list.length}{list.length !== ofKind.length ? ` of ${ofKind.length}` : ""})</h2>
         <div className="actions">
           <input className="search" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
+          <div className="seg" role="group" aria-label="Show">{(["ALL", "ACTIVE", "DORMANT"] as const).map(k => <button key={k} className={showStatus === k ? "on" : ""} onClick={() => setShowStatus(k)}>
+            {k === "ALL" ? `All (${ofKind.length})` : k === "ACTIVE" ? `Active (${ofKind.filter(x => x.status !== "DORMANT").length})` : `Dormant (${ofKind.filter(x => x.status === "DORMANT").length})`}</button>)}</div>
           {nIncomplete > 0 && <label className="inline"><input type="checkbox" checked={onlyIncomplete} onChange={e => setOnlyIncomplete(e.target.checked)} /> Only incomplete ({nIncomplete})</label>}
         </div></div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={[tab]} rank={rank} saveKey={`distributors-${tab}`} />
@@ -295,6 +314,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
           const miss = incomplete(d);
           return <tr key={d.id}>{dcols.map(c => <td key={c.key} className={["company", "phone", "aliases"].includes(c.key) ? "wrap" : ""}>
             {c.key === "name" ? <><button className="link strong" onClick={() => setReport(d)}>{d.name}</button>{miss.length > 0 && <small className="missing">missing: {miss.join(", ")}</small>}</>
+              : c.key === "status" ? <button className={`statuspill ${d.status === "DORMANT" ? "dormant" : "active"}`} disabled={!canManage} title={canManage ? "Click to change" : undefined} onClick={() => toggleStatus(d)}>{d.status === "DORMANT" ? "Dormant" : "Active"}</button>
               : c.key === "value" ? fmt(c.value(d)) : c.key === "units" ? fmt(c.value(d)) : c.value(d) ?? ""}</td>)}
             <td><button className="secondary small" onClick={() => setOpenComments(d.id)}>💬 {count(d.id)}</button></td>
             {canManage && <td className="actions"><button className="secondary small" onClick={() => { setEditing(d); setMsg(null); toForm(); }}>Edit</button>

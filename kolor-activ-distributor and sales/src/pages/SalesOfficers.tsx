@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ask } from "../lib/ask";
 import { supabase, SalesOfficer, fmt, errText } from "../lib/supabase";
 
 interface Report { id: string; created_at: string; source_file: string | null; lines: number; units: number; from_date: string | null; to_date: string | null; so_names: string | null }
@@ -13,7 +14,7 @@ export default function SalesOfficers({ officers, canManage, onChanged, notify }
   }
   useEffect(() => { loadReports(); }, [officers]);
   async function undo(r: Report) {
-    if (!supabase || !confirm(`Remove this SO report (${r.lines} lines from ${r.source_file || "manual entry"})?`)) return;
+    if (!supabase || !await ask(`Remove this SO report (${r.lines} lines from ${r.source_file || "manual entry"})?`)) return;
     const { error } = await supabase.rpc("delete_so_report", { p_report: r.id });
     if (error) return notify(`Undo failed: ${errText(error)}`);
     notify("SO report removed."); await loadReports(); await onChanged();

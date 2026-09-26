@@ -8,6 +8,7 @@ import { useColumnFilters, Col } from "../components/ColumnFilter";
 import { ChartView } from "../components/Charts";
 import { ChartData } from "../lib/insights";
 import Staff, { rankOf } from "../components/Staff";
+import SOReport from "../components/SOReport";
 import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
 import { readDsr, mergeBooks, DsrBook, DsrDay } from "../lib/dsr";
 import { exportPng } from "../lib/present";
@@ -39,6 +40,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
   const [check, setCheck] = useState<Checked | null>(null), [replaceChanged, setReplaceChanged] = useState(false);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [report, setReport] = useState<Distributor | null>(null);
+  const [person, setPerson] = useState<SalesOfficer | null>(null);
   const charts = useRef<HTMLDivElement>(null);
   const byId = useMemo(() => new Map(officers.map(o => [o.id, o])), [officers]);
   const locById = useMemo(() => new Map(locations.map(l => [l.id, l])), [locations]);
@@ -172,7 +174,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
   const node = (o: SalesOfficer, depth: number): JSX.Element => {
     const t = teamTotal(o.id), s = sumOf.get(o.id), sub = (kids.get(o.id) || []).map(id => byId.get(id)!).filter(x => x && inView.has(x.id) && (showIdle || hasData(x.id))).sort((a, b) => rankOf(a.designation) - rankOf(b.designation) || teamTotal(b.id).v - teamTotal(a.id).v);
     return <div key={o.id} className={`st-node d${depth}${focus === o.id ? " on" : ""}`}>
-      <button className="st-head" onClick={() => setFocus(focus === o.id ? "" : o.id)} title="Show this person and their team">
+      <button className="st-head" onClick={() => setPerson(o)} title="Open their report">
         <span className={`st-post p-${o.designation || "SO"}`}>{o.designation || "SO"}</span><b>{o.name}</b><small>{o.hq || o.region || ""}</small>
         <span className="st-num">{money(t.v)}<small>{t.c ? `${fmt(pct(t.p, t.c))}% PC` : "no calls"}{s ? ` · ${working(s)} days · ${plural(dbCount.get(o.id)?.size || 0, "DB")}` : ""}</small></span>
       </button>
@@ -326,7 +328,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
       <div className="rowhead"><h2>Performance</h2>{st.active > 0 && <button className="link" onClick={st.clear}>Clear Filters</button>}</div>
       {sums.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{scols.map(c => st.head(c.key))}</tr></thead>
         <tbody>{st.rows.map(s => <tr key={s.soId} className={s.flag ? "flagged" : ""}>{scols.map(c => <td key={c.key} className={c.key === "flag" ? "wrap" : ""}>
-          {c.key === "so" ? <button className="link strong" onClick={() => setFocus(s.soId)}>{s.so?.name || "Unknown"}</button> : c.key === "flag" ? s.flag && <span className="err">{s.flag}</span>
+          {c.key === "so" ? <button className="link strong" onClick={() => s.so && setPerson(s.so)}>{s.so?.name || "Unknown"}</button> : c.key === "flag" ? s.flag && <span className="err">{s.flag}</span>
             : c.key === "value" || c.key === "perday" ? money(c.value(s)) : c.key === "strike" ? `${c.value(s)}%` : c.value(s)}</td>)}</tr>)}</tbody></table></div>
         : <p className="empty">No daily reports in this period for this selection.</p>}
     </section>}
@@ -398,6 +400,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     </section>}
 
     {tab === "staff" && <Staff officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />}
+    {person && <SOReport so={person} officers={officers} locations={locations} stock={stock} onClose={() => setPerson(null)} onTeam={id => { setFocus(id); setTab("team"); }} />}
     {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} onClose={() => setReport(null)} />}
   </>;
 }

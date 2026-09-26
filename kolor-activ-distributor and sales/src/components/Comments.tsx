@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ask } from "../lib/ask";
 import { supabase, Distributor, errText } from "../lib/supabase";
 
 interface Comment { id: string; body: string; author_id: string | null; author_email: string | null; created_at: string }
@@ -28,7 +29,7 @@ export default function Comments({ location, userId, canManage, onCount }: { loc
     setText(""); await load();
   }
   async function remove(c: Comment) {
-    if (!supabase || !confirm("Delete this comment?")) return;
+    if (!supabase || !await ask("Delete this comment?")) return;
     const { data, error } = await supabase.from("distributor_comments").delete().eq("id", c.id).select("id");
     if (error || !data?.length) return setErr(error ? `Could not delete: ${error.message}` : "Only the author or an HO admin / state manager can delete this.");
     await load();

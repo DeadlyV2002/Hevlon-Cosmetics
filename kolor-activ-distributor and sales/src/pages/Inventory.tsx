@@ -1,4 +1,5 @@
 import { Select, Combo } from "../components/Select";
+import { ask } from "../lib/ask";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mode, Row, Field, Table, Layout, Skipped, FIELD_LABELS, emptyRow, today, localDate, isValidDate,
@@ -6,11 +7,11 @@ import {
 } from "../lib/parse";
 import { readAnyFile, fileHash, ACCEPT } from "../lib/readers";
 import { guessProduct } from "../lib/fuzzy";
+import { readSheetInfo, SheetInfo } from "../lib/detect";
 import { detectFile, Detection, FileType } from "../lib/detect";
 import {
   supabase, Distributor, Product, ProductAlias, StockLine, SalesOfficer, Retailer, Kind, KINDS, KIND_LABEL, KIND_PLURAL,
-  matchDistributor, matchProduct, matchSO, fetchAll, fmt, plural, errText,
-} from "../lib/supabase";
+  matchDistributor, matchProduct, matchSO, fetchAll, fmt, plural, errText, proper } from "../lib/supabase";
 import StockDownload from "../components/StockDownload";
 import MoveStock from "../components/MoveStock";
 import LocationForm from "../components/LocationForm";
@@ -55,6 +56,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [existing, setExisting] = useState<Existing[]>([]);
   const [status, setStatus] = useState<{ kind: "err" | "ok" | "info"; text: string } | null>(null);
   const [adding, setAdding] = useState<{ name: string; kind: Kind } | null>(null);
+  /** Details printed above a closing stock table: DB name, town, SO/ASE, HQ, month, stock date. */
+  const [sheetInfo, setSheetInfo] = useState<SheetInfo | null>(null);
   const [fix, setFix] = useState<Record<string, string>>({});
   const reviewRef = useRef<HTMLDivElement>(null);
 
@@ -83,6 +86,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const g = t.sheets[sh]?.grid || [];
     const { l, saved } = await layoutFor(g, MODE_OF[tp]);
     const heading = titleText(g, l);
+    const si = readSheetInfo(g, l.headerRow);
+    setSheetInfo(si.name || si.town || si.person || si.hq ? si : null);
     let h = holder, so = soDefault, d = date;
     if (det) { h = det.holder; so = det.so; d = headingDate(`${heading} ${f?.name || ""}`) || today(); }
     setHolder(h); setSoDefault(so); setDate(d);
@@ -129,7 +134,26 @@ export default function Inventory({ locations, products, aliases, stock, officer
   /** Files chosen together wait here and open one after another. */
   const [queue, setQueue] = useState<File[]>([]);
   function nextFile() { if (!queue.length) return; const [f, ...rest] = queue; setQueue(rest); onFile(f); }
-  function clearAll() { setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
+  // DSR products not yet in the product list (so stock files can match the DSR names and rates).
+  const [dsrMissing, setDsrMissing] = useState(0);
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.from("dsr_products").select("name").then(({ data }) => {
+      const have = new Set(products.flatMap(p => [normName(p.item_name), normName(p.sku)]));
+      setDsrMissing(((data || []) as { name: string }[]).filter(d => !have.has(normName(d.name))).length);
+    });
+  }, [products]);
+  async function addDsrProducts() {
+    if (!supabase) return;
+    setBusy("dsr");
+    const { data, error } = await supabase.rpc("products_from_dsr");
+    setBusy("");
+    if (error) return say("err", `Couldn't add the DSR products: ${errText(error)}`);
+    say("ok", `Added ${plural((data as { added: number }).added, "product")} from the DSR price list. Rows now match by name and rate.`);
+    guessed.current = "";
+    await onListsChanged();
+  }
+  function clearAll() { setSheetInfo(null); setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
 
   /** "This name in the file = that existing product": applied to every row with the same name and remembered on save. */
   const guessed = useRef("");
@@ -339,10 +363,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const what = type === "COUNT" ? `Set stock at ${holderLoc?.name} to the counted quantities of ${send.length} products?`
       : type === "SO" ? `Save ${send.length} SO report lines?`
       : `Save ${plural(send.length, "row")} of stock ${type === "IN" ? "received" : "sent out"}${nTransfers ? `, including ${plural(nTransfers, "transfer")} between your locations` : ""}?`;
-    if (!allowDuplicate && !confirm(`${what}${newProducts ? `\n\n${plural(newProducts, "new product")} will be created.` : ""}${nExcluded ? `\n\n${plural(nExcluded, "row")} already recorded will be skipped.` : ""}`)) return;
+    if (!allowDuplicate && !await ask(`${what}${newProducts ? `\n\n${plural(newProducts, "new product")} will be created.` : ""}${nExcluded ? (type === "COUNT" ? `\n\n${plural(nExcluded, "product")} with none in stock ${nExcluded === 1 ? "is" : "are"} left as ${nExcluded === 1 ? "it is" : "they are"}.` : `\n\n${plural(nExcluded, "row")} already recorded will be skipped.`) : ""}`)) return;
     setBusy("Saving…"); setStatus({ kind: "info", text: "Saving…" });
     const clean = send.map(({ include: _, ...r }) => ({ ...r, distributor: r.distributor.trim(), sku: r.sku.trim(), item_name: r.item_name.trim(), retailer: r.retailer.trim(), so: r.so.trim() }));
-    const common = { p_source_file: file?.name ?? "manual entry", p_file_hash: file?.hash ?? null, p_allow_duplicate: allowDuplicate };
+    const common = { p_source_file: file?.name ?? "manual entry", p_file_hash: file?.hash ?? null, p_allow_duplicate: allowDuplicate || type === "COUNT" };
     const { data, error } = type === "COUNT"
       ? await supabase.rpc("post_stock_count", { p_distributor: holderLoc!.code, p_rows: clean, p_date: date, ...common })
       : type === "SO"
@@ -351,7 +375,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     setBusy("");
     if (error) {
       if (error.message.startsWith("DUPLICATE_FILE")) {
-        if (confirm(`${error.message.replace("DUPLICATE_FILE: ", "")}.\n\nSaving it again will count it twice. Save anyway?`)) return post(true);
+        if (await ask(`${error.message.replace("DUPLICATE_FILE: ", "")}.\n\nSaving it again will count it twice. Save anyway?`)) return post(true);
         return say("err", "Not saved: this file was already posted.");
       }
       return say("err", `Save failed: ${error.message}`);
@@ -365,6 +389,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const msg = type === "COUNT" ? `Stock count saved for ${holderLoc?.name}: ${data.increased} products up, ${data.decreased} down, ${data.unchanged} unchanged. Undo is on the History page.`
       : type === "SO" ? `Saved ${plural(data.posted_rows, "SO report line")}. The SO checks page compares them with distributor stock.`
       : `Saved ${plural(data.posted_rows, "row")}${data.transfers ? `, including ${plural(data.transfers, "transfer")}` : ""}.${skippedNote} Undo is on the History page.`;
+    if (type === "COUNT" && holderLoc && !holderLoc.so_id && sheetInfo?.person) {
+      const so = matchSO(sheetInfo.person, officers);
+      if (so) await supabase.from("distributors").update({ so_id: so.id }).eq("id", holderLoc.id);
+    }
     clearAll(); say("ok", queue.length ? `${msg} Opening the next file…` : msg);
     if (queue.length) setTimeout(nextFile, 300);
     await onPosted();
@@ -399,6 +427,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
       </label>
       {queue.length > 0 && <p className="hint">{queue.length} more {queue.length === 1 ? "file is" : "files are"} waiting: {queue.map(f => f.name).join(", ")}. Each opens after this one is saved. <button className="link" onClick={nextFile}>Skip To Next File</button></p>}
       <div className="tabs types">{TYPES.map(t => <button key={t.id} className={type === t.id ? "active" : ""} onClick={() => changeType(t.id)}>{t.label}</button>)}</div>
+      {sheetInfo && file && <div className="sheetinfo"><b>From the sheet:</b>
+        {sheetInfo.name && <span><small>SS / DB</small>{sheetInfo.name}</span>}{sheetInfo.town && <span><small>Town</small>{sheetInfo.town}</span>}
+        {sheetInfo.person && <span><small>{sheetInfo.post || "SO"}</small>{sheetInfo.person}</span>}{sheetInfo.hq && <span><small>HQ</small>{sheetInfo.hq}</span>}
+        {sheetInfo.month && <span><small>Month</small>{sheetInfo.month}</span>}{sheetInfo.date && <span><small>Stock date</small>{sheetInfo.date}</span>}</div>}
       {detection && file ? <div className={`detect${detection.sure ? "" : " unsure"}`}>
         <b>{detection.sure ? "Read as" : "Best guess"}: {TYPES.find(t => t.id === detection.type)!.label.toLowerCase()}{type !== detection.type ? ` (you changed it to ${info.label.toLowerCase()})` : ""}</b>
         <small>Because {detection.reasons.join("; ")}.{!detection.sure && " If that's wrong, pick the right type above."}</small>
@@ -443,10 +475,18 @@ export default function Inventory({ locations, products, aliases, stock, officer
           <button onClick={() => post()} disabled={!!busy || !rows.length}>{busy === "Saving…" ? "Saving…" : saveLabel}</button></div></div>
       {status && <div className={`status ${status.kind}`}>{status.text}</div>}
       {!status && blocker && rows.length > 0 && <div className="status err">{blocker}</div>}
+      {canManage && newProducts > 0 && dsrMissing > 0 && (type === "COUNT" || type === "IN") && <div className="warn">{plural(newProducts, "product name")} in this file {newProducts === 1 ? "isn't" : "aren't"} in your product list, and {plural(dsrMissing, "DSR product")} {dsrMissing === 1 ? "hasn't" : "haven't"} been added yet. Add the DSR products first so the names match instead of creating new ones.
+        <button className="secondary small" disabled={busy === "dsr"} onClick={addDsrProducts}>{busy === "dsr" ? "Adding…" : "Add DSR Products"}</button></div>}
 
       {showFixes && <div className="fixbox">
         {(unknownLocs.length > 0 || (type === "COUNT" && !holderLoc)) && <div className="fixgroup">
-          <b>{unknownLocs.length ? `Not in your list: ${unknownLocs.map(n => `"${n}"`).join(", ")}` : "Whose stock is this file? Choose above."}</b>
+          <b>{unknownLocs.length ? `Not in your list: ${unknownLocs.map(n => `"${n}"`).join(", ")}` : sheetInfo?.name ? `"${sheetInfo.name}"${sheetInfo.town ? ` in ${sheetInfo.town}` : ""} isn't in your list. Choose it above if it's listed under another name, or add it.` : "Whose stock is this file? Choose above."}</b>
+          {canManage && !unknownLocs.length && type === "COUNT" && sheetInfo?.name && <div className="fixrow"><span className="fixname">{sheetInfo.name}</span>
+            <label>It is the same as…<Select value={fix[`loc:${sheetInfo.name}`] || ""} onChange={e => setFix({ ...fix, [`loc:${sheetInfo.name}`]: e.target.value })}>
+              <option value="">choose…</option>{locOptions(false)}</Select></label>
+            <button disabled={!fix[`loc:${sheetInfo.name}`]} onClick={() => { saveLocationAlias(sheetInfo.name, fix[`loc:${sheetInfo.name}`]); setAll("distributor", fix[`loc:${sheetInfo.name}`]); }}>Save As Its Other Name</button>
+            <span className="or">or add as new</span>
+            {(["DISTRIBUTOR", "SUPER_STOCKIST"] as Kind[]).map(k => <button key={k} className="secondary small" onClick={() => setAdding({ name: sheetInfo.name, kind: k })}>{KIND_LABEL[k]}</button>)}</div>}
           {canManage && unknownLocs.slice(0, 5).map(name => <div className="fixrow" key={name}>
             <span className="fixname">{name}</span>
             <label>It is the same as…<Select value={fix[`loc:${name}`] || ""} onChange={e => setFix({ ...fix, [`loc:${name}`]: e.target.value })}>
@@ -481,7 +521,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
         </div>}
         {adding && <div className="fixgroup">
           <b>New {KIND_LABEL[adding.kind].toLowerCase()}: all fields marked * are required.</b>
-          <LocationForm key={`${adding.kind}-${adding.name}`} kind={adding.kind} prefillName={adding.name} locations={locations} onCancel={() => setAdding(null)}
+          <LocationForm key={`${adding.kind}-${adding.name}`} kind={adding.kind} prefillName={adding.name} locations={locations} officers={officers} onCancel={() => setAdding(null)}
+            prefill={sheetInfo && normName(sheetInfo.name) === normName(adding.name) ? { territory: proper(sheetInfo.town), region: proper(sheetInfo.hq), so_id: matchSO(sheetInfo.person, officers)?.id || "" } : undefined}
             onSaved={async d => {
               const orig = normName(adding.name);
               const moves = type === "IN" || type === "OUT";

@@ -19,6 +19,8 @@ export interface Distributor {
   company_name: string | null; owner_name: string | null; super_stockist: string | null;
   state: string | null; region: string | null; territory: string | null; phone: string | null;
   aliases: string[]; created_at?: string; email?: string | null; so_id?: string | null;
+  /** ACTIVE, or DORMANT once dropped (kept with its history, left out of reminders). */
+  status?: "ACTIVE" | "DORMANT";
 }
 export interface Retailer { id: string; distributor_id: string | null; code: string | null; name: string; territory: string | null; owner_name: string | null; phone: string | null; created_at: string }
 export interface SalesOfficer {

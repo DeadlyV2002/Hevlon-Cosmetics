@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ask } from "../lib/ask";
 import { supabase, SalesOfficer, validPhone, cleanPhones, proper, properOrNull, plural, errText } from "../lib/supabase";
 import { cellText, normName } from "../lib/parse";
 import { similarity } from "../lib/fuzzy";
@@ -116,7 +117,7 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
     return out;
   }, [officers]);
   async function merge(keep: SalesOfficer, drop: SalesOfficer) {
-    if (!supabase || !confirm(`Merge "${drop.name}" into "${keep.name}"? Their daily reports, distributors and team move to ${keep.name}, and "${drop.name}" is kept as another spelling.`)) return;
+    if (!supabase || !await ask(`Merge "${drop.name}" into "${keep.name}"? Their daily reports, distributors and team move to ${keep.name}, and "${drop.name}" is kept as another spelling.`)) return;
     const { error } = await supabase.rpc("merge_staff", { p_keep: keep.id, p_drop: drop.id });
     if (error) return setMsg({ kind: "err", text: `Not merged: ${errText(error)}` });
     setMsg({ kind: "ok", text: `Merged ${drop.name} into ${keep.name}.` }); await onChanged();

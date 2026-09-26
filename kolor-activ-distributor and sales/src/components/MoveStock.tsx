@@ -1,4 +1,5 @@
 import { Select } from "./Select";
+import { ask } from "../lib/ask";
 import { useMemo, useState } from "react";
 import { supabase, Distributor, Product, StockLine, KINDS, KIND_PLURAL, fmt, plural, errText } from "../lib/supabase";
 import { today } from "../lib/parse";
@@ -37,7 +38,7 @@ export default function MoveStock({ locations, products, stock, onMoved, notify 
 
   async function save() {
     if (!supabase || !fromLoc || !toLoc || !ready) return;
-    if (!confirm(`Move ${plural(units, "unit")} of ${plural(lines.length, "product")} from ${fromLoc.name} to ${toLoc.name}?`)) return;
+    if (!await ask(`Move ${plural(units, "unit")} of ${plural(lines.length, "product")} from ${fromLoc.name} to ${toLoc.name}?`)) return;
     setBusy(true); setMsg(null);
     const rows = lines.map(l => {
       const p = products.find(x => x.id === l.productId)!;

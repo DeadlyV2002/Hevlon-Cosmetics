@@ -17,14 +17,16 @@ interface Props {
   /** The record being edited; leave out to add a new one. The parent should key this form by the record's id. */
   editing?: Distributor | null;
   prefillName?: string;
+  /** Other details to start with, such as the town and SO read from an uploaded sheet. */
+  prefill?: Partial<Form>;
   locations: Distributor[];
   officers?: SalesOfficer[];
   onSaved: (d: Distributor, isNew: boolean) => void | Promise<void>;
   onCancel?: () => void;
 }
 
-export default function LocationForm({ kind, editing, prefillName, locations, officers = [], onSaved, onCancel }: Props) {
-  const [form, setForm] = useState<Form>(() => toForm(editing, prefillName));
+export default function LocationForm({ kind, editing, prefillName, prefill, locations, officers = [], onSaved, onCancel }: Props) {
+  const [form, setForm] = useState<Form>(() => ({ ...toForm(editing, prefillName), ...(editing ? {} : Object.fromEntries(Object.entries(prefill || {}).filter(([, v]) => v))) }));
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const supers = locations.filter(l => l.kind === "SUPER_STOCKIST").sort((a, b) => `${a.state} ${a.name}`.localeCompare(`${b.state} ${b.name}`));

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { ask } from "../lib/ask";
 import { supabase, fmt, errText } from "../lib/supabase";
 
 interface Batch { id: string; created_at: string; mode: string; source_file: string | null; distributor_name: string | null; lines: number; units_in: number; units_out: number; transfer_lines: number }
@@ -25,7 +26,7 @@ export default function History({ canManage, onChanged, notify }: { canManage: b
     if (error) notify(error.message); else setLines(data as Line[]);
   }
   async function undo(b: Batch) {
-    if (!confirm(`Undo this ${MODE_LABEL[b.mode]?.toLowerCase()} posting from ${new Date(b.created_at).toLocaleString("en-IN")}?\n${b.lines} lines will be removed and stock recalculated${b.transfer_lines ? ", at both ends of each transfer" : ""}.`)) return;
+    if (!await ask(`Undo this ${MODE_LABEL[b.mode]?.toLowerCase()} posting from ${new Date(b.created_at).toLocaleString("en-IN")}?\n${b.lines} lines will be removed and stock recalculated${b.transfer_lines ? ", at both ends of each transfer" : ""}.`)) return;
     const { error } = await supabase!.rpc("delete_inventory_batch", { p_batch: b.id });
     if (error) return notify(`Undo failed: ${errText(error)}`);
     notify("Posting undone."); setOpen(null); await load(); await onChanged();

@@ -1,4 +1,5 @@
 import { Select, usePlace } from "./Select";
+import { askText } from "../lib/ask";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Distributor, Kind, KIND_LABEL, KIND_PLURAL } from "../lib/supabase";
 
@@ -110,8 +111,8 @@ function Picker({ pool, picked, value, onChange, rank, saveKey, noun, locations 
   const toggle = (id: string) => onChange({ ...value, ids: ids.has(id) ? value.ids.filter(x => x !== id) : [...value.ids, id] });
   const pick = (list: Distributor[]) => onChange({ ...value, ids: list.map(d => d.id) });
   const top = (n: number) => pick([...pool].sort((a, b) => (rank?.get(b.id) || 0) - (rank?.get(a.id) || 0)).slice(0, n));
-  function save() {
-    const name = prompt("Name this selection (for example: Rajasthan key distributors)")?.trim();
+  async function save() {
+    const name = (await askText("Name this selection", { placeholder: "For example: Rajasthan key distributors", ok: "Save" }))?.trim();
     if (!name || !saveKey) return;
     const next = [...saved.filter(s => s.name !== name), { name, scope: value }];
     setSaved(next); writeSaved(`ka.scopes.${saveKey}`, next);

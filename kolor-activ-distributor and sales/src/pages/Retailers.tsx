@@ -1,4 +1,5 @@
 import { Select } from "../components/Select";
+import { ask } from "../lib/ask";
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Retailer, KIND_LABEL, matchDistributor, validPhone, plural, errText, proper, properOrNull, cleanPhones, StockLine, SalesOfficer, money, fmt } from "../lib/supabase";
@@ -112,7 +113,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
     setEditing(null); setForm(blank); await onChanged();
   }
   async function remove(r: Retailer) {
-    if (!supabase || !confirm(`Delete retailer ${r.name}?`)) return;
+    if (!supabase || !await ask(`Delete retailer ${r.name}?`)) return;
     const { error } = await supabase.from("retailers").delete().eq("id", r.id);
     if (error) return show("err", error.code === "23503" ? `${r.name} appears in stock postings, so it can't be deleted.` : `Delete failed: ${error.message}`);
     show("ok", `Deleted ${r.name}.`); await onChanged();

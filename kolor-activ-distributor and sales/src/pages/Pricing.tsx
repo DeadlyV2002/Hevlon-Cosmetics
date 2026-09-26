@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ask } from "../lib/ask";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, Margins, Scheme, schemesOn, marginsOn, matchProduct, fmt, plural, errText } from "../lib/supabase";
 import { cellText, parseNum, today } from "../lib/parse";
@@ -74,7 +75,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
     await onChanged();
   }
   async function removeScheme(s: Scheme) {
-    if (!supabase || !confirm(`Delete the scheme “${s.name}”? Charts that valued dispatches with its discount will use the full SS rate instead.`)) return;
+    if (!supabase || !await ask(`Delete the scheme “${s.name}”? Charts that valued dispatches with its discount will use the full SS rate instead.`)) return;
     setBusy("scheme");
     const { error } = await supabase.from("schemes").delete().eq("id", s.id);
     setBusy("");

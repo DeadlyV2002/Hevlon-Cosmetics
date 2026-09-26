@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ask } from "../lib/ask";
 import { supabase, Distributor, Role, plural, errText } from "../lib/supabase";
 import Reminders from "../components/Reminders";
 import LogBook from "../components/LogBook";
@@ -16,7 +17,7 @@ export default function Settings({ role, testingMode, onTestingMode, onChanged, 
 
   async function setTesting(on: boolean) {
     if (!supabase) return;
-    if (!on && !confirm("Turn testing mode off? Clearing all data won't be possible until an HO admin turns it back on.")) return;
+    if (!on && !await ask("Turn testing mode off? Clearing all data won't be possible until an HO admin turns it back on.")) return;
     setBusy("mode");
     const { error } = await supabase.from("app_settings").upsert({ key: "testing_mode", value: on, updated_at: new Date().toISOString() });
     setBusy("");
@@ -26,7 +27,7 @@ export default function Settings({ role, testingMode, onTestingMode, onChanged, 
   }
   async function clearAll() {
     if (!supabase || word !== "DELETE") return;
-    if (!confirm("Delete every godown, super stockist, distributor, retailer, product, posting, SO and SO report? Logins stay.")) return;
+    if (!await ask("Delete every godown, super stockist, distributor, retailer, product, posting, SO and SO report? Logins stay.")) return;
     setBusy("clear");
     const { data, error } = await supabase.rpc("clear_all_data", { p_confirm: word });
     setBusy(""); setWord("");

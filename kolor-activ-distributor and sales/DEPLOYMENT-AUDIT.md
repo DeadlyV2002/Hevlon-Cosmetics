@@ -1,5 +1,13 @@
 # Deployment Package Audit
 
+## v11 (26 Sep 2026) — run `supabase/migrations/012_distributor_status.sql` after 011
+- Every confirmation (save stock, move stock, delete, undo, merge, import, testing mode) is now asked inside the page. Browser pop-ups were blocked in some windows, so Save Stock Count and other buttons did nothing there.
+- A stock count can be saved again from the same file any number of times (it sets stock to the counted figures, so nothing is counted twice). Purchase and sales files still warn before being counted twice.
+- The details block above a closing stock table (SS/DB name, town, SO or ASE, HQ, month, stock taking date) is read and shown. It picks the distributor, can add a distributor that is not listed (with town, HQ and SO filled in), and sets the distributor's SO if it has none.
+- If a stock file would create new product names while DSR products are missing from the product list, the page offers to add the DSR products first.
+- Distributors: Active / Dormant status (click to change, filter, import column). Re-importing a list matches rows by code, then name and town, then name alone when unique, and updates them; only new rows are added (re-importing the DB List: 151 updates, 0 new).
+- SO Reports: clicking a person (tree or table) opens their report: summary figures (this month, last month, MoM and YoY, strike rate, days worked, distributors, last report) and closed sections for month by month, attendance, distributors worked, products, recent days and team; Present, Print, Export Chart.
+
 ## v10 (25 Sep 2026) — run `supabase/migrations/011_products_stock_checks_merge.sql` after 010
 - Closing stock statements with two product tables side by side are read in full (the right-hand table was being dropped). Category subtotal lines ("Compact Total", "Grand Total") are left out; blank or dash stock counts as none; the stock date comes from "Stock taking Date" (spaces allowed) or "Month:". Products with their own rate are never mistaken for group totals. Tested on 11 distributor statements: every product line read, Rajkumar Traders adds up to the sheet's Grand Total of 53,780.
 - The distributor is found from the file name and heading even when spelled differently, helped by the town. A closing stock heading now wins over an SO/ASE name in the heading.

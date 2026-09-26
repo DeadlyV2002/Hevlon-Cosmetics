@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ask } from "../lib/ask";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, KIND_LABEL, StockLine, SalesOfficer, fetchAll, matchDistributor, fmt, money, plural, errText } from "../lib/supabase";
 import { PRESETS, Range } from "../components/DateRange";
@@ -84,7 +85,7 @@ export default function Collections({ locations, stock, officers, canManage, onC
   ];
   const ptable = useColumnFilters(inPeriod, pcols);
   async function remove(p: Payment) {
-    if (!supabase || !confirm(`Delete the payment of ${money(p.amount)} by ${who(p.payer_id)} on ${p.paid_on}?`)) return;
+    if (!supabase || !await ask(`Delete the payment of ${money(p.amount)} by ${who(p.payer_id)} on ${p.paid_on}?`)) return;
     const { error } = await supabase.from("payments").delete().eq("id", p.id);
     if (error) return notify(`Not deleted: ${error.message}`);
     setReload(x => x + 1);

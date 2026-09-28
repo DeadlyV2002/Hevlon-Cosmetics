@@ -6,9 +6,11 @@ import { normName } from "../lib/parse";
 
 type Form = { code: string; name: string; company_name: string; owner_name: string; parent_id: string; state: string; region: string; territory: string; phone: string; aliases: string; email: string; so_id: string };
 const toForm = (d?: Distributor | null, name = ""): Form => ({
-  code: d?.code || "", name: d?.name || name, company_name: d?.company_name || "", owner_name: d?.owner_name || "", parent_id: d?.parent_id || "",
+  code: d?.code || "", name: d?.name || name, company_name: d?.company_name || "", owner_name: d?.owner_name || "", parent_id: d?.direct ? DIRECT : d?.parent_id || "",
   state: d?.state || "", region: d?.region || "", territory: d?.territory || "", phone: d?.phone || "", aliases: (d?.aliases || []).join(", "), email: d?.email || "", so_id: d?.so_id || "",
 });
+/** The "super stockist" choice for distributors the company supplies directly. */
+const DIRECT = "__direct";
 export const splitAliases = (s: string) => s.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
 const uniq = (xs: (string | null)[]) => [...new Set(xs.map(x => (x || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
@@ -49,7 +51,8 @@ export default function LocationForm({ kind, editing, prefillName, prefill, loca
     const ss = supers.find(s => s.id === form.parent_id);
     const payload = {
       kind, name: proper(form.name), company_name: properOrNull(form.company_name), owner_name: properOrNull(form.owner_name),
-      parent_id: kind === "DISTRIBUTOR" ? form.parent_id || null : null, super_stockist: kind === "DISTRIBUTOR" ? ss?.name || null : null,
+      parent_id: kind === "DISTRIBUTOR" && form.parent_id !== DIRECT ? form.parent_id || null : null, super_stockist: kind === "DISTRIBUTOR" ? (form.parent_id === DIRECT ? "Direct with company" : ss?.name || null) : null,
+      ...(kind === "DISTRIBUTOR" ? { direct: form.parent_id === DIRECT } : {}),
       state: normalizeState(form.state) || null, region: properOrNull(form.region), territory: properOrNull(form.territory), phone: t(cleanPhones(form.phone)), aliases: splitAliases(form.aliases),
       email: t(form.email.toLowerCase()), ...(kind === "DISTRIBUTOR" ? { so_id: form.so_id || null } : {}),
     };
@@ -79,6 +82,7 @@ export default function LocationForm({ kind, editing, prefillName, prefill, loca
       {kind === "DISTRIBUTOR" && <label>Super stockist *
         <Select value={form.parent_id} onChange={e => pickSuper(e.target.value)}>
           <option value="">{supers.length ? "Choose…" : "Add super stockists first"}</option>
+          <option value={DIRECT}>Direct with company (no super stockist)</option>
           {supers.map(s => <option key={s.id} value={s.id} disabled={!servesArea(s)}>{s.name}{s.state ? ` · ${s.state}` : ""}</option>)}
         </Select></label>}
       <label>State *<Select {...f("state")}>

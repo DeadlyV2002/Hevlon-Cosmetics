@@ -608,3 +608,19 @@ body.busy,body.busy *{cursor:progress!important}
 .checklist li.ok .mark{color:#15803d}.checklist li.bad{background:#fffbeb;border-color:#fde68a}.checklist li.bad .mark{color:#b45309}.checklist li.info .mark{color:#64748b}
 .checklist .what small{display:block;color:#64748b;font-size:12px}
 .checklist .num{font-weight:700}
+.unitpick{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:10px 0;font-size:14px}.unitpick small{color:#64748b;flex-basis:100%}
+.sk-row{grid-template-columns:auto minmax(0,1fr) auto auto}
+.sk-cats{margin:4px 0 6px 28px;display:flex;flex-direction:column;gap:4px}
+.sk-cats details{border:1px solid #e2e8f0;border-radius:8px;background:#fff}
+.sk-cats summary{cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;padding:6px 10px;font-size:14px;list-style:none}
+.sk-cats summary::-webkit-details-marker{display:none}
+.sk-cats summary span{color:#475569;text-align:right}
+.sk-cats table{margin:0 0 6px;font-size:13px}
+.navbusy{margin-left:8px;font-size:11px;font-weight:700;background:#f59e0b;color:#fff;border-radius:999px;padding:1px 7px;text-transform:none}
+.checklist{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.checklist details{border:1px solid #e2e8f0;border-radius:10px;background:#fff}
+.checklist details.bad{background:#fffbeb;border-color:#fde68a}
+.checklist summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 12px}
+.checklist summary::-webkit-details-marker{display:none}
+.checklist details.ok .mark{color:#15803d}.checklist details.bad .mark{color:#b45309}.checklist details.info .mark{color:#64748b}
+.checklist details>div,.checklist details>p{margin:0 12px 10px}

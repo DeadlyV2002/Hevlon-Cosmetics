@@ -21,6 +21,8 @@ export interface Distributor {
   aliases: string[]; created_at?: string; email?: string | null; so_id?: string | null;
   /** ACTIVE, or DORMANT once dropped (kept with its history, left out of reminders). */
   status?: "ACTIVE" | "DORMANT";
+  /** Buys straight from the company, so it has no super stockist. */
+  direct?: boolean;
 }
 export interface Retailer { id: string; distributor_id: string | null; code: string | null; name: string; territory: string | null; owner_name: string | null; phone: string | null; created_at: string; state?: string | null; region?: string | null }
 export interface SalesOfficer {
@@ -29,7 +31,7 @@ export interface SalesOfficer {
 }
 export interface ProductAlias { product_id: string; alias: string }
 /** unit_price is the rate stock is valued at: the SS rate, or the last purchase rate until that's set. */
-export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number; status?: "ACTIVE" | "DORMANT" }
+export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number; status?: "ACTIVE" | "DORMANT"; category?: string | null }
 /** Standard margins in percent: what the super stockist and the distributor add when they bill onwards. */
 export interface Margins { ss: number; distributor: number }
 export interface Scheme {
@@ -69,8 +71,9 @@ export const REQUIRED: Record<Kind, Required[]> = {
   SUPER_STOCKIST: ["name", "company_name", "owner_name", "state", "territory", "phone"],
   GODOWN: ["name", "company_name", "state", "territory"],
 };
-export function missingFields(d: Partial<Record<Required, string | null>> & { kind: Kind }): string[] {
-  return REQUIRED[d.kind].filter(f => !String(d[f] ?? "").trim()).map(f => REQUIRED_LABEL[f]);
+export function missingFields(d: Partial<Record<Required, string | null>> & { kind: Kind; direct?: boolean }): string[] {
+  // A distributor that deals with the company directly needs no super stockist.
+  return REQUIRED[d.kind].filter(f => !(f === "parent_id" && d.direct) && !String(d[f] ?? "").trim()).map(f => REQUIRED_LABEL[f]);
 }
 /** Indian mobile or landline: 8 to 13 digits once spaces, dashes and +91 are ignored. */
 export const validPhone = (s: string) => s.split(/,\s*/).every(p => { const n = p.replace(/\D/g, "").length; return n >= 8 && n <= 13; });

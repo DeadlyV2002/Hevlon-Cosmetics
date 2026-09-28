@@ -2,7 +2,7 @@ import { Select } from "../components/Select";
 import { ask } from "../lib/ask";
 import { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Product, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
 import { readAnyFile, ACCEPT } from "../lib/readers";
 import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
@@ -16,7 +16,7 @@ import DistributorReport from "../components/DistributorReport";
 import { useColumnFilters, Col } from "../components/ColumnFilter";
 
 interface Props {
-  locations: Distributor[]; stock: StockLine[]; retailers: Retailer[]; officers: SalesOfficer[]; commentCounts: Map<string, number>; canManage: boolean; testingMode: boolean; userId: string;
+  locations: Distributor[]; stock: StockLine[]; retailers: Retailer[]; officers: SalesOfficer[]; products?: Product[]; commentCounts: Map<string, number>; canManage: boolean; testingMode: boolean; userId: string;
   onChanged: () => Promise<void>; notify: (m: string) => void;
 }
 
@@ -55,7 +55,7 @@ interface Preview { file: string; grid: Grid; headerRow: number; labels: string[
 type Row = Omit<Distributor, "id" | "created_at"> & { id?: string };
 interface ImportRow { status: "new" | "update"; missing: string[]; newSS: string; ssTown: string; newSO: string; row: Row }
 
-export default function Distributors({ locations, stock, retailers, officers, commentCounts, canManage, testingMode, userId, onChanged, notify }: Props) {
+export default function Distributors({ locations, stock, retailers, officers, products, commentCounts, canManage, testingMode, userId, onChanged, notify }: Props) {
   const [deleting, setDeleting] = useState<Distributor | null>(null);
   const [tab, setTab] = useState<Kind>("DISTRIBUTOR");
   const [editing, setEditing] = useState<Distributor | null>(null);
@@ -160,7 +160,10 @@ export default function Distributors({ locations, stock, retailers, officers, co
       const soName = tab === "DISTRIBUTOR" ? proper(v("so")) : "", so = soName ? matchSO(soName, officers) : undefined;
       let parent_id = existing?.parent_id || null, newSS = "";
       const ssName = tab === "DISTRIBUTOR" ? proper(v("super_stockist")) : "";
-      if (ssName) { const ss = matchDistributor(ssName, supers); if (ss) parent_id = ss.id; else { newSS = ssName; parent_id = null; } }
+      // "Direct", "Company" or "Kolor Activ" in the SS column: the company supplies them itself.
+      const isDirect = /^(direct|company|kolor|hevlon|ho|head office|self)/i.test(ssName.trim());
+      if (ssName && !isDirect) { const ss = matchDistributor(ssName, supers); if (ss) parent_id = ss.id; else { newSS = ssName; parent_id = null; } }
+      if (isDirect) parent_id = null;
       const row: Row = {
         id: existing?.id, code, kind: tab, name,
         // The DB List has no separate company column: the DB name is the company's name.
@@ -170,9 +173,10 @@ export default function Distributors({ locations, stock, retailers, officers, co
         ...(tab === "DISTRIBUTOR" ? { so_id: so?.id || existing?.so_id || null } : {}),
         super_stockist: tab === "DISTRIBUTOR" ? ssName || existing?.super_stockist || null : null,
         aliases: [...new Set([...(existing?.aliases || []), ...aliasCols.flatMap(i => splitAliases(cellText(r[i])))])],
+        ...(tab === "DISTRIBUTOR" ? { direct: isDirect || (!ssName && !!existing?.direct) } : {}),
         status: v("status") ? (/dormant|inactive|closed|drop|left|stop|no/i.test(v("status")) ? "DORMANT" : "ACTIVE") : existing?.status || "ACTIVE",
       };
-      out.push({ status: existing ? "update" : "new", missing: missingFields({ ...row, parent_id: parent_id || newSS }), newSS, ssTown: proper(v("ss_town")), newSO: soName && !so ? soName : "", row });
+      out.push({ status: existing ? "update" : "new", missing: missingFields({ ...row, parent_id: parent_id || newSS, direct: !!(row as { direct?: boolean }).direct }), newSS, ssTown: proper(v("ss_town")), newSO: soName && !so ? soName : "", row });
     }
     return out;
   }, [preview, locations, officers, tab]);
@@ -242,7 +246,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
     { key: "code", label: "Code", value: x => x.code }, { key: "name", label: KIND_LABEL[tab], value: x => x.name },
     { key: "company", label: "Company", value: x => x.company_name },
     ...(tab !== "GODOWN" ? [{ key: "owner", label: "Owner", value: (x: Distributor) => x.owner_name }] : []),
-    ...(tab === "DISTRIBUTOR" ? [{ key: "ss", label: "Super Stockist", value: (x: Distributor) => byId.get(x.parent_id || "")?.name }] : []),
+    ...(tab === "DISTRIBUTOR" ? [{ key: "ss", label: "Super Stockist", value: (x: Distributor) => (x.direct ? "Direct with company" : byId.get(x.parent_id || "")?.name) }] : []),
     { key: "state", label: "State", value: x => x.state }, { key: "region", label: "Region", value: x => x.region }, { key: "city", label: "City / Area", value: x => x.territory },
     { key: "phone", label: "Phone", value: x => x.phone }, { key: "email", label: "Email", value: x => x.email },
     ...(tab === "DISTRIBUTOR" ? [{ key: "so", label: "SO", value: (x: Distributor) => officers.find(o => o.id === x.so_id)?.name }] : []),
@@ -308,6 +312,14 @@ export default function Distributors({ locations, stock, retailers, officers, co
           {nIncomplete > 0 && <label className="inline"><input type="checkbox" checked={onlyIncomplete} onChange={e => setOnlyIncomplete(e.target.checked)} /> Only incomplete ({nIncomplete})</label>}
         </div></div>
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={[tab]} rank={rank} saveKey={`distributors-${tab}`} />
+      {tab === "DISTRIBUTOR" && (() => {
+        const noSS = ofKind.filter(x => !x.parent_id && !x.direct);
+        const away = ofKind.filter(x => { const ss = byId.get(x.parent_id || ""); return ss && ss.state && x.state && normName(ss.state) !== normName(x.state); });
+        return (noSS.length > 0 || away.length > 0) && <div className="warn">
+          {noSS.length > 0 && <div>{plural(noSS.length, "distributor")} {noSS.length === 1 ? "has" : "have"} no super stockist: {noSS.slice(0, 8).map(x => x.name).join(", ")}{noSS.length > 8 ? "…" : ""}. Edit {noSS.length === 1 ? "it" : "them"} and choose the super stockist, or "Direct with company" if you supply {noSS.length === 1 ? "it" : "them"} yourselves.</div>}
+          {away.length > 0 && <div>{plural(away.length, "distributor")} {away.length === 1 ? "is" : "are"} linked to a super stockist in another state, which may be wrong: {away.slice(0, 8).map(x => `${x.name} (${x.state}) → ${byId.get(x.parent_id || "")?.name} (${byId.get(x.parent_id || "")?.state})`).join("; ")}{away.length > 8 ? "…" : ""}.</div>}
+        </div>;
+      })()}
       {dt.sortBar}
       {dt.active > 0 && <p className="hint">{plural(dt.rows.length, "row")} shown by the column filters. <button className="link" onClick={dt.clear}>Clear Filters</button></p>}
       <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{dcols.map(c => dt.head(c.key))}<th>Comments</th>{canManage && <th />}</tr></thead>
@@ -336,7 +348,7 @@ export default function Distributors({ locations, stock, retailers, officers, co
     {listFirst ? <>{listCard}{addCard}</> : <>{addCard}{listCard}</>}
     {commentsFor && <Modal title={`Comments — ${commentsFor.name}`} subtitle={`${commentsFor.code}${commentsFor.territory ? ` · ${commentsFor.territory}` : ""}`} onClose={() => setOpenComments(null)}>
       <Comments location={commentsFor} userId={userId} canManage={canManage} onCount={n => setCounts(c => ({ ...c, [commentsFor.id]: n }))} /></Modal>}
-    {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} onClose={() => setReport(null)} />}
+    {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} products={products} onClose={() => setReport(null)} />}
     {deleting && <DeleteLocation location={deleting} locations={locations} stock={stock} testingMode={testingMode}
       retailers={retailers.filter(r => r.distributor_id === deleting.id).length} comments={count(deleting.id)}
       onClose={() => setDeleting(null)} onDeleted={async m => { setDeleting(null); if (editing?.id === deleting.id) setEditing(null); show("ok", m); await onChanged(); }} />}

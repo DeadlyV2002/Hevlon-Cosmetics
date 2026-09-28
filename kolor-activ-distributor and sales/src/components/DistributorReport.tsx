@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { supabase, Distributor, KIND_LABEL, SalesOfficer, StockLine, fetchAll, fmt, money, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, KIND_LABEL, Product, SalesOfficer, StockLine, fetchAll, fmt, money, plural, errText } from "../lib/supabase";
 import { ChartData } from "../lib/insights";
 import { ChartView } from "./Charts";
 import Modal from "./Modal";
@@ -20,8 +20,8 @@ function change(now: number, before: number) {
 export const collectionPct = (b?: Billing) => (b && n(b.billed) > 0 ? (n(b.collected) / n(b.billed)) * 100 : null);
 
 /** One location's report: contact details, stock, billing and payments, month by month. */
-export default function DistributorReport({ location, locations, stock, officers, onClose }: {
-  location: Distributor; locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; onClose: () => void;
+export default function DistributorReport({ location, locations, stock, officers, products, onClose }: {
+  location: Distributor; locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; products?: Product[]; onClose: () => void;
 }) {
   const [months, setMonths] = useState<Month[] | null>(null);
   const [bill, setBill] = useState<Billing | undefined>();
@@ -96,9 +96,9 @@ export default function DistributorReport({ location, locations, stock, officers
         </dl>
       </section>
       <section className="topstock">
-        <h3>Biggest stock lines</h3>
-        {held.length ? <table><thead><tr><th>Product</th><th>Units</th><th>Value</th><th>Last in</th></tr></thead>
-          <tbody>{[...held].sort((a, b) => n(b.stock_value) - n(a.stock_value)).slice(0, 8).map(s => <tr key={s.product_id}><td>{s.item_name}</td><td>{fmt(s.current_stock)}</td><td>{money(s.stock_value)}</td><td>{day(s.last_in)}</td></tr>)}</tbody></table>
+        <h3>Biggest stock lines</h3><small className="muted">{fmt(units, 2)} dozens · {fmt(Math.round(units * 12))} pieces in all</small>
+        {held.length ? <table><thead><tr><th>SKU</th><th>Category</th><th>Dozens</th><th>Pieces</th><th>Value</th></tr></thead>
+          <tbody>{[...held].sort((a, b) => n(b.stock_value) - n(a.stock_value)).slice(0, 10).map(s => <tr key={s.product_id}><td>{s.item_name}</td><td>{products?.find(p => p.id === s.product_id)?.category || "Other"}</td><td>{fmt(n(s.current_stock), 2)}</td><td>{fmt(Math.round(n(s.current_stock) * 12))}</td><td>{money(s.stock_value)}</td></tr>)}</tbody></table>
           : <p className="empty">No stock recorded.</p>}
       </section>
     </div>

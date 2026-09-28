@@ -16,6 +16,7 @@ import SOReports from "./pages/SOReports";
 import AlertsBell from "./components/AlertsBell";
 import ClearButton from "./components/ClearButton";
 import { AskHost } from "./lib/ask";
+import { guessProduct } from "./lib/fuzzy";
 import { useSessionLog } from "./components/LogBook";
 
 export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "Collections" | "SO reports" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
@@ -56,6 +57,7 @@ export default function App() {
 
   /** True while lists load: shows the bar at the top and the working cursor. */
   const [dataLoading, setDataLoading] = useState(false);
+  const [invBusy, setInvBusy] = useState(""), [invOpened, setInvOpened] = useState(false);
   useEffect(() => { document.body.classList.toggle("busy", dataLoading); }, [dataLoading]);
   async function refreshAll() {
     if (!supabase || !session) return;
@@ -68,7 +70,7 @@ export default function App() {
     /** One list failing (say, before the latest database step is run) shouldn't blank the others. */
     const all = <T,>(label: string, page: (a: number, b: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) =>
       fetchAll<T>(page).catch(e => { failed.push(`${label}: ${errText(e)}`); return null; });
-    const [prof, d, p, s, r, al, so, cc, settings, sch, cp] = await Promise.all([
+    const [prof, d, p, s, r, al, so, cc, settings, sch, cp, dp] = await Promise.all([
       sb.from("profiles").select("role").eq("id", session.user.id).maybeSingle(),
       all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
       all<Omit<Product, "purchase_rate">>("products", (a, z) => sb.from("products").select("*").order("item_name").order("id").range(a, z)),
@@ -80,11 +82,15 @@ export default function App() {
       sb.from("app_settings").select("key,value").in("key", ["testing_mode", "margins"]),
       all<Scheme>("pricing schemes", (a, z) => sb.from("schemes").select("*").order("starts_on", { ascending: false }).order("id").range(a, z)),
       sb.rpc("can_price"),
+      sb.from("dsr_products").select("name,category,rate"),
     ]);
     setRole(((prof.data as any)?.role as Role) ?? null);
     if (d) setLocations(d.map(x => ({ ...x, kind: x.kind || "DISTRIBUTOR" })));
     // Stock is valued at the SS rate; the last purchase rate stands in until it's set.
-    if (p) setProducts(p.map(x => ({ ...x, purchase_rate: Number(x.unit_price) || 0, unit_price: Number(x.ss_rate) || Number(x.unit_price) || 0 })));
+    // Products created from a stock sheet's own spelling get the category of the closest DSR product with the same rate.
+    const dsrList = ((dp.data || []) as { name: string; category: string | null; rate: number | null }[]).map(x => ({ item_name: x.name, sku: x.name, ss_rate: x.rate, unit_price: Number(x.rate) || 0, category: x.category }));
+    if (p) setProducts(p.map(x => ({ ...x, purchase_rate: Number(x.unit_price) || 0, unit_price: Number(x.ss_rate) || Number(x.unit_price) || 0,
+      category: x.category || guessProduct(x.item_name, Number(x.ss_rate) || Number(x.unit_price) || 0, dsrList)?.category || null })));
     if (s) setStock(s);
     if (r) setRetailers(r);
     if (al) setAliases(al);
@@ -129,7 +135,7 @@ export default function App() {
     <div className="app">
       <aside>
         <div className="logo">KA</div><strong>Kolor Activ</strong><small>Distributor control</small>
-        <nav>{NAV.filter(n => n !== "Pricing" || canPrice).map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); }}>{n}</button>)}</nav>
+        <nav>{NAV.filter(n => n !== "Pricing" || canPrice).map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); if (n === "Inventory") setInvOpened(true); }}>{n}{n === "Inventory" && invBusy && <span className="navbusy" title="Upload in progress">{invBusy === "…" ? "working" : invBusy}</span>}</button>)}</nav>
         <button className="secondary logout" onClick={() => supabase!.auth.signOut()}>Sign out</button>
       </aside>
       <main>
@@ -140,9 +146,10 @@ export default function App() {
           </div></header>
         {message && <div className="notice" onClick={() => setMessage("")}>{message}<span className="x">✕</span></div>}
         {page === "Dashboard" && <Dashboard ctx={ctx} userId={session.user.id} version={version} openKind={openKind} onOpened={() => setOpenKind(null)} />}
-        {page === "Inventory" && <Inventory locations={locations} products={products} aliases={aliases} stock={stock} officers={officers} retailers={retailers}
-          canManage={canManage} onPosted={refreshAll} onListsChanged={refreshAll} notify={setMessage} />}
-        {page === "Distributors" && <Distributors locations={locations} stock={stock} retailers={retailers} officers={officers} commentCounts={commentCounts} canManage={canManage}
+        {/* Kept loaded once opened, so an upload carries on (and stays visible) while other pages are open. */}
+        {(page === "Inventory" || invBusy || invOpened) && <div hidden={page !== "Inventory"}><Inventory locations={locations} products={products} aliases={aliases} stock={stock} officers={officers} retailers={retailers}
+          canManage={canManage} onPosted={refreshAll} onListsChanged={refreshAll} notify={setMessage} onBusy={setInvBusy} /></div>}
+        {page === "Distributors" && <Distributors locations={locations} stock={stock} retailers={retailers} officers={officers} products={products} commentCounts={commentCounts} canManage={canManage}
           testingMode={testingMode} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
         {page === "Retailers" && <Retailers retailers={retailers} locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Collections" && <Collections locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}

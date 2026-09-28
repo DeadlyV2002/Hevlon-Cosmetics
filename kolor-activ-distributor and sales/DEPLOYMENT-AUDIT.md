@@ -1,5 +1,14 @@
 # Deployment Package Audit
 
+## v14 (28 Sep 2026) — migration 012 also adds product categories and "direct with company" distributors
+- Every product carries its DSR category. Stock At A Glance shows dozens, pieces and SKUs per location, and a Categories button opens stock by category, each expandable to its SKUs.
+- Stock downloads: one Category column (merged over its rows), one SKU column with the SKU name, and separate Dozens and Pieces columns. The distributor report stock table uses the same columns.
+- Stock upload asks whether the sheet counts dozens or pieces (it guesses from the column heading) and converts pieces to dozens.
+- One Save All button instead of two. Uploads keep running when you open another page; the Inventory tab shows a badge while they run.
+- Distributors can be marked "Direct with company" instead of choosing a super stockist; the list warns about distributors with no super stockist or one in another state.
+- Check Everything shows every figure it compared (state totals day by day, SO bookings against stock per product, unlinked DSR names, look-alike staff names), flagged lines first.
+- DSR uploads without a Category row no longer wipe categories saved earlier.
+
 ## v13 (28 Sep 2026) — migration 012 also adds retailer state/region and per-workbook DSR state totals
 - Inventory: Stock At A Glance replaces the location picker: state → super stockist → distributors with value, units, products and last stock date, rolling up to super stockists and states; tick to download, or download everything. It updates whenever stock is saved.
 - Closing stock sheets that head the product column with the category ("Nail Polish") and repeat category headings further down are read; dates written "Sunday, August 30, 2026" or stored as Excel date numbers are read, and the earlier of a print date and a stock date is used. Tested: Arnav Traders SS statement, 97 products, ₹9.7 L; the 11 distributor statements read as before.

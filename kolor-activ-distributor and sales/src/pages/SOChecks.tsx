@@ -135,7 +135,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
   };
 
   return <>
-    <CheckAll officers={officers} checks={TABS.map(t => ({ id: t.id, label: t.label, count: t.count, tab: t.id }))} onOpen={t => { setTab(t as Tab); setTimeout(() => document.querySelector(".checktiles")?.scrollIntoView({ behavior: "smooth" }), 50); }} />
+    <CheckAll officers={officers} locations={locations} checks={TABS.map(t => ({ id: t.id, label: t.label, count: t.count, help: t.help, tab: t.id }))} onOpen={t => { setTab(t as Tab); setTimeout(() => document.querySelector(".checktiles")?.scrollIntoView({ behavior: "smooth" }), 50); }} />
     <section className="card">
       <div className="checkbar">
         <DateRange value={range} onChange={setRange} />

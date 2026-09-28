@@ -33,7 +33,7 @@ begin
   if auth.uid() is null then raise exception 'Sign in first.'; end if;
   insert into dsr_products(name, category, rate, position)
     select x->>'name', x->>'category', nullif(x->>'rate', '')::numeric, (x->>'position')::int from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x
-    on conflict (name) do update set category = excluded.category, rate = coalesce(excluded.rate, dsr_products.rate), position = excluded.position, updated_at = now();
+    on conflict (name) do update set category = coalesce(nullif(excluded.category, ''), dsr_products.category), rate = coalesce(excluded.rate, dsr_products.rate), position = excluded.position, updated_at = now();
   insert into dsr_state_days(state, day, team, total_calls, productive_calls, sale_value, source_file)
     select x->>'state', (x->>'day')::date, coalesce(x->>'team', ''), nullif(x->>'total_calls', '')::numeric::int, nullif(x->>'productive_calls', '')::numeric::int, nullif(x->>'sale_value', '')::numeric, p_source
       from jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x

@@ -72,3 +72,33 @@ alter table public.retailers add column if not exists region text;
 alter table public.dsr_state_days add column if not exists team text not null default '';
 alter table public.dsr_state_days drop constraint if exists dsr_state_days_pkey;
 alter table public.dsr_state_days add primary key (state, day, team);
+
+-- ---------- Product categories (from the DSR category heads) ----------
+alter table public.products add column if not exists category text;
+update public.products p set category = d.category
+  from public.dsr_products d where coalesce(p.category, '') = '' and coalesce(d.category, '') <> '' and norm_name(d.name) in (norm_name(p.item_name), norm_name(p.sku));
+-- Adding DSR products also sets categories, for new and existing products.
+create or replace function public.products_from_dsr() returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare added int := 0; rated int := 0; r record; pid uuid;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can change the product list.'; end if;
+  for r in select * from dsr_products order by position loop
+    pid := coalesce(find_product(null, r.name), (select id from products where lower(sku) = lower(r.name) limit 1));
+    if pid is null then
+      insert into products(sku, item_name, unit_price, ss_rate, category) values (r.name, r.name, coalesce(r.rate, 0), r.rate, nullif(r.category, ''));
+      added := added + 1;
+    else
+      update products set category = coalesce(nullif(category, ''), nullif(r.category, '')) where id = pid;
+      if r.rate is not null then
+        update products set ss_rate = r.rate where id = pid and ss_rate is null;
+        if found then rated := rated + 1; end if;
+      end if;
+    end if;
+  end loop;
+  return jsonb_build_object('added', added, 'rated', rated);
+end $$;
+
+-- ---------- Distributors that deal with the company directly ----------
+-- Some distributors with good billing buy straight from the company: no super stockist is needed.
+alter table public.distributors add column if not exists direct boolean not null default false;

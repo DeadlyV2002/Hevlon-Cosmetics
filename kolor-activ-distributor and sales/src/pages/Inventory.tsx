@@ -33,9 +33,11 @@ interface Checked { p?: Product; h?: Distributor; partyLoc?: Distributor; cur: n
 interface Props {
   locations: Distributor[]; products: Product[]; aliases: ProductAlias[]; stock: StockLine[]; officers: SalesOfficer[]; retailers: Retailer[];
   canManage: boolean; onPosted: () => Promise<void>; onListsChanged: () => Promise<void>; notify: (m: string) => void;
+  /** Tells the app an upload is running (shown next to the menu item), so leaving the page doesn't hide it. */
+  onBusy?: (label: string) => void;
 }
 
-export default function Inventory({ locations, products, aliases, stock, officers, retailers, canManage, onPosted, onListsChanged, notify }: Props) {
+export default function Inventory({ locations, products, aliases, stock, officers, retailers, canManage, onPosted, onListsChanged, notify, onBusy }: Props) {
   const [type, setType] = useState<FileType>("COUNT");
   const [detection, setDetection] = useState<Detection | null>(null);
   const productOptions = useMemo(() => products.map(p => ({ value: `${p.sku} — ${p.item_name}` })), [products]);
@@ -58,6 +60,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [adding, setAdding] = useState<{ name: string; kind: Kind } | null>(null);
   /** Details printed above a closing stock table: DB name, town, SO/ASE, HQ, month, stock date. */
   const [sheetInfo, setSheetInfo] = useState<SheetInfo | null>(null);
+  const [pieces, setPieces] = useState(false);
   const [fix, setFix] = useState<Record<string, string>>({});
   const reviewRef = useRef<HTMLDivElement>(null);
 
@@ -88,6 +91,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const heading = titleText(g, l);
     const si = readSheetInfo(g, l.headerRow);
     setSheetInfo(si.name || si.town || si.person || si.hq ? si : null);
+    // Quantities in pieces when the quantity heading says so; the choice can be changed before saving.
+    setPieces(l.labels.some((lab, i) => l.mapping[i] === "quantity" && /(pcs|pieces|piece|nos)/.test(lab)) || /(in pcs|in pieces|pcs wise)/i.test(heading));
     let h = holder, so = soDefault, d = date;
     if (det) { h = det.holder; so = det.so; d = headingDate(`${heading} ${f?.name || ""}`) || today(); }
     setHolder(h); setSoDefault(so); setDate(d);
@@ -371,7 +376,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
       : `Save ${plural(send.length, "row")} of stock ${type === "IN" ? "received" : "sent out"}${nTransfers ? `, including ${plural(nTransfers, "transfer")} between your locations` : ""}?`;
     if (!allowDuplicate && !quiet && !await ask(`${what}${newProducts ? `\n\n${plural(newProducts, "new product")} will be created.` : ""}${nExcluded ? (type === "COUNT" ? `\n\n${plural(nExcluded, "product")} with none in stock ${nExcluded === 1 ? "is" : "are"} left as ${nExcluded === 1 ? "it is" : "they are"}.` : `\n\n${plural(nExcluded, "row")} already recorded will be skipped.`) : ""}`)) return;
     setBusy("Saving…"); setStatus({ kind: "info", text: "Saving…" });
-    const clean = send.map(({ include: _, ...r }) => ({ ...r, distributor: r.distributor.trim(), sku: r.sku.trim(), item_name: r.item_name.trim(), retailer: r.retailer.trim(), so: r.so.trim() }));
+    // Stock is kept in dozens (rates are per dozen): a file in pieces is divided by 12.
+    const clean = send.map(({ include: _, ...r }) => ({ ...r, quantity: pieces ? Math.round((r.quantity / 12) * 1000) / 1000 : r.quantity, distributor: r.distributor.trim(), sku: r.sku.trim(), item_name: r.item_name.trim(), retailer: r.retailer.trim(), so: r.so.trim() }));
     const common = { p_source_file: file?.name ?? "manual entry", p_file_hash: file?.hash ?? null, p_allow_duplicate: allowDuplicate || type === "COUNT" };
     const { data, error } = type === "COUNT"
       ? await supabase.rpc("post_stock_count", { p_distributor: holderLoc!.code, p_rows: clean, p_date: date, ...common })
@@ -418,6 +424,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     sku: "SKU", item_name: "Product (as in file)", quantity: type === "COUNT" ? "Counted qty" : "Qty", unit_price: "Rate",
   };
   const posting = useRef(false);
+  useEffect(() => { onBusy?.(busy || auto ? (fileTotal > 1 ? `${Math.min(fileNo, fileTotal)}/${fileTotal}` : "…") : ""); }, [busy, auto, fileNo, fileTotal]);
   function logAuto(ok: boolean, text: string) { setAutoLog(l => [...l, { file: file?.name || "file", ok, text }]); }
   useEffect(() => {
     if (!auto || busy || !file || !rows.length) return;
@@ -457,6 +464,9 @@ export default function Inventory({ locations, products, aliases, stock, officer
       </label>
       {queue.length > 0 && <p className="hint">{queue.length} more {queue.length === 1 ? "file is" : "files are"} waiting: {queue.map(f => f.name).join(", ")}. Each opens after this one is saved. <button className="link" onClick={nextFile}>Skip To Next File</button></p>}
       <div className="tabs types">{TYPES.map(t => <button key={t.id} className={type === t.id ? "active" : ""} onClick={() => changeType(t.id)}>{t.label}</button>)}</div>
+      {file && rows.length > 0 && type !== "SO" && <div className="unitpick"><b>Quantities in this file are in</b>
+        <div className="seg" role="group" aria-label="Quantity unit"><button className={pieces ? "" : "on"} onClick={() => setPieces(false)}>Dozens</button><button className={pieces ? "on" : ""} onClick={() => setPieces(true)}>Pieces</button></div>
+        <small>{pieces ? "They are divided by 12 when saved, because stock and rates are kept per dozen." : "Rates are per dozen, so dozens is usual. Choose Pieces if the distributor counted pieces."}</small></div>}
       {sheetInfo && file && <div className="sheetinfo"><b>From the sheet:</b>
         {sheetInfo.name && <span><small>SS / DB</small>{sheetInfo.name}</span>}{sheetInfo.town && <span><small>Town</small>{sheetInfo.town}</span>}
         {sheetInfo.person && <span><small>{sheetInfo.post || "SO"}</small>{sheetInfo.person}</span>}{sheetInfo.hq && <span><small>HQ</small>{sheetInfo.hq}</span>}
@@ -503,8 +513,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
       <div className="rowhead"><h2>Review ({plural(rows.length, "row")}{problemRows.length ? `, ${problemRows.length} need fixing` : ""}{nExcluded ? `, ${nExcluded} already recorded` : ""})</h2>
         <div className="actions"><button className="secondary" onClick={clearAll}>Clear</button>
           <button onClick={() => post()} disabled={!!busy || !rows.length}>{busy === "Saving…" ? "Saving…" : saveLabel}</button>
-        {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}
-          {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}</div></div>
+        {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}</div></div>
       {status && <div className={`status ${status.kind}`}>{status.text}</div>}
       {!status && blocker && rows.length > 0 && <div className="status err">{blocker}</div>}
       {canManage && newProducts > 0 && dsrMissing > 0 && (type === "COUNT" || type === "IN") && <div className="warn">{plural(newProducts, "product name")} in this file {newProducts === 1 ? "isn't" : "aren't"} in your product list, and {plural(dsrMissing, "DSR product")} {dsrMissing === 1 ? "hasn't" : "haven't"} been added yet. Add the DSR products first so the names match instead of creating new ones.

@@ -6,6 +6,7 @@ import { localDate, today } from "../lib/parse";
 import FilterBar, { Scope, emptyScope, applyScope, scopeLabel } from "../components/FilterBar";
 import DateRange, { Range, defaultRange } from "../components/DateRange";
 import SalesOfficers from "./SalesOfficers";
+import CheckAll from "../components/CheckAll";
 
 type Tab = "oversell" | "aged" | "vs" | "retailers" | "low" | "stale" | "counts";
 interface Oversell { distributor_id: string; product_id: string; report_date: string; so_qty: number; so_total: number; available: number; so_names: string; has_stock_data: boolean }
@@ -30,7 +31,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
   const [range, setRange] = useState<Range>(defaultRange("30"));
   const [so, setSo] = useState("");
   const [agedDays, setAgedDays] = useState(60);
-  const [staleDays, setStaleDays] = useState(15);
+  const [staleDays, setStaleDays] = useState(45);
   const [tab, setTab] = useState<Tab>("oversell");
   const [data, setData] = useState<Data>(EMPTY);
   const [loading, setLoading] = useState(false);
@@ -134,6 +135,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
   };
 
   return <>
+    <CheckAll officers={officers} checks={TABS.map(t => ({ id: t.id, label: t.label, count: t.count, tab: t.id }))} onOpen={t => { setTab(t as Tab); setTimeout(() => document.querySelector(".checktiles")?.scrollIntoView({ behavior: "smooth" }), 50); }} />
     <section className="card">
       <div className="checkbar">
         <DateRange value={range} onChange={setRange} />

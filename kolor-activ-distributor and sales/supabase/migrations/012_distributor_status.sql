@@ -60,3 +60,15 @@ begin
 end $$;
 revoke all on function public.link_dsr_distributors(jsonb) from public, anon;
 grant execute on function public.link_dsr_distributors(jsonb) to authenticated;
+
+-- ---------- Retailers: their own state and region ----------
+-- A retailer can sit outside its distributor's area (a Delhi retailer supplied from elsewhere).
+alter table public.retailers add column if not exists state text;
+alter table public.retailers add column if not exists region text;
+
+-- ---------- DSR state totals per workbook ----------
+-- Two workbooks can both call their state "Bihar" (North and South Bihar). Each state total now
+-- carries the SOs of its own workbook (team: their names, sorted), and is checked against them only.
+alter table public.dsr_state_days add column if not exists team text not null default '';
+alter table public.dsr_state_days drop constraint if exists dsr_state_days_pkey;
+alter table public.dsr_state_days add primary key (state, day, team);

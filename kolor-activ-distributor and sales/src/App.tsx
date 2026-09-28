@@ -73,7 +73,7 @@ export default function App() {
       all<Distributor>("locations", (a, z) => sb.from("distributors").select("*").order("name").order("id").range(a, z)),
       all<Omit<Product, "purchase_rate">>("products", (a, z) => sb.from("products").select("*").order("item_name").order("id").range(a, z)),
       all<StockLine>("stock", (a, z) => sb.from("distributor_stock_summary").select("*").order("distributor_id").order("product_id").range(a, z)),
-      all<Retailer>("retailers", (a, z) => sb.from("retailers").select("id,distributor_id,code,name,territory,owner_name,phone,created_at").order("name").order("id").range(a, z)),
+      all<Retailer>("retailers", (a, z) => sb.from("retailers").select("*").order("name").order("id").range(a, z)),
       all<ProductAlias>("product names", (a, z) => sb.from("product_aliases").select("product_id,alias").order("id").range(a, z)),
       all<SalesOfficer>("sales officers", (a, z) => sb.from("sales_officers").select("*").order("name").order("id").range(a, z)),
       all<{ distributor_id: string; n: number }>("comments", (a, z) => sb.from("distributor_comment_counts").select("distributor_id,n").order("distributor_id").range(a, z)),

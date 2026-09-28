@@ -11,13 +11,13 @@ import Staff, { rankOf } from "../components/Staff";
 import SOReport from "../components/SOReport";
 import DsrLinker from "../components/DsrLinker";
 import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
-import { readDsr, mergeBooks, DsrBook, DsrDay } from "../lib/dsr";
+import { readDsr, mergeBooks, DsrBook, DsrDay, teamTotal as sheetTeamTotal } from "../lib/dsr";
 import { exportPng } from "../lib/present";
 
 interface Day { id: string; so_id: string; day: string; state: string | null; manager: string | null; hq: string | null; db_name: string | null; distributor_id: string | null; town: string | null; beat: string | null; remark: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number }
 interface Prod { product: string; category: string | null; qty: number; value: number }
 interface StockCheck { distributor_id: string; product: string; product_id: string | null; so_qty: number; so_value: number; opening: number; received: number; closing: number; counted: boolean; has_before: boolean }
-interface StateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number }
+interface StateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number; team?: string }
 interface Props { officers: SalesOfficer[]; locations: Distributor[]; stock: StockLine[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
 interface Checked { book: DsrBook; files: string; fresh: DsrDay[]; same: number; changed: { d: DsrDay; old: Day }[] }
 
@@ -72,16 +72,25 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     const last = localDate(new Date(Date.now() - 864e5));
     Promise.all([
       fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", range.from).lte("day", range.to).order("day").order("id").range(a, b)),
-      supabase.rpc("dsr_product_totals", { p_from: range.from, p_to: range.to, p_sos: sos, p_state: null }),
       fetchAll<StateDay>((a, b) => supabase!.from("dsr_state_days").select("*").gte("day", range.from).lte("day", range.to).order("day").range(a, b)).catch(() => []),
       supabase.rpc("billing_summary", { p_from: range.from, p_to: range.to }),
       supabase.from("dsr_days").select("day").lte("day", last).order("day", { ascending: false }).limit(1),
-    ]).then(async ([d, p, s, b, l]) => {
-      setDays(d); setProds(((p.data || []) as Prod[]).sort((x, y) => n(y.value) - n(x.value))); setStates(s as StateDay[]); setBills((b.data || []) as Billing[]); setErr("");
+    ]).then(async ([d, s, b, l]) => {
+      setDays(d); setStates(s as StateDay[]); setBills((b.data || []) as Billing[]); setErr("");
       const lastDay = (l.data as { day: string }[] | null)?.[0]?.day;
       if (lastDay) { const { data } = await supabase!.from("dsr_days").select("*").eq("day", lastDay); setLatest((data || []) as Day[]); } else setLatest([]);
     }).catch(e => setErr(`Couldn't load SO reports: ${errText(e)}. Run the latest database steps (009 and 010) in Supabase.`));
-  }, [range.from, range.to, reload, sos?.join(",")]);
+  }, [range.from, range.to, reload]);
+  // Product totals follow the people in view; waits until typing in the search box pauses.
+  const sosKey = sos?.join(",") || "";
+  useEffect(() => {
+    if (!supabase) return;
+    const t = window.setTimeout(() => {
+      supabase!.rpc("dsr_product_totals", { p_from: range.from, p_to: range.to, p_sos: sos, p_state: null })
+        .then(({ data }) => setProds(((data || []) as Prod[]).sort((x, y) => n(y.value) - n(x.value))));
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [range.from, range.to, reload, sosKey]);
 
   const view = days.filter(d => inView.has(d.so_id) || (!filtered && !byId.has(d.so_id)));
 
@@ -205,8 +214,8 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
   // ---------- checks: state totals, and SO secondary against distributor billing, stock and collection ----------
   const stateGaps = useMemo(() => {
     const m = new Map<string, number>(); days.forEach(d => { const k = `${d.state}|${d.day}`; m.set(k, (m.get(k) || 0) + n(d.sale_value)); });
-    return states.map(s => ({ ...s, sos: m.get(`${s.state}|${s.day}`) || 0 })).filter(s => Math.abs(n(s.sale_value) - s.sos) > Math.max(100, n(s.sale_value) * 0.01));
-  }, [days, states]);
+    return states.map(s => ({ ...s, sos: s.team ? sheetTeamTotal(s.team, s.day, days, officers) : m.get(`${s.state}|${s.day}`) || 0 })).filter(s => Math.abs(n(s.sale_value) - s.sos) > Math.max(100, n(s.sale_value) * 0.01));
+  }, [days, states, officers]);
   const billOf = (id: string) => bills.find(b => b.party_type === "LOCATION" && b.party_id === id);
   const stockOf = (id: string) => stock.filter(s => s.distributor_id === id).reduce((a, s) => a + n(s.stock_value), 0);
   const dbRows = useMemo(() => {
@@ -257,8 +266,9 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
   const [stockRaw, setStockRaw] = useState<StockCheck[]>([]), [onlyFlagged, setOnlyFlagged] = useState(false);
   useEffect(() => {
     if (!supabase) return;
+    if (tab !== "checks") return;
     fetchAll<StockCheck>((a, b) => supabase!.rpc("dsr_stock_check", { p_from: checkRange.from, p_to: checkRange.to }).range(a, b)).then(setStockRaw).catch(() => setStockRaw([]));
-  }, [checkRange.from, checkRange.to, reload]);
+  }, [checkRange.from, checkRange.to, reload, tab]);
   const stockRows = useMemo(() => stockRaw.map(r => {
     const so = n(r.so_qty), avail = n(r.opening) + n(r.received), drop = avail - n(r.closing);
     let kind = "ok", flag = "";
@@ -329,6 +339,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
           <span className="rt-badge">{money(sums.filter(s => zoneOf(s.so) === z).reduce((a, s) => a + s.value, 0))}</span></summary>
         <div className="rt-branch">{roots.filter(o => zoneOf(o) === z).map(o => node(o, 0))}</div></details>)}</div> : <p className="empty">Nobody matches.</p>}
       <div className="rowhead"><h2>Performance</h2>{st.active > 0 && <button className="link" onClick={st.clear}>Clear Filters</button>}</div>
+      {sums.length > 0 && st.sortBar}
       {sums.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{scols.map(c => st.head(c.key))}</tr></thead>
         <tbody>{st.rows.map(s => <tr key={s.soId} className={s.flag ? "flagged" : ""}>{scols.map(c => <td key={c.key} className={c.key === "flag" ? "wrap" : ""}>
           {c.key === "so" ? <button className="link strong" onClick={() => s.so && setPerson(s.so)}>{s.so?.name || "Unknown"}</button> : c.key === "flag" ? s.flag && <span className="err">{s.flag}</span>
@@ -348,6 +359,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
           <div className="metric"><small>Can't check yet</small><b>{fmt(stockRows.filter(r => r.kind === "nodata" || r.kind === "noproduct").length)}</b></div>
         </div>
         <div className="actions"><label className="inline"><input type="checkbox" checked={onlyFlagged} onChange={e => setOnlyFlagged(e.target.checked)} /> Only problems</label>{sct.active > 0 && <button className="link" onClick={sct.clear}>Clear Filters</button>}</div>
+        {stockRows.length > 0 && sct.sortBar}
         {stockRows.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{sccols.map(c => sct.head(c.key))}</tr></thead>
           <tbody>{sct.rows.map((r, i) => <tr key={i} className={r.kind === "over" || r.kind === "drop" ? "flagged" : ""}>
             <td>{r.loc ? <button className="link strong" onClick={() => setReport(r.loc!)}>{r.loc.name}</button> : "Deleted"}</td><td>{r.product}</td><td>{fmt(r.so_qty, 1)}</td><td>{money(r.so_value)}</td>
@@ -374,6 +386,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
 
     {tab === "log" && (view.length ? <section className="card">
       <div className="rowhead"><h2>Daily Log ({dt.rows.length})</h2>{dt.active > 0 && <button className="link" onClick={dt.clear}>Clear Filters</button>}</div>
+      {dt.sortBar}
       <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{dcols.map(c => dt.head(c.key))}</tr></thead>
         <tbody>{dt.rows.slice(0, 2000).map(d => <tr key={d.id} className={WORKING.has(d.attendance || "") ? "" : "muted"}>{dcols.map(c => <td key={c.key} className={c.key === "remark" || c.key === "beat" ? "wrap" : ""}>
           {c.key === "att" ? <i className={cls(d.attendance)}>{d.attendance}</i> : c.key === "value" ? money(c.value(d)) : c.value(d)}</td>)}</tr>)}</tbody></table></div>

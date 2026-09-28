@@ -111,6 +111,7 @@ export default function Collections({ locations, stock, officers, canManage, onC
         <div className="metric"><small>Collection %</small><b>{tot.b ? `${fmt((tot.c / tot.b) * 100)}%` : "—"}</b></div>
         <div className="metric"><small>Outstanding</small><b>{money(tot.o)}</b></div>
       </div>
+      {rows.length > 0 && table.sortBar}
       {rows.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{cols.map(c => table.head(c.key))}</tr></thead>
         <tbody>{table.rows.map(r => <tr key={r.loc.id} className={r.flag ? "flagged" : ""}>
           <td><button className="link" onClick={() => setReport(r.loc)}>{r.loc.name}</button></td><td>{KIND_LABEL[r.loc.kind]}</td><td>{r.ss}</td><td>{r.loc.state}</td>
@@ -125,6 +126,7 @@ export default function Collections({ locations, stock, officers, canManage, onC
 
     <section className="card">
       <div className="rowhead"><h2>Payments ({ptable.rows.length})</h2>{ptable.active > 0 && <button className="link" onClick={ptable.clear}>Clear Filters</button>}</div>
+      {inPeriod.length > 0 && ptable.sortBar}
       {inPeriod.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{pcols.map(c => ptable.head(c.key))}<th>Note</th>{canManage && <th />}</tr></thead>
         <tbody>{ptable.rows.map(p => <tr key={p.id}><td>{p.paid_on}</td><td>{who(p.payer_id)}</td><td>{who(p.payee_id)}</td><td>{money(p.amount)}</td><td>{p.mode}</td><td>{p.reference}</td><td className="wrap">{p.note}</td>
           {canManage && <td><button className="del" aria-label="Delete payment" onClick={() => remove(p)}>✕</button></td>}</tr>)}</tbody></table></div>

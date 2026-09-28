@@ -34,10 +34,10 @@ begin
   insert into dsr_products(name, category, rate, position)
     select x->>'name', x->>'category', nullif(x->>'rate', '')::numeric, (x->>'position')::int from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x
     on conflict (name) do update set category = excluded.category, rate = coalesce(excluded.rate, dsr_products.rate), position = excluded.position, updated_at = now();
-  insert into dsr_state_days(state, day, total_calls, productive_calls, sale_value, source_file)
-    select x->>'state', (x->>'day')::date, nullif(x->>'total_calls', '')::numeric::int, nullif(x->>'productive_calls', '')::numeric::int, nullif(x->>'sale_value', '')::numeric, p_source
+  insert into dsr_state_days(state, day, team, total_calls, productive_calls, sale_value, source_file)
+    select x->>'state', (x->>'day')::date, coalesce(x->>'team', ''), nullif(x->>'total_calls', '')::numeric::int, nullif(x->>'productive_calls', '')::numeric::int, nullif(x->>'sale_value', '')::numeric, p_source
       from jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x
-    on conflict (state, day) do update set total_calls = excluded.total_calls, productive_calls = excluded.productive_calls, sale_value = excluded.sale_value,
+    on conflict (state, day, team) do update set total_calls = excluded.total_calls, productive_calls = excluded.productive_calls, sale_value = excluded.sale_value,
       source_file = excluded.source_file, updated_at = now();
   for d in select * from jsonb_array_elements(p_days) loop
     nm := trim(d->>'so');

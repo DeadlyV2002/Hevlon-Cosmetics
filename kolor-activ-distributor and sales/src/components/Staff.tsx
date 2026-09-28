@@ -157,6 +157,7 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
     <div className="reserve">{msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}</div>
     {canManage && dupes.length > 0 && <div className="warn">{plural(dupes.length, "pair")} of entries look like the same person:
       <div className="duplist">{dupes.slice(0, 20).map(([a, b]) => <span key={a.id + b.id} className="chip">{b.name} → {a.name}<button className="secondary small" onClick={() => merge(a, b)}>Merge</button></span>)}</div></div>}
+    {t.sortBar}
     <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{cols.map(c => t.head(c.key))}{canManage && <th />}</tr></thead>
       <tbody>{t.rows.map(o => <tr key={o.id} className={o.active ? "" : "muted"}>{cols.map(c => <td key={c.key} className={c.key === "areas" ? "wrap" : ""}>{c.key === "name" ? <b>{o.name}</b> : c.value(o)}</td>)}
         {canManage && <td><button className="secondary small" onClick={() => { setEditing(o); setOpen(true); setMsg(null); setForm({ name: o.name, designation: o.designation || "SO", manager_id: o.manager_id || "", zone: o.zone || o.state || "", hq: o.hq || o.region || "", areas: o.areas || "", phone: o.phone || "", aliases: (o.aliases || []).join(", "), active: o.active }); }}>Edit</button></td>}</tr>)}</tbody></table>

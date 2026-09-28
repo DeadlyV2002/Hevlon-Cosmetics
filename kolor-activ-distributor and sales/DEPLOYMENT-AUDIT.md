@@ -1,5 +1,16 @@
 # Deployment Package Audit
 
+## v13 (28 Sep 2026) — migration 012 also adds retailer state/region and per-workbook DSR state totals
+- Inventory: Stock At A Glance replaces the location picker: state → super stockist → distributors with value, units, products and last stock date, rolling up to super stockists and states; tick to download, or download everything. It updates whenever stock is saved.
+- Closing stock sheets that head the product column with the category ("Nail Polish") and repeat category headings further down are read; dates written "Sunday, August 30, 2026" or stored as Excel date numbers are read, and the earlier of a print date and a stock date is used. Tested: Arnav Traders SS statement, 97 products, ₹9.7 L; the 11 distributor statements read as before.
+- Uploads wait until the lists have loaded, so the distributor is always recognised.
+- Alerts panel stays inside the window in split screens; alert text keeps normal capitals.
+- Sort by (column and direction) above the distributor, collections, payments, SO performance, SO log, stock check and staff tables.
+- Retailers have their own state and region (filled from the distributor, editable).
+- SO Reports loads faster: data is fetched once per date range (not on every letter typed), product totals wait for typing to pause, and the stock check runs only on its tab.
+- SO Checks: Check Everything runs every check and the DSR cross-checks (state totals, unlinked DB names, SO bookings against stock, duplicate staff) and shows a tick or a flag for manual review for each. The no-data limit is 45 days, suited to monthly stock files.
+- DSR state totals are compared with the SOs of their own workbook (North and South Bihar both say "Bihar").
+
 ## v12 (26 Sep 2026) — migration 012 now also covers products and DSR linking
 - Save All: when several stock files are chosen, one button reads, checks and saves each in turn, and stops at any file that needs a decision (a Save All log lists each file). Tested: all 11 closing stock statements saved in 17 seconds.
 - A progress bar names the current step (reading the file, finding the table and whose stock it is, matching products and rates, saving, opening the next file) and shows file N of M. A thin bar at the top and a working cursor show while lists load; clickable things show a pointer.

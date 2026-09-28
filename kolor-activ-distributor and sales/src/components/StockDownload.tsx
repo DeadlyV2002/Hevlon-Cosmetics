@@ -1,9 +1,7 @@
-import { Combo } from "./Select";
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Product, StockLine, KINDS, KIND_LABEL, fetchAll, fmt, errText, locLabel } from "../lib/supabase";
+import { supabase, Distributor, Product, StockLine, KIND_LABEL, fetchAll, fmt, money, errText } from "../lib/supabase";
 import { today } from "../lib/parse";
-import FilterBar, { Scope, emptyScope, applyScope, scopeLabel } from "./FilterBar";
 import DateRange, { Range, defaultRange } from "./DateRange";
 
 interface PeriodRow {
@@ -21,13 +19,14 @@ const n = (v: unknown) => Number(v || 0);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "stock";
 
 export default function StockDownload({ locations, products, stock, notify }: { locations: Distributor[]; products: Product[]; stock: StockLine[]; notify: (m: string) => void }) {
-  const [scope, setScope] = useState<Scope>(emptyScope());
-  const [typed, setTyped] = useState("");
+  const [sel, setSel] = useState<Set<string>>(new Set()), [search, setSearch] = useState(""), [onlyStock, setOnlyStock] = useState(false);
+  const [openSS, setOpenSS] = useState<Set<string>>(new Set());
   const [period, setPeriod] = useState<"latest" | "range">("latest");
   const [range, setRange] = useState<Range>(defaultRange("month"));
   const [busy, setBusy] = useState(false);
 
-  const picked = applyScope(locations, scope);
+  // Ticked locations, or all of them when nothing is ticked.
+  const picked = sel.size ? locations.filter(d => sel.has(d.id)) : locations;
   const byId = useMemo(() => new Map(locations.map(d => [d.id, d])), [locations]);
   const productById = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
   const rank = useMemo(() => {
@@ -38,14 +37,6 @@ export default function StockDownload({ locations, products, stock, notify }: { 
   const ids = new Set(picked.map(d => d.id));
   const units = stock.filter(s => ids.has(s.distributor_id)).reduce((a, s) => a + n(s.current_stock), 0);
   const value = picked.reduce((a, d) => a + (rank.get(d.id) || 0), 0);
-
-  /** Typing a full name picks that one location. */
-  function type(v: string) {
-    setTyped(v);
-    const d = locations.find(x => locLabel(x) === v) || locations.find(x => x.name.toLowerCase() === v.trim().toLowerCase());
-    if (d) setScope({ ...emptyScope(), ids: [d.id] });
-    else if (!v.trim()) setScope(emptyScope());
-  }
 
   async function download() {
     if (!supabase || !picked.length) return;
@@ -92,30 +83,87 @@ export default function StockDownload({ locations, products, stock, notify }: { 
         "From / to": m.counterparty_name || m.retailer_name || m.party || "", "Invoice / ref": m.reference || "", SKU: m.sku, Product: m.item_name,
         Qty: n(m.quantity), "Rate ₹": n(m.unit_price), File: m.source_file || "",
       })), "No movements in this period."), "Movements");
-      const label = slug(scopeLabel(locations, scope));
+      const label = slug(picked.length === 1 ? picked[0].name : sel.size ? `${picked.length}-locations` : "all-locations");
       XLSX.writeFile(wb, `stock-${label}-${period === "latest" ? `latest-${today()}` : `${range.from}-to-${range.to}`}.xlsx`);
       notify(`Downloaded ${title.toLowerCase()} for ${picked.length === 1 ? picked[0].name : `${picked.length} locations`}: ${detail.length} product lines.`);
     } catch (e) { notify(`Download failed: ${errText(e)}`); }
     finally { setBusy(false); }
   }
 
+  // ---------- stock at a glance: state → super stockist → distributors ----------
+  const perLoc = useMemo(() => {
+    const m = new Map<string, { units: number; value: number; products: number; last: string }>();
+    stock.forEach(s => {
+      const e = m.get(s.distributor_id) || { units: 0, value: 0, products: 0, last: "" };
+      if (n(s.current_stock)) { e.units += n(s.current_stock); e.value += n(s.stock_value); e.products++; }
+      if ((s.last_movement || "") > e.last) e.last = s.last_movement || "";
+      m.set(s.distributor_id, e);
+    });
+    return m;
+  }, [stock]);
+  const zero = { units: 0, value: 0, products: 0, last: "" };
+  const t = search.trim().toLowerCase();
+  const hit = (d: Distributor) => !t || `${d.name} ${d.code} ${d.territory || ""} ${d.state || ""}`.toLowerCase().includes(t);
+  const holds = (d: Distributor) => (perLoc.get(d.id)?.units || 0) !== 0;
+  const tree = useMemo(() => {
+    const states = new Map<string, { ss: Map<string, Distributor[]>; godowns: Distributor[] }>();
+    const add = (st: string) => { if (!states.has(st)) states.set(st, { ss: new Map(), godowns: [] }); return states.get(st)!; };
+    locations.forEach(d => {
+      if (d.kind === "GODOWN") { add(d.state || "No state").godowns.push(d); return; }
+      const ssId = d.kind === "SUPER_STOCKIST" ? d.id : d.parent_id || "";
+      const st = add((d.kind === "SUPER_STOCKIST" ? d.state : byId.get(d.parent_id || "")?.state || d.state) || "No state");
+      if (!st.ss.has(ssId)) st.ss.set(ssId, []);
+      if (d.kind === "DISTRIBUTOR") st.ss.get(ssId)!.push(d);
+    });
+    return [...states].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [locations, byId]);
+  const sum = (ds: Distributor[]) => ds.reduce((a, d) => { const e = perLoc.get(d.id) || zero; return { units: a.units + e.units, value: a.value + e.value, products: a.products + e.products, last: e.last > a.last ? e.last : a.last }; }, { ...zero });
+  const toggle = (ids: string[], on: boolean) => setSel(s => { const x = new Set(s); ids.forEach(id => (on ? x.add(id) : x.delete(id))); return x; });
+  const row = (d: Distributor, cls = "") => { const e = perLoc.get(d.id) || zero; return <label key={d.id} className={`sk-row ${cls}${e.units ? "" : " none"}`}>
+    <input type="checkbox" checked={sel.has(d.id)} onChange={ev => toggle([d.id], ev.target.checked)} />
+    <span className="sk-name">{d.name}<small>{d.code}{d.territory ? ` · ${d.territory}` : ""}{d.status === "DORMANT" ? " · dormant" : ""}</small></span>
+    <span className="sk-num">{e.units ? money(e.value) : "no stock"}<small>{e.units ? `${fmt(e.units)} units · ${e.products} products${e.last ? ` · ${e.last}` : ""}` : e.last ? `last update ${e.last}` : "never uploaded"}</small></span>
+  </label>; };
+
   return <section className="card">
-    <div className="rowhead"><h2>Download stock</h2></div>
-    <p className="hint">Type a distributor, super stockist or godown to download its stock, or narrow by state, region and super stockist to download several at once.</p>
-    <div className="bulk">
-      <label>Location<Combo value={typed} onChange={e => type(e.target.value)} placeholder="Type a name…" options={KINDS.flatMap(k => locations.filter(d => d.kind === k)).map(d => ({ value: locLabel(d), hint: `${KIND_LABEL[d.kind]}${d.territory ? ` · ${d.territory}` : ""}` }))} /></label>
+    <div className="rowhead"><h2>Stock At A Glance</h2>
+      <div className="actions"><input className="search" placeholder="Search a location…" value={search} onChange={e => setSearch(e.target.value)} />
+        <label className="inline"><input type="checkbox" checked={onlyStock} onChange={e => setOnlyStock(e.target.checked)} /> Only those holding stock</label></div></div>
+    <p className="hint">Who holds how much stock right now, at SS rate. It updates as soon as any stock is saved. Tick locations to download their stock, or download everything.</p>
+    <div className="sk-tree">{tree.map(([state, g]) => {
+      const all = [...[...g.ss.entries()].flatMap(([ssId, ds]) => [...(byId.get(ssId) ? [byId.get(ssId)!] : []), ...ds]), ...g.godowns];
+      const shown = all.filter(d => hit(d) && (!onlyStock || holds(d)));
+      if (!shown.length) return null;
+      const tot = sum(all);
+      return <details key={state} className="rt-state" open={!!t || tree.length <= 2}>
+        <summary><h3>{state}</h3><span className="rt-badge">{money(tot.value)}</span><span className="rt-badge">{fmt(tot.units)} units</span><span className="rt-badge">{all.filter(holds).length} of {all.length} hold stock</span></summary>
+        <div className="rt-branch">
+          {g.godowns.filter(d => hit(d) && (!onlyStock || holds(d))).map(d => row(d, "godown"))}
+          {[...g.ss.entries()].sort((a, b) => sum([...(byId.get(b[0]) ? [byId.get(b[0])!] : []), ...b[1]]).value - sum([...(byId.get(a[0]) ? [byId.get(a[0])!] : []), ...a[1]]).value).map(([ssId, ds]) => {
+            const ss = byId.get(ssId), team = [...(ss ? [ss] : []), ...ds], tt = sum(team);
+            const kids = ds.filter(d => hit(d) && (!onlyStock || holds(d))).sort((a, b) => (perLoc.get(b.id)?.value || 0) - (perLoc.get(a.id)?.value || 0));
+            if (!kids.length && !(ss && hit(ss) && (!onlyStock || holds(ss)))) return null;
+            const key = `${state}|${ssId}`, open = !!t || openSS.has(key);
+            return <details key={key} className="rt-ss" open={open} onToggle={e => { const o = (e.currentTarget as HTMLDetailsElement).open; if (o !== open) setOpenSS(s => { const x = new Set(s); o ? x.add(key) : x.delete(key); return x; }); }}>
+              <summary><input type="checkbox" aria-label={`Select ${ss?.name || "no super stockist"} and its distributors`} checked={team.length > 0 && team.every(d => sel.has(d.id))}
+                  onClick={e => e.stopPropagation()} onChange={e => toggle(team.map(d => d.id), e.target.checked)} />
+                <span className="kind">SS</span><b>{ss?.name || "No super stockist"}</b>
+                <span className="rt-badge">{money(tt.value)}</span><span className="rt-badge">{ss ? `SS own ${money(perLoc.get(ss.id)?.value || 0)}` : ""}</span><span className="rt-badge">{kids.length} distributors</span></summary>
+              {open && <div className="sk-list">{ss && row(ss, "ssrow")}{kids.map(d => row(d))}</div>}
+            </details>;
+          })}
+        </div>
+      </details>;
+    })}</div>
+    <div className="actions downloadrow">
       <div className="periodpick">
-        <span className="lbl">Stock</span>
-        <label className="inline"><input type="radio" name="period" checked={period === "latest"} onChange={() => setPeriod("latest")} /> Latest</label>
+        <label className="inline"><input type="radio" name="period" checked={period === "latest"} onChange={() => setPeriod("latest")} /> Latest stock</label>
         <label className="inline"><input type="radio" name="period" checked={period === "range"} onChange={() => setPeriod("range")} /> For a date range</label>
         {period === "range" && <DateRange value={range} onChange={setRange} />}
       </div>
-    </div>
-    <FilterBar locations={locations} value={scope} onChange={s => { setScope(s); setTyped(""); }} kinds={KINDS} rank={rank} saveKey="download" />
-    <div className="actions downloadrow">
-      <button onClick={download} disabled={busy || !picked.length}>{busy ? "Preparing…" : "Download Excel"}</button>
-      <span className="hint">{picked.length === 1 ? picked[0].name : `${picked.length} locations`} · latest stock {fmt(units)} units · ₹{fmt(value)}
-        {period === "range" && " · the file shows opening, received, sent / sold and closing for the dates chosen"}</span>
+      <button onClick={download} disabled={busy || !picked.length}>{busy ? "Preparing…" : sel.size ? `Download ${sel.size} Selected` : "Download All"}</button>
+      {sel.size > 0 && <button className="link" onClick={() => setSel(new Set())}>Clear Selection</button>}
+      <span className="hint">{sel.size ? `${picked.length} selected` : `All ${picked.length} locations`} · {fmt(units)} units · {money(value)}</span>
     </div>
   </section>;
 }

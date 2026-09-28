@@ -451,8 +451,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
       {autoLog.length > 0 && <details className="rsec"><summary>Save All: {autoLog.filter(x => x.ok).length} saved{autoLog.some(x => !x.ok) ? `, ${autoLog.filter(x => !x.ok).length} need a look` : ""}</summary>
         <div className="rsecbody tablewrap"><table className="nice"><tbody>{autoLog.map((x, i) => <tr key={i}><td>{x.file}</td><td className={`wrap ${x.ok ? "ok" : "err"}`}>{x.text}</td></tr>)}</tbody></table></div></details>}
       <label className="drop">
-        <input type="file" multiple accept={ACCEPT} disabled={!!busy || auto} onChange={e => { startFiles([...(e.target.files || [])]); e.target.value = ""; }} />
-        <b>{busy || "Choose files"}</b>
+        <input type="file" multiple accept={ACCEPT} disabled={!!busy || auto || !locations.length} onChange={e => { startFiles([...(e.target.files || [])]); e.target.value = ""; }} />
+        <b>{busy || (!locations.length ? "Loading your lists…" : "Choose files")}</b>
         <small>Your Excel format, any Excel / CSV, Tally exports (Excel, XML, JSON, HTML, TXT, PDF), scanned PDFs, photos, SO daily sheets</small>
       </label>
       {queue.length > 0 && <p className="hint">{queue.length} more {queue.length === 1 ? "file is" : "files are"} waiting: {queue.map(f => f.name).join(", ")}. Each opens after this one is saved. <button className="link" onClick={nextFile}>Skip To Next File</button></p>}

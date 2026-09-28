@@ -8,6 +8,7 @@ import { cellText, normName, Grid } from "../lib/parse";
 import { findHeader } from "../lib/sheet";
 import DateRange, { PRESETS, Range } from "../components/DateRange";
 import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
+import { STATES, normalizeState } from "../lib/india";
 import FilterBar, { Scope, emptyScope, applyScope, scopeLabel } from "../components/FilterBar";
 
 type RField = "name" | "distributor" | "owner_name" | "phone" | "territory" | "code";
@@ -21,8 +22,8 @@ const R_RULES: [RField, RegExp][] = [
   ["name", /retailer|outlet|shop|store|chemist|party|customer|name/],
 ];
 interface Preview { file: string; grid: Grid; headerRow: number; labels: string[]; mapping: (RField | "ignore")[]; forAll: string }
-type Form = { name: string; distributor_id: string; owner_name: string; phone: string; territory: string; code: string };
-const blank: Form = { name: "", distributor_id: "", owner_name: "", phone: "", territory: "", code: "" };
+type Form = { name: string; distributor_id: string; owner_name: string; phone: string; territory: string; code: string; state: string; region: string };
+const blank: Form = { name: "", distributor_id: "", owner_name: "", phone: "", territory: "", code: "", state: "", region: "" };
 
 const ORDERS = [{ id: "name", label: "Name (A to Z)" }, { id: "billed", label: "Billing (highest first)" }, { id: "best", label: "Collection % (best first)" }, { id: "worst", label: "Collection % (worst first)" }, { id: "stock", label: "Stock value (highest first)" }];
 interface Props { retailers: Retailer[]; locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
@@ -95,7 +96,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
 
   function edit(r: Retailer) {
     setEditing(r); setMsg(null);
-    setForm({ name: r.name, distributor_id: r.distributor_id || "", owner_name: r.owner_name || "", phone: r.phone || "", territory: r.territory || "", code: r.code || "" });
+    setForm({ name: r.name, distributor_id: r.distributor_id || "", owner_name: r.owner_name || "", phone: r.phone || "", territory: r.territory || "", code: r.code || "", state: r.state || "", region: r.region || "" });
     scrollTo({ top: 0, behavior: "smooth" });
   }
   async function save() {
@@ -106,7 +107,8 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
     const clash = retailers.find(r => r.id !== editing?.id && r.distributor_id === form.distributor_id && normName(r.name) === normName(name));
     if (clash) return show("err", `${clash.name} is already listed under this distributor.`);
     const t = (s: string) => s.trim() || null;
-    const payload = { name, distributor_id: form.distributor_id, owner_name: properOrNull(form.owner_name), phone: t(cleanPhones(form.phone)), territory: properOrNull(form.territory), code: t(form.code) };
+    const payload = { name, distributor_id: form.distributor_id, owner_name: properOrNull(form.owner_name), phone: t(cleanPhones(form.phone)), territory: properOrNull(form.territory), code: t(form.code),
+      state: normalizeState(form.state) || properOrNull(form.state), region: properOrNull(form.region) };
     setBusy(true);
     const { error } = editing ? await supabase.from("retailers").update(payload).eq("id", editing.id) : await supabase.from("retailers").insert(payload);
     setBusy(false);
@@ -194,11 +196,14 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
         <label className="button secondary">Import from Excel<input hidden type="file" multiple accept={ACCEPT} onChange={e => { const [x, ...rest] = [...(e.target.files || [])]; if (x) { readImport(x); setQueue(rest); } e.target.value = ""; }} /></label></div>
       <div className="formgrid">
         <label>Retailer name *<input {...f("name")} /></label>
-        <label>Distributor *<Select {...f("distributor_id")}><option value="">Choose…</option>
+        <label>Distributor *<Select value={form.distributor_id} onChange={e => { const d = byId.get(e.target.value); setForm({ ...form, distributor_id: e.target.value, state: form.state || d?.state || "", region: form.region || d?.region || "" }); }}><option value="">Choose…</option>
           {(["DISTRIBUTOR", "SUPER_STOCKIST"] as const).map(k => <optgroup key={k} label={k === "DISTRIBUTOR" ? "Distributors" : "Super stockists (selling direct)"}>
             {sellers.filter(s => s.kind === k).map(s => <option key={s.id} value={s.id}>{s.name} ({s.code}){s.territory ? ` · ${s.territory}` : ""}</option>)}</optgroup>)}</Select></label>
         <label>Owner<input {...f("owner_name")} /></label>
         <label>Phone<input {...f("phone")} inputMode="tel" /></label>
+        <label>State <small>where the shop is</small><Select value={form.state} onChange={e => setForm({ ...form, state: e.target.value })}><option value="">Choose…</option>
+          {form.state && !STATES.includes(form.state) && <option value={form.state}>{form.state}</option>}{STATES.map(s => <option key={s} value={s}>{s}</option>)}</Select></label>
+        <label>Region <small>its own, if not the distributor's</small><input {...f("region")} /></label>
         <label>Area / beat<input {...f("territory")} /></label>
         <label>Code<input {...f("code")} /></label>
       </div>

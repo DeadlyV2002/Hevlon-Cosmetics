@@ -2,7 +2,7 @@
 // box and sorting. Filters combine, and each list only offers values left by the other filters.
 import { ReactNode, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { usePlace, useOutside } from "./Select";
+import { usePlace, useOutside, Select } from "./Select";
 
 export interface Col<T> { key: string; label: string; value: (r: T) => string | number | null | undefined; num?: boolean }
 type Filters = Record<string, Set<string> | undefined>;
@@ -32,7 +32,13 @@ export function useColumnFilters<T>(rows: T[], cols: Col<T>[]) {
     return <ColumnHead key={key} label={c.label} num={c.num} counts={counts} selected={filters[key]} sorted={sort?.key === key ? sort.dir : 0} extra={extra}
       onApply={sel => setFilters(f => ({ ...f, [key]: sel }))} onSort={dir => setSort(dir ? { key, dir } : null)} />;
   };
-  return { rows: out, head, active, clear: () => { setFilters({}); setSort(null); } };
+  /** "Sort by [column] [direction]" for above the table. */
+  const sortBar = <div className="sortbar"><span>Sort by</span>
+    <Select value={sort?.key || ""} onChange={e => setSort(e.target.value ? { key: e.target.value, dir: sort?.dir || (cols.find(c => c.key === e.target.value)?.num ? -1 : 1) } : null)} aria-label="Sort by">
+      <option value="">As listed</option>{cols.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</Select>
+    {sort && <Select value={String(sort.dir)} onChange={e => setSort({ ...sort, dir: Number(e.target.value) as 1 | -1 })} aria-label="Direction">
+      <option value="-1">{cols.find(c => c.key === sort.key)?.num ? "Highest first" : "Z to A"}</option><option value="1">{cols.find(c => c.key === sort.key)?.num ? "Lowest first" : "A to Z"}</option></Select>}</div>;
+  return { rows: out, head, active, sortBar, clear: () => { setFilters({}); setSort(null); } };
 }
 
 function ColumnHead({ label, num, counts, selected, sorted, onApply, onSort, extra }: {

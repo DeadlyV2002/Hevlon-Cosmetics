@@ -12,7 +12,8 @@ export interface DsrDay {
   attendance: string; total_calls: number; productive_calls: number; sale_value: number; lines: DsrLine[]; sheet: string; file: string;
 }
 export interface DsrProduct { name: string; category: string; rate: number | null; position: number }
-export interface DsrStateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number }
+/** team: the SOs in the same workbook (names, sorted), so a state total is checked against its own SOs. */
+export interface DsrStateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number; team: string }
 export interface SheetInfo { file: string; name: string; kind: "SO daily" | "State total" | "Summary" | "Empty"; rows: number; note: string }
 export interface DsrBook { days: DsrDay[]; stateDays: DsrStateDay[]; products: DsrProduct[]; sheets: SheetInfo[]; dupes: string[] }
 
@@ -82,7 +83,7 @@ export function readDsr(wb: XLSX.WorkBook, file = ""): DsrBook {
       if (!value && lines.length) value = lines.reduce((a, l) => a + l.qty * (l.rate || 0), 0);
       if (isTotal) {
         if (!calls && !value) continue;
-        stateDays.push({ state: v("state") || soFromSheet, day, total_calls: Math.round(calls), productive_calls: Math.round(pc), sale_value: Math.round(value * 100) / 100 });
+        stateDays.push({ team: "", state: v("state") || soFromSheet, day, total_calls: Math.round(calls), productive_calls: Math.round(pc), sale_value: Math.round(value * 100) / 100 });
         found++; continue;
       }
       const remark = v("remark"), db = v("db");
@@ -94,6 +95,8 @@ export function readDsr(wb: XLSX.WorkBook, file = ""): DsrBook {
     if (isTotal) info("State total", found, `${plural(found, "day")} of state totals, used to check that the SO sheets add up.`);
     else info("SO daily", found, found ? `${plural(found, "day")} for ${days[days.length - 1]?.so || soFromSheet}.` : "Daily layout, but no filled-in days yet.");
   }
+  const team = [...new Set(days.map(d => normName(d.so)))].sort().join("|");
+  stateDays.forEach(s => { s.team = team; });
   return { days, stateDays, products: [...products.values()], sheets, dupes: [] };
 }
 
@@ -107,7 +110,14 @@ export function mergeBooks(books: DsrBook[]): DsrBook {
       seen.set(k, d); days.push(d);
     }
     b.products.forEach(p => { if (!products.has(p.name)) products.set(p.name, { ...p, position: products.size }); });
-    b.stateDays.forEach(s => states.set(`${s.state}|${s.day}`, s));
+    b.stateDays.forEach(s => states.set(`${s.state}|${s.day}|${s.team}`, s));
   }
   return { days, stateDays: [...states.values()], products: [...products.values()], sheets: books.flatMap(b => b.sheets), dupes };
+}
+
+/** The SO figures behind a state total: that workbook's SOs on that day. */
+export function teamTotal(team: string, day: string, days: { so_id: string; day: string; sale_value: number }[], officers: { id: string; name: string; aliases?: string[] }[]) {
+  const names = new Set(team.split("|").filter(Boolean));
+  const ids = new Set(officers.filter(o => names.has(normName(o.name)) || (o.aliases || []).some(a => names.has(normName(a)))).map(o => o.id));
+  return days.filter(d => d.day === day && ids.has(d.so_id)).reduce((a, d) => a + Number(d.sale_value || 0), 0);
 }

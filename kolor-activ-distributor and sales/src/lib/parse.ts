@@ -85,28 +85,43 @@ export const isValidDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNa
 /** Last date in a report heading: "1-Apr-26 to 24-Sep-26" → 2026-09-24 (a stock summary's "as on" date). */
 export function headingDate(raw: string): string {
   const text = raw.replace(/(\d)\s*([/.-])\s*(\d)/g, "$1$2$3");
-  const found = text.match(/\b\d{1,2}[-\s/.](?:\d{1,2}|[A-Za-z]{3,9})[-\s/.,]*\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g) || [];
-  const dates = found.map(toISODate).filter(isValidDate);
-  if (dates.length) return dates[dates.length - 1];
+  const labelled = text.match(/stock\s*taking\s*date\W*([^|]{6,24})/i);
+  if (labelled) { const d = headingDate(labelled[1]); if (d) return d; }
+  const now = today();
+  const found = [
+    ...(text.match(/\b\d{1,2}[-\s/.](?:\d{1,2}|[A-Za-z]{3,9})[-\s/.,]*\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g) || []).map(toISODate),
+    // "Sunday, August 30, 2026"
+    ...[...text.matchAll(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\b/g)].map(m => (MONTHS[m[1].slice(0, 3).toLowerCase()] ? `${m[3]}-${pad(String(MONTHS[m[1].slice(0, 3).toLowerCase()]))}-${pad(m[2])}` : "")),
+    // A date cell above the table comes through as an Excel day number (46264 = 30 Aug 2026).
+    ...(text.match(/(?:^|[|\s])4[3-9]\d{3}(?=$|[|\s])/g) || []).map(x => toISODate(Number(x.replace(/\D/g, "")))),
+  ].filter(d => isValidDate(d) && d <= now).sort();
+  // Several dates (a print date and a stock date): the earlier is the stock date.
+  if (found.length) return found[0];
   // "Month: AUGUST" or "August 2026": the last day of that month (this year, or last year if the month hasn't come yet).
-  const m = text.match(/\bmonth\W{0,4}([A-Za-z]{3,9})\.?(?:\W{0,3}(\d{2,4}))?/i) || text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s'-]+(\d{2,4})\b/i);
+  const m = text.match(/\bmonth\W{0,4}([A-Za-z]{3,9})\.?(?:\W{0,3}(\d{2,4}))?/i) || text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s'-]+(\d{4})\b/i);
   const mo = m ? MONTHS[m[1].slice(0, 3).toLowerCase()] : 0;
   if (!mo) return "";
-  const now = new Date(), y = m![2] ? Number(yr(m![2])) : mo > now.getMonth() + 1 ? now.getFullYear() - 1 : now.getFullYear();
+  const nowD = new Date(), y = m![2] ? Number(yr(m![2])) : mo > nowD.getMonth() + 1 ? nowD.getFullYear() - 1 : nowD.getFullYear();
   return localDate(new Date(y, mo, 0));
 }
 
 /** Stock statements often print two product tables side by side; this stacks the right-hand table under the left one. */
 export function unstackBlocks(grid: Grid): Grid {
+  const RATE = /^(basic rate|rate|basic rate in doz|rate per doz|rate per dozen|price|mrp)$/;
+  const PRODUCT = /^(products?|particulars|items?|item name|product name|description|sku name)$/;
   for (let r = 0; r < Math.min(grid.length, 40); r++) {
     const labels = (grid[r] || []).map(c => normName(cellText(c)));
-    const starts = labels.map((l, i) => (/^(products?|particulars|items?|item name|product name|description|sku name)$/.test(l) ? i : -1)).filter(i => i >= 0);
-    if (starts.length < 2) continue;
-    const width = starts[1] - starts[0];
-    const sig = (s: number) => labels.slice(s, s + width).join("|");
-    if (width < 2 || !starts.slice(1).every(s => sig(s) === sig(starts[0]) || sig(s).startsWith(labels[starts[0]]))) continue;
-    const body = (s: number) => grid.slice(r + 1).map(row => (row || []).slice(s, s + width)).filter(row => row.some(c => cellText(c)));
-    return [...grid.slice(0, r), grid[r].slice(starts[0], starts[0] + width), ...starts.flatMap(body)];
+    // Some sheets head the product column with the category ("Nail Polish") instead of "Products".
+    const starts = labels.map((l, i) => (PRODUCT.test(l) || (l && !RATE.test(l) && RATE.test(labels[i + 1] || "") && /closing|stock|qty|quantity/.test(labels[i + 2] || "")) ? i : -1)).filter(i => i >= 0);
+    if (!starts.length || (starts.length === 1 && PRODUCT.test(labels[starts[0]]))) continue;
+    let last = labels.length - 1; while (last > starts[0] && !labels[last]) last--;
+    const width = starts.length > 1 ? starts[1] - starts[0] : last - starts[0] + 1;
+    const sig = (i: number) => labels.slice(i + 1, i + width).join("|");
+    if (width < 2 || !starts.every(i => sig(i) === sig(starts[0]))) continue;
+    // Repeated heading rows further down (the next category's heading) are not products.
+    const isHeading = (row: Cell[]) => RATE.test(normName(cellText(row[1])));
+    const body = (st: number) => grid.slice(r + 1).map(row => (row || []).slice(st, st + width)).filter(row => row.some(c => cellText(c)) && !isHeading(row));
+    return [...grid.slice(0, r), ["Products", ...grid[r].slice(starts[0] + 1, starts[0] + width)], ...starts.flatMap(body)];
   }
   return grid;
 }

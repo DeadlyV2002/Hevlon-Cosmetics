@@ -1,6 +1,8 @@
 import { Select } from "../components/Select";
 import { ask } from "../lib/ask";
-import { useMemo, useRef, useState } from "react";
+import { useDeferredValue, useMemo, useRef, useState } from "react";
+import { editDistance } from "../lib/fuzzy";
+import { startTask } from "../lib/tasks";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
 import { readAnyFile, ACCEPT } from "../lib/readers";
@@ -108,8 +110,15 @@ export default function Distributors({ locations, stock, retailers, officers, pr
   const incomplete = (d: Distributor) => missingFields(d);
 
   const ofKind = locations.filter(d => d.kind === tab);
-  const list = applyScope(ofKind, scope).filter(d => (!onlyIncomplete || incomplete(d).length) && (showStatus === "ALL" || (d.status || "ACTIVE") === showStatus)
-    && `${d.code} ${d.name} ${d.company_name || ""} ${d.owner_name || ""} ${d.state || ""} ${d.region || ""} ${d.territory || ""} ${d.phone || ""} ${(d.aliases || []).join(" ")}`.toLowerCase().includes(search.toLowerCase()));
+  // Search matches every word typed, in any order, allowing a letter or two off ("balajee" finds Balaji), across names, people, places, phone, SS and SO.
+  const words = useMemo(() => { const m = new Map<string, string[]>(); locations.forEach(d => m.set(d.id, normName(`${d.code} ${d.name} ${d.company_name || ""} ${d.owner_name || ""} ${d.state || ""} ${d.region || ""} ${d.territory || ""} ${d.phone || ""} ${d.email || ""} ${(d.aliases || []).join(" ")} ${byId.get(d.parent_id || "")?.name || ""} ${byId.get(d.via_id || "")?.name || ""} ${officers.find(o => o.id === d.so_id)?.name || ""}`).split(" "))); return m; }, [locations, officers, byId]);
+  const q = normName(useDeferredValue(search)).split(" ").filter(Boolean);
+  // A word of one or two letters must be a whole word ("GA"), longer ones can be part of a word.
+  const hit = (d: Distributor) => !q.length || q.every(w => (words.get(d.id) || []).some(x => (w.length <= 2 ? x === w : x.includes(w)) || (w.length >= 5 && x.length >= 4 && editDistance(x.slice(0, w.length + 1), w) <= (w.length >= 8 ? 2 : 1))));
+  // Names that start with what was typed come first.
+  const rankHit = (d: Distributor) => { const n = normName(d.name), t = q.join(" "); return n === t ? 0 : n.startsWith(t) ? 1 : n.includes(t) ? 2 : 3; };
+  const list = applyScope(ofKind, scope).filter(d => (!onlyIncomplete || incomplete(d).length) && (showStatus === "ALL" || (d.status || "ACTIVE") === showStatus) && hit(d))
+    .sort((a, b) => (q.length ? rankHit(a) - rankHit(b) : 0));
   const nIncomplete = ofKind.filter(d => incomplete(d).length).length;
 
   // ---------- Excel import with preview ----------
@@ -193,6 +202,7 @@ export default function Distributors({ locations, stock, retailers, officers, pr
   async function confirmImport() {
     if (!supabase || !toImport.length) return;
     setBusy(true);
+    const task = startTask(`Importing ${plural(toImport.length, KIND_LABEL[tab].toLowerCase(), KIND_PLURAL[tab].toLowerCase())}`, 5);
     try {
       let created: Distributor[] = [];
       if (newSupers.length) {
@@ -206,6 +216,7 @@ export default function Distributors({ locations, stock, retailers, officers, pr
         if (error) throw error;
         created = data as Distributor[];
       }
+      task.step(1, 5, "New super stockists added");
       let createdSOs: SalesOfficer[] = [];
       if (newSOs.length) {
         const taken = officers.map(o => Number(o.code.match(/^SO(\d+)$/i)?.[1] || 0));
@@ -215,13 +226,16 @@ export default function Distributors({ locations, stock, retailers, officers, pr
         if (error) throw error;
         createdSOs = data as SalesOfficer[];
       }
+      task.step(2, 5, "New SOs added");
       const ssId = (n: string) => created.find(c => normName(c.name) === normName(n))?.id || null;
       const soId = (n: string) => createdSOs.find(c => normName(c.name) === normName(n))?.id || null;
       const rows = toImport.map(x => ({ ...x.row, parent_id: x.newSS ? ssId(x.newSS) : x.row.parent_id, ...(x.newSO ? { so_id: soId(x.newSO) } : {}) }));
       const inserts = rows.filter(r => !r.id).map(({ id: _, ...r }) => r);
       const updates = rows.filter(r => r.id);
       if (inserts.length) { const { error } = await supabase.from("distributors").insert(inserts); if (error) throw error; }
+      task.step(3, 5, `${inserts.length} new saved`);
       if (updates.length) { const { error } = await supabase.from("distributors").upsert(updates, { onConflict: "id" }); if (error) throw error; }
+      task.step(4, 5, `${updates.length} updated`);
       // Super stockists already in the app pick up their town from the sheet if it was blank.
       for (const [id, town] of new Map(toImport.filter(x => !x.newSS && x.ssTown && x.row.parent_id).map(x => [x.row.parent_id as string, x.ssTown])))
         if (!byId.get(id)?.territory) await supabase.from("distributors").update({ territory: town }).eq("id", id);
@@ -229,8 +243,10 @@ export default function Distributors({ locations, stock, retailers, officers, pr
       if (dropMissing) for (const d of removable) { const { error } = await supabase.rpc("delete_location", { p_location: d.id }); if (!error) removed++; }
       const skipped = importRows.length - toImport.length;
       show("ok", `Imported ${plural(toImport.length, KIND_LABEL[tab].toLowerCase(), KIND_PLURAL[tab].toLowerCase())} (${inserts.length} new, ${updates.length} updated)${created.length ? `, added ${plural(created.length, "new super stockist")}` : ""}${createdSOs.length ? `, added ${plural(createdSOs.length, "new SO")}` : ""}${removed ? `, removed ${plural(removed, KIND_LABEL[tab].toLowerCase(), KIND_PLURAL[tab].toLowerCase())} not in the sheet` : ""}.${skipped ? ` ${plural(skipped, "row")} with empty fields ${skipped === 1 ? "was" : "were"} skipped.` : ""}`);
+      task.ok(`${inserts.length} new, ${updates.length} updated.`);
       setPreview(null); await onChanged(); if (queue.length) nextImport();
     } catch (e: any) {
+      task.fail(errText(e));
       show("err", `Import failed: ${e?.code === "42501" ? "only HO admins and state managers can import" : errText(e)}`);
     } finally { setBusy(false); }
   }
@@ -246,7 +262,7 @@ export default function Distributors({ locations, stock, retailers, officers, pr
     { key: "code", label: "Code", value: x => x.code }, { key: "name", label: KIND_LABEL[tab], value: x => x.name },
     { key: "company", label: "Company", value: x => x.company_name },
     ...(tab !== "GODOWN" ? [{ key: "owner", label: "Owner", value: (x: Distributor) => x.owner_name }] : []),
-    ...(tab === "DISTRIBUTOR" ? [{ key: "ss", label: "Super Stockist", value: (x: Distributor) => (x.direct ? "Direct with company" : byId.get(x.parent_id || "")?.name) }] : []),
+    ...(tab === "DISTRIBUTOR" ? [{ key: "ss", label: "Super Stockist", value: (x: Distributor) => `${x.direct ? "Direct with company" : byId.get(x.parent_id || "")?.name || ""}${x.via_id ? ` (stock via ${byId.get(x.via_id)?.name || "another distributor"})` : ""}` }] : []),
     { key: "state", label: "State", value: x => x.state }, { key: "region", label: "Region", value: x => x.region }, { key: "city", label: "City / Area", value: x => x.territory },
     { key: "phone", label: "Phone", value: x => x.phone }, { key: "email", label: "Email", value: x => x.email },
     ...(tab === "DISTRIBUTOR" ? [{ key: "so", label: "SO", value: (x: Distributor) => officers.find(o => o.id === x.so_id)?.name }] : []),

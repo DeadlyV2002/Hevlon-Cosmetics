@@ -18,6 +18,7 @@ import ClearButton from "./components/ClearButton";
 import { AskHost } from "./lib/ask";
 import { guessProduct } from "./lib/fuzzy";
 import { useSessionLog } from "./components/LogBook";
+import Tasks from "./components/Tasks";
 
 export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "Collections" | "SO reports" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
 const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "Collections", "SO reports", "SO checks", "Reports", "Pricing", "History", "Settings"];
@@ -153,7 +154,7 @@ export default function App() {
           testingMode={testingMode} userId={session.user.id} onChanged={refreshAll} notify={setMessage} />}
         {page === "Retailers" && <Retailers retailers={retailers} locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Collections" && <Collections locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
-        {page === "SO reports" && <SOReports officers={officers} locations={locations} stock={stock} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "SO reports" && <SOReports officers={officers} locations={locations} stock={stock} products={products} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} locations={locations} />}
         {page === "Pricing" && canPrice && <Pricing products={products} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
@@ -161,6 +162,7 @@ export default function App() {
         {page === "Settings" && <Settings role={role} locations={locations} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>
       {dataLoading && <div className="topbar" role="progressbar" aria-label="Loading" />}
+      <Tasks />
       <ClearButton />
       <AskHost />
     </div>

@@ -6,7 +6,9 @@ import { localDate, today } from "../lib/parse";
 import FilterBar, { Scope, emptyScope, applyScope, scopeLabel } from "../components/FilterBar";
 import DateRange, { Range, defaultRange } from "../components/DateRange";
 import SalesOfficers from "./SalesOfficers";
-import CheckAll from "../components/CheckAll";
+import { startTask } from "../lib/tasks";
+import CheckAll, { CheckItem, Fix, whatsapp } from "../components/CheckAll";
+import { normName } from "../lib/parse";
 
 type Tab = "oversell" | "aged" | "vs" | "retailers" | "low" | "stale" | "counts";
 interface Oversell { distributor_id: string; product_id: string; report_date: string; so_qty: number; so_total: number; available: number; so_names: string; has_stock_data: boolean }
@@ -52,6 +54,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
     const sb = supabase;
     const args = { p_from: range.from, p_to: range.to, p_locations: null };
     setLoading(true); setErr("");
+    const task = startTask("Running the SO checks", 0, true);
     Promise.all([
       fetchAll<Oversell>((a, b) => sb.rpc("so_oversell", args).range(a, b)),
       fetchAll<Aged>((a, b) => sb.rpc("aged_stock", { p_days: agedDays, p_as_of: range.to, p_locations: null }).range(a, b)),
@@ -61,10 +64,10 @@ export default function SOChecks({ locations, products, officers, canManage, onC
       fetchAll<Period>((a, b) => sb.rpc("stock_period", { p_from: minusDays(range.to, 29), p_to: range.to, p_locations: null }).range(a, b)),
       fetchAll<Status>((a, b) => sb.from("location_data_status").select("*").order("location_id").range(a, b)),
       fetchAll<CountLine>((a, b) => sb.rpc("count_changes", { p_from: range.from, p_to: range.to, p_locations: null }).range(a, b)),
-    ]).then(([oversell, aged, vs, lines, period, status, counts]) => { if (live) setData({ oversell, aged, vs, lines, period, status, counts }); })
-      .catch(e => { if (live) setErr(`Could not run the checks: ${errText(e)}`); })
+    ]).then(([oversell, aged, vs, lines, period, status, counts]) => { if (live) setData({ oversell, aged, vs, lines, period, status, counts }); task.ok(); })
+      .catch(e => { if (live) { setErr(`Could not run the checks: ${errText(e)}`); task.fail(errText(e)); } })
       .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
+    return () => { live = false; task.cancel(); };
   }, [range.from, range.to, agedDays, reload]);
 
   // Which SOs have reported for each distributor in this period (for the clearance list).
@@ -134,8 +137,41 @@ export default function SOChecks({ locations, products, officers, canManage, onC
     counts: () => counts.map(c => ({ Date: c.counted_on, Location: c.place, SKU: prod(c.product_id)?.sku, Product: prod(c.product_id)?.item_name, Change: c.change, "Value ₹": Math.round(c.change * price(c.product_id)), File: c.source_file || "" })),
   };
 
+  // ---------- the same checks for Check Everything: every row, and the fixes the app can make ----------
+  const askStock = (id: string) => { const d = loc(id); return whatsapp(d, `Hello ${d?.owner_name || d?.name || ""}, please send your latest closing stock statement and sales to Kolor Activ. Thank you.`); };
+  const askOrder = (id: string, pid: string) => { const d = loc(id); return whatsapp(d, `Hello ${d?.owner_name || d?.name || ""}, your stock of ${prod(pid)?.item_name || "this product"} is running low. Please place your reorder with your super stockist.`); };
+  const newRetailers = () => { const m = new Map<string, Line>(); retailerProblems.filter(l => l.retailer_status === "UNKNOWN" && l.retailer_name?.trim()).forEach(l => m.set(`${l.distributor_id}|${normName(l.retailer_name!)}`, l)); return [...m.values()]; };
+  const fixesFor = (t: Tab): Fix[] => {
+    const out: Fix[] = [];
+    if (t === "retailers" && canManage && newRetailers().length) out.push({ label: `Add ${plural(newRetailers().length, "New Retailer")} To The List`, hint: "Only outlets you know are real. Blank and other-distributor lines stay for review.",
+      run: async task => {
+        const list = newRetailers();
+        for (let i = 0; i < list.length; i += 200) {
+          const { error } = await supabase!.from("retailers").insert(list.slice(i, i + 200).map(l => ({ distributor_id: l.distributor_id, name: l.retailer_name!.trim() })));
+          if (error) throw new Error(error.code === "42501" ? "Only HO admins and state managers can add retailers." : error.message);
+          task.step(Math.min(i + 200, list.length), list.length);
+        }
+        setReload(x => x + 1); await onChanged();
+        return `Added ${plural(list.length, "retailer")}.`;
+      } });
+    out.push({ label: "Download This List", run: async () => { download(rowsFor[t](), TABS.find(x => x.id === t)!.label); return "Downloaded."; } });
+    return out;
+  };
+  const extra: Partial<Record<Tab, { head: string; cell: (i: number) => React.ReactNode }>> = {
+    oversell: { head: "Ask for stock", cell: i => (oversell[i].has_stock_data ? "" : askStock(oversell[i].distributor_id)) },
+    stale: { head: "Ask for stock", cell: i => askStock(stale[i].location_id) },
+    low: { head: "Remind to reorder", cell: i => askOrder(low[i].location_id, low[i].product_id) },
+  };
+  const checkItems = useMemo<CheckItem[]>(() => TABS.map(t => {
+    const rows = t.count ? rowsFor[t.id]() : [], head = rows.length ? Object.keys(rows[0]) : [], x = extra[t.id];
+    return { id: t.id, label: t.label, count: t.count, help: t.help, tab: t.id, fixes: t.count ? fixesFor(t.id) : [],
+      head: x ? [...head, x.head] : head,
+      lines: rows.map((r, i) => ({ cells: [...Object.values(r as Record<string, unknown>).map(v => (typeof v === "number" ? fmt(v, 2) : String(v ?? ""))), ...(x ? [x.cell(i)] : [])], ok: false })) };
+  }), [data, scope, so, agedDays, staleDays, byId, productById, canManage, range.from, range.to]);
+
   return <>
-    <CheckAll officers={officers} locations={locations} checks={TABS.map(t => ({ id: t.id, label: t.label, count: t.count, help: t.help, tab: t.id }))} onOpen={t => { setTab(t as Tab); setTimeout(() => document.querySelector(".checktiles")?.scrollIntoView({ behavior: "smooth" }), 50); }} />
+    <CheckAll officers={officers} locations={locations} canManage={canManage} checks={checkItems} onFixed={async () => { setReload(x => x + 1); await onChanged(); }}
+      onOpen={t => { setTab(t as Tab); setTimeout(() => document.querySelector(".checktiles")?.scrollIntoView({ behavior: "smooth" }), 50); }} />
     <section className="card">
       <div className="checkbar">
         <DateRange value={range} onChange={setRange} />

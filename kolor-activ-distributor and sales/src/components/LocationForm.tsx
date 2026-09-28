@@ -4,10 +4,10 @@ import { supabase, Distributor, Kind, KIND_LABEL, SalesOfficer, nextCode, missin
 import { STATES, normalizeState } from "../lib/india";
 import { normName } from "../lib/parse";
 
-type Form = { code: string; name: string; company_name: string; owner_name: string; parent_id: string; state: string; region: string; territory: string; phone: string; aliases: string; email: string; so_id: string };
+type Form = { code: string; name: string; company_name: string; owner_name: string; parent_id: string; state: string; region: string; territory: string; phone: string; aliases: string; email: string; so_id: string; via_id: string };
 const toForm = (d?: Distributor | null, name = ""): Form => ({
   code: d?.code || "", name: d?.name || name, company_name: d?.company_name || "", owner_name: d?.owner_name || "", parent_id: d?.direct ? DIRECT : d?.parent_id || "",
-  state: d?.state || "", region: d?.region || "", territory: d?.territory || "", phone: d?.phone || "", aliases: (d?.aliases || []).join(", "), email: d?.email || "", so_id: d?.so_id || "",
+  state: d?.state || "", region: d?.region || "", territory: d?.territory || "", phone: d?.phone || "", aliases: (d?.aliases || []).join(", "), email: d?.email || "", so_id: d?.so_id || "", via_id: d?.via_id || "",
 });
 /** The "super stockist" choice for distributors the company supplies directly. */
 const DIRECT = "__direct";
@@ -54,7 +54,7 @@ export default function LocationForm({ kind, editing, prefillName, prefill, loca
       parent_id: kind === "DISTRIBUTOR" && form.parent_id !== DIRECT ? form.parent_id || null : null, super_stockist: kind === "DISTRIBUTOR" ? (form.parent_id === DIRECT ? "Direct with company" : ss?.name || null) : null,
       ...(kind === "DISTRIBUTOR" ? { direct: form.parent_id === DIRECT } : {}),
       state: normalizeState(form.state) || null, region: properOrNull(form.region), territory: properOrNull(form.territory), phone: t(cleanPhones(form.phone)), aliases: splitAliases(form.aliases),
-      email: t(form.email.toLowerCase()), ...(kind === "DISTRIBUTOR" ? { so_id: form.so_id || null } : {}),
+      email: t(form.email.toLowerCase()), ...(kind === "DISTRIBUTOR" ? { so_id: form.so_id || null, via_id: form.via_id || null } : {}),
     };
     const missing = missingFields(payload);
     if (missing.length) return setMsg({ kind: "err", text: `Fill in: ${missing.join(", ")}.` });
@@ -95,6 +95,8 @@ export default function LocationForm({ kind, editing, prefillName, prefill, loca
       <label>Email <small>for stock reminders</small><input {...f("email")} type="email" /></label>
       {kind === "DISTRIBUTOR" && <label>SO / ASE<Select value={form.so_id} onChange={e => setForm({ ...form, so_id: e.target.value })}>
         <option value="">None</option>{officers.map(o => <option key={o.id} value={o.id}>{o.name}{o.state ? ` · ${o.state}` : ""}</option>)}</Select></label>}
+      {kind === "DISTRIBUTOR" && <label>Stock sent through <small>optional: a nearby distributor the goods travel through; billing stays under the super stockist</small><Select value={form.via_id} onChange={e => setForm({ ...form, via_id: e.target.value })}>
+        <option value="">Sent to them directly</option>{locations.filter(l => l.kind === "DISTRIBUTOR" && l.id !== editing?.id).map(l => <option key={l.id} value={l.id}>{l.name}{l.territory ? ` · ${l.territory}` : ""}</option>)}</Select></label>}
       <label>Code<input {...f("code")} placeholder={editing ? "" : `${nextCode(kind, locations)} (automatic)`} /></label>
       <label className="wide">Other names in their files <small>(optional, comma-separated: other spellings on their Tally reports or sheets)</small>
         <input {...f("aliases")} /></label>

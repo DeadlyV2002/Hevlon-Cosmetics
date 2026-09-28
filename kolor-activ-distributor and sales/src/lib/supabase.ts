@@ -23,6 +23,8 @@ export interface Distributor {
   status?: "ACTIVE" | "DORMANT";
   /** Buys straight from the company, so it has no super stockist. */
   direct?: boolean;
+  /** Another distributor the goods travel through (billing still under the super stockist). */
+  via_id?: string | null;
 }
 export interface Retailer { id: string; distributor_id: string | null; code: string | null; name: string; territory: string | null; owner_name: string | null; phone: string | null; created_at: string; state?: string | null; region?: string | null }
 export interface SalesOfficer {

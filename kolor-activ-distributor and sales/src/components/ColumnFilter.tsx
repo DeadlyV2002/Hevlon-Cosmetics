@@ -27,9 +27,9 @@ export function useColumnFilters<T>(rows: T[], cols: Col<T>[]) {
   const active = Object.values(filters).filter(Boolean).length;
   const head = (key: string, extra?: ReactNode) => {
     const c = cols.find(x => x.key === key)!;
-    const counts = new Map<string, number>();
-    rows.forEach(r => { if (pass(r, key)) { const t = text(c, r); counts.set(t, (counts.get(t) || 0) + 1); } });
-    return <ColumnHead key={key} label={c.label} num={c.num} counts={counts} selected={filters[key]} sorted={sort?.key === key ? sort.dir : 0} extra={extra}
+    // Values are counted only when the list is opened, not on every render of the table.
+    const getCounts = () => { const counts = new Map<string, number>(); rows.forEach(r => { if (pass(r, key)) { const t = text(c, r); counts.set(t, (counts.get(t) || 0) + 1); } }); return counts; };
+    return <ColumnHead key={key} label={c.label} num={c.num} getCounts={getCounts} selected={filters[key]} sorted={sort?.key === key ? sort.dir : 0} extra={extra}
       onApply={sel => setFilters(f => ({ ...f, [key]: sel }))} onSort={dir => setSort(dir ? { key, dir } : null)} />;
   };
   /** "Sort by [column] [direction]" for above the table. */
@@ -41,18 +41,19 @@ export function useColumnFilters<T>(rows: T[], cols: Col<T>[]) {
   return { rows: out, head, active, sortBar, clear: () => { setFilters({}); setSort(null); } };
 }
 
-function ColumnHead({ label, num, counts, selected, sorted, onApply, onSort, extra }: {
-  label: string; num?: boolean; counts: Map<string, number>; selected?: Set<string>; sorted: 0 | 1 | -1;
+function ColumnHead({ label, num, getCounts, selected, sorted, onApply, onSort, extra }: {
+  label: string; num?: boolean; getCounts: () => Map<string, number>; selected?: Set<string>; sorted: 0 | 1 | -1;
   onApply: (s: Set<string> | undefined) => void; onSort: (d: 0 | 1 | -1) => void; extra?: ReactNode;
 }) {
   const [open, setOpen] = useState(false), [q, setQ] = useState("");
-  const [draft, setDraft] = useState<Set<string>>(new Set());
+  const [draft, setDraft] = useState<Set<string>>(new Set()), [counts, setCounts] = useState<Map<string, number>>(new Map());
   const btn = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
   const pos = usePlace(btn, open, 12, 420, 260);
   useOutside(open, [btn, panel], () => setOpen(false));
-  const values = [...counts.keys()].sort((a, b) => (a === BLANK ? 1 : b === BLANK ? -1 : num ? Number(a) - Number(b) : a.localeCompare(b, undefined, { numeric: true })));
+  const order = (m: Map<string, number>) => [...m.keys()].sort((a, b) => (a === BLANK ? 1 : b === BLANK ? -1 : num ? Number(a) - Number(b) : a.localeCompare(b, undefined, { numeric: true })));
+  const values = useMemo(() => order(counts), [counts]);
   const shown = values.filter(v => v.toLowerCase().includes(q.toLowerCase())).slice(0, 400);
-  function show() { setDraft(new Set(selected || values)); setQ(""); setOpen(true); }
+  function show() { const c = getCounts(); setCounts(c); setDraft(new Set(selected || order(c))); setQ(""); setOpen(true); }
   function apply() {
     const all = values.every(v => draft.has(v));
     onApply(all ? undefined : new Set(draft)); setOpen(false);

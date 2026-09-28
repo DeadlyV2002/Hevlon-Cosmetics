@@ -102,3 +102,81 @@ end $$;
 -- ---------- Distributors that deal with the company directly ----------
 -- Some distributors with good billing buy straight from the company: no super stockist is needed.
 alter table public.distributors add column if not exists direct boolean not null default false;
+
+-- ---------- Stock sent through another distributor ----------
+-- A distributor billed under one super stockist can get its goods through a nearby distributor
+-- (Balaji Traders: SS Garg Enterprises, stock carried by Gupta Enterprises).
+alter table public.distributors add column if not exists via_id uuid references public.distributors(id) on delete set null;
+
+-- ---------- Faster checks ----------
+-- SO bookings against stock, worked out in one pass: each DSR product name is looked up once, and
+-- each distributor's stock movements are added up once, instead of once per distributor and product.
+create or replace function public.dsr_stock_check(p_from date, p_to date)
+returns table(distributor_id uuid, product text, product_id uuid, so_qty numeric, so_value numeric,
+              opening numeric, received numeric, closing numeric, counted boolean, has_before boolean)
+language sql stable security definer set search_path=public as $$
+  with s as (
+    select d.distributor_id, l.product, sum(l.qty) q, sum(l.value) v
+      from dsr_lines l join dsr_days d on d.id = l.day_id
+     where d.day between p_from and p_to and d.distributor_id is not null
+     group by 1, 2),
+  names as materialized (select x.product, find_product(null, x.product) pid from (select distinct product from s) x),
+  dists as (select distinct distributor_id from s),
+  t as (
+    select t.distributor_id, t.product_id,
+           sum(case when t.transaction_date < p_from then case when t.mode = 'INPUT' then t.quantity else -t.quantity end else 0 end) opening,
+           sum(case when t.mode = 'INPUT' and t.source in ('PURCHASE', 'TRANSFER') and t.transaction_date >= p_from then t.quantity else 0 end) received,
+           sum(case when t.mode = 'INPUT' then t.quantity else -t.quantity end) closing
+      from inventory_transactions t join dists using (distributor_id)
+     where t.transaction_date <= p_to
+     group by 1, 2),
+  loc as (
+    select t.distributor_id, bool_or(t.source = 'COUNT' and t.transaction_date >= p_from) counted, bool_or(t.transaction_date < p_from) before
+      from inventory_transactions t join dists using (distributor_id)
+     where t.transaction_date <= p_to
+     group by 1)
+  select s.distributor_id, s.product, n.pid, s.q, s.v, coalesce(t.opening, 0), coalesce(t.received, 0), coalesce(t.closing, 0),
+         coalesce(loc.counted, false), coalesce(loc.before, false)
+    from s join names n on n.product = s.product
+    left join t on t.distributor_id = s.distributor_id and t.product_id = n.pid
+    left join loc on loc.distributor_id = s.distributor_id
+$$;
+revoke all on function public.dsr_stock_check(date, date) from public, anon;
+grant execute on function public.dsr_stock_check(date, date) to authenticated;
+
+-- Linking DSR DB names in one statement rather than one pass over the DSR days per name.
+create index if not exists dsr_days_unlinked on public.dsr_days(public.norm_name(db_name)) where distributor_id is null;
+create or replace function public.link_dsr_distributors(p_map jsonb) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare days int := 0; names int := 0;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can link distributors.'; end if;
+  with m as (select distinct on (norm_name(x->>'db_name')) norm_name(x->>'db_name') k, (x->>'distributor_id')::uuid did
+               from jsonb_array_elements(p_map) x where nullif(x->>'distributor_id', '') is not null)
+  update dsr_days d set distributor_id = m.did from m where d.distributor_id is null and norm_name(d.db_name) = m.k;
+  get diagnostics days = row_count;
+  with m as (select (x->>'distributor_id')::uuid did, array_agg(distinct x->>'db_name') nms
+               from jsonb_array_elements(p_map) x where nullif(x->>'distributor_id', '') is not null group by 1)
+  update distributors t set aliases = coalesce(t.aliases, '{}') || array(
+      select a from unnest(m.nms) a where norm_name(a) <> norm_name(t.name)
+         and not exists (select 1 from unnest(coalesce(t.aliases, '{}')) o where norm_name(o) = norm_name(a)))
+    from m where t.id = m.did;
+  select count(*) into names from jsonb_array_elements(p_map) x where nullif(x->>'distributor_id', '') is not null;
+  return jsonb_build_object('days', days, 'names', names);
+end $$;
+revoke all on function public.link_dsr_distributors(jsonb) from public, anon;
+grant execute on function public.link_dsr_distributors(jsonb) to authenticated;
+
+-- Undoing a wrong link: that spelling's DSR days go back to unlinked and it stops being one of the distributor's other names.
+create or replace function public.unlink_dsr_name(p_distributor uuid, p_name text) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare k int;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can unlink distributors.'; end if;
+  update dsr_days set distributor_id = null where distributor_id = p_distributor and norm_name(db_name) = norm_name(p_name);
+  get diagnostics k = row_count;
+  update distributors set aliases = array(select a from unnest(coalesce(aliases, '{}')) a where norm_name(a) <> norm_name(p_name)) where id = p_distributor;
+  return jsonb_build_object('days', k);
+end $$;
+revoke all on function public.unlink_dsr_name(uuid, text) from public, anon;
+grant execute on function public.unlink_dsr_name(uuid, text) to authenticated;

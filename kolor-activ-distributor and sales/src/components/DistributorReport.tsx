@@ -46,7 +46,13 @@ export default function DistributorReport({ location, locations, stock, officers
   const lastIn = lines.map(s => s.last_in || "").sort().pop() || null, lastOut = lines.map(s => s.last_out || "").sort().pop() || null;
   const ss = locations.find(l => l.id === location.parent_id), so = officers.find(o => o.id === location.so_id);
   const kids = locations.filter(l => l.parent_id === location.id);
+  const via = locations.find(l => l.id === location.via_id);
   const pct = collectionPct(bill);
+  // Stock grouped by product category, biggest value first.
+  const catOf = (id: string) => products?.find(p => p.id === id)?.category || "Other";
+  const cats = [...held.reduce((m, x) => m.set(catOf(x.product_id), [...(m.get(catOf(x.product_id)) || []), x]), new Map<string, StockLine[]>())]
+    .map(([c, l]) => [c, l.sort((a, b) => n(b.stock_value) - n(a.stock_value))] as [string, StockLine[]])
+    .sort((a, b) => b[1].reduce((t, x) => t + n(x.stock_value), 0) - a[1].reduce((t, x) => t + n(x.stock_value), 0));
 
   // Last complete month against the month before and the same month a year earlier.
   const m = months || [];
@@ -72,7 +78,7 @@ export default function DistributorReport({ location, locations, stock, officers
     </span>}>
     {err && <div className="status err">{err}</div>}
     <div className="kpis">
-      <div className="kpi"><small>Stock now</small><b>{money(value)}</b><span>{plural(units, "unit")} · {plural(held.length, "product")}</span></div>
+      <div className="kpi"><small>Stock now</small><b>{money(value)}</b><span>{fmt(units, 1)} dz · {fmt(Math.round(units * 12))} pcs · {plural(held.length, "SKU")}</span></div>
       <div className="kpi"><small>Last bill received</small><b>{day(lastIn)}</b><span>last sale {day(lastOut)}</span></div>
       <div className="kpi"><small>Sold on, {last ? mon(last.month) : "last month"}</small><b>{money(last?.sold_value)}</b>
         <span>{last ? `${change(n(last.sold_value), n(prev?.sold_value))} MoM · ${change(n(last.sold_value), n(yearAgo?.sold_value))} YoY` : "—"}</span></div>
@@ -90,16 +96,19 @@ export default function DistributorReport({ location, locations, stock, officers
           <dt>Phone</dt><dd>{phones.length ? phones.map(p => <a key={p} href={`tel:${p}`}>{p}</a>) : "—"}</dd>
           <dt>Email</dt><dd>{location.email ? <a href={`mailto:${location.email}`}>{location.email}</a> : "—"}</dd>
           <dt>Company</dt><dd>{location.company_name || "—"}</dd>
-          {location.kind === "DISTRIBUTOR" && <><dt>Super stockist</dt><dd>{ss?.name || "—"}</dd><dt>SO / ASE</dt><dd>{so ? `${so.name}${so.phone ? ` · ${so.phone}` : ""}` : "—"}</dd></>}
+          {location.kind === "DISTRIBUTOR" && <><dt>Super stockist</dt><dd>{location.direct ? "Direct with company" : ss?.name || "—"}</dd>{via && <><dt>Stock sent through</dt><dd>{via.name}</dd></>}<dt>SO / ASE</dt><dd>{so ? `${so.name}${so.phone ? ` · ${so.phone}` : ""}` : "—"}</dd></>}
           {location.kind === "SUPER_STOCKIST" && <><dt>Distributors</dt><dd>{kids.length}</dd></>}
           <dt>Last payment</dt><dd>{day(bill?.last_payment)}</dd>
         </dl>
       </section>
       <section className="topstock">
-        <h3>Biggest stock lines</h3><small className="muted">{fmt(units, 2)} dozens · {fmt(Math.round(units * 12))} pieces in all</small>
-        {held.length ? <table><thead><tr><th>SKU</th><th>Category</th><th>Dozens</th><th>Pieces</th><th>Value</th></tr></thead>
-          <tbody>{[...held].sort((a, b) => n(b.stock_value) - n(a.stock_value)).slice(0, 10).map(s => <tr key={s.product_id}><td>{s.item_name}</td><td>{products?.find(p => p.id === s.product_id)?.category || "Other"}</td><td>{fmt(n(s.current_stock), 2)}</td><td>{fmt(Math.round(n(s.current_stock) * 12))}</td><td>{money(s.stock_value)}</td></tr>)}</tbody></table>
-          : <p className="empty">No stock recorded.</p>}
+        <h3>Stock by category</h3><small className="muted">{fmt(units, 2)} dozens · {fmt(Math.round(units * 12))} pieces in all. Open a category to see its SKUs.</small>
+        {held.length ? <div className="sk-cats">{cats.map(([cat, list]) => {
+          const dz = list.reduce((a, x) => a + n(x.current_stock), 0), v = list.reduce((a, x) => a + n(x.stock_value), 0);
+          return <details key={cat}><summary><b>{cat}</b><span>{fmt(dz, 1)} dz · {fmt(Math.round(dz * 12))} pcs</span><span>{money(v)}</span></summary>
+            <div className="tablewrap"><table><thead><tr><th>SKU</th><th>Dozens</th><th>Pieces</th><th>Value</th></tr></thead>
+              <tbody>{list.map(x => <tr key={x.product_id}><td>{x.item_name}</td><td>{fmt(n(x.current_stock), 2)}</td><td>{fmt(Math.round(n(x.current_stock) * 12))}</td><td>{money(x.stock_value)}</td></tr>)}</tbody></table></div></details>;
+        })}</div> : <p className="empty">No stock recorded.</p>}
       </section>
     </div>
 

@@ -1,5 +1,14 @@
 # Deployment Package Audit
 
+## v15 (28 Sep 2026) — migration 012 also speeds up the stock check and linking, adds unlinking and "stock sent through"
+- SO bookings against distributor stock worked out in one pass (26 s to 0.2 s on the test data); DB-name matching runs in small steps; tables show 200 rows at a time.
+- DSR DB-name matching ignores shop words (Traders, Cosmetic, Agency…), so "… Traders" no longer links to A K Traders; only near-certain matches are pre-selected. Wrong links can be reviewed and unlinked.
+- Progress panel for long jobs on every page (DSR read and save, linking, Save All stock files, imports, checks), with a note when each ends.
+- Check Everything: every check opens to its full list, with one-click fixes (link close matches, unlink, merge staff, add retailers, add DSR products, WhatsApp for stock, download).
+- Distributor search matches every word, allows small misspellings, and ranks names that start with the search first. Distributor report fits the window, with stock by category.
+- "Stock sent through" another distributor on the distributor form.
+- Re-uploading a DSR replaces state totals saved before they were kept per workbook.
+
 ## v14 (28 Sep 2026) — migration 012 also adds product categories and "direct with company" distributors
 - Every product carries its DSR category. Stock At A Glance shows dozens, pieces and SKUs per location, and a Categories button opens stock by category, each expandable to its SKUs.
 - Stock downloads: one Category column (merged over its rows), one SKU column with the SKU name, and separate Dozens and Pieces columns. The distributor report stock table uses the same columns.

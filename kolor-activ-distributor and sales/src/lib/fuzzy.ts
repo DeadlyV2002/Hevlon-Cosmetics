@@ -37,7 +37,7 @@ export function guessProduct<P extends { item_name: string; sku: string; ss_rate
   return score >= 0.85 ? best : undefined;
 }
 
-const GENERIC = new Set(["traders", "trader", "enterprises", "enterprise", "ent", "agency", "agencies", "store", "stores", "distributors", "distributor", "and", "co", "company", "ms", "m", "s", "the", "sons", "brothers", "bros", "shop", "centre", "center", "general"]);
+export const GENERIC = new Set(["traders", "trader", "enterprises", "enterprise", "ent", "agency", "agencies", "store", "stores", "distributors", "distributor", "and", "co", "company", "ms", "m", "s", "the", "sons", "brothers", "bros", "shop", "centre", "center", "general"]);
 /** Distinctive words of a business name: "Rajkumar Traders" → ["rajkumar"]. */
 export const keyWords = (s: string) => normName(s).split(" ").filter(w => w.length > 2 && !GENERIC.has(w));
 /** Does a word appear in the text, allowing one or two letters off for longer words? */

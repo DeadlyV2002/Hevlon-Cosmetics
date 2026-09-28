@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, SalesOfficer, StockLine, fetchAll, matchSO, fmt, money, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Product, SalesOfficer, StockLine, fetchAll, matchSO, fmt, money, plural, errText } from "../lib/supabase";
 import { localDate } from "../lib/parse";
 import DateRange, { PRESETS, Range } from "../components/DateRange";
 import { Select } from "../components/Select";
@@ -9,16 +9,17 @@ import { ChartView } from "../components/Charts";
 import { ChartData } from "../lib/insights";
 import Staff, { rankOf } from "../components/Staff";
 import SOReport from "../components/SOReport";
-import DsrLinker from "../components/DsrLinker";
+import DsrLinker, { SuspectLinks } from "../components/DsrLinker";
 import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
 import { readDsr, mergeBooks, DsrBook, DsrDay, teamTotal as sheetTeamTotal } from "../lib/dsr";
 import { exportPng } from "../lib/present";
+import { startTask, breathe } from "../lib/tasks";
 
 interface Day { id: string; so_id: string; day: string; state: string | null; manager: string | null; hq: string | null; db_name: string | null; distributor_id: string | null; town: string | null; beat: string | null; remark: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number }
 interface Prod { product: string; category: string | null; qty: number; value: number }
 interface StockCheck { distributor_id: string; product: string; product_id: string | null; so_qty: number; so_value: number; opening: number; received: number; closing: number; counted: boolean; has_before: boolean }
 interface StateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number; team?: string }
-interface Props { officers: SalesOfficer[]; locations: Distributor[]; stock: StockLine[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
+interface Props { officers: SalesOfficer[]; locations: Distributor[]; stock: StockLine[]; products?: Product[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
 interface Checked { book: DsrBook; files: string; fresh: DsrDay[]; same: number; changed: { d: DsrDay; old: Day }[] }
 
 const SHORT: Record<string, string> = { Present: "P", "Half Day": "½", Meeting: "M", Leave: "L", "Weekly Off": "WO", Holiday: "H", Absent: "A", "No Report": "–" };
@@ -31,7 +32,7 @@ const same = (a: DsrDay, b: Day) => n(a.total_calls) === n(b.total_calls) && n(a
 
 interface Sum { soId: string; so?: SalesOfficer; days: number; att: Record<string, number>; calls: number; pc: number; value: number; flag: string }
 
-export default function SOReports({ officers, locations, stock, canManage, onChanged, notify }: Props) {
+export default function SOReports({ officers, locations, stock, products, canManage, onChanged, notify }: Props) {
   const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "month")!.range());
   const [tab, setTab] = useState<string>("overview"), [showIdle, setShowIdle] = useState(false);
   const [zone, setZone] = useState(""), [q, setQ] = useState(""), [focus, setFocus] = useState("");
@@ -69,17 +70,21 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
 
   useEffect(() => {
     if (!supabase) return;
-    const last = localDate(new Date(Date.now() - 864e5));
+    let live = true;
+    const last = localDate(new Date(Date.now() - 864e5)), task = startTask("Loading SO reports", 0, true);
     Promise.all([
       fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", range.from).lte("day", range.to).order("day").order("id").range(a, b)),
       fetchAll<StateDay>((a, b) => supabase!.from("dsr_state_days").select("*").gte("day", range.from).lte("day", range.to).order("day").range(a, b)).catch(() => []),
       supabase.rpc("billing_summary", { p_from: range.from, p_to: range.to }),
       supabase.from("dsr_days").select("day").lte("day", last).order("day", { ascending: false }).limit(1),
     ]).then(async ([d, s, b, l]) => {
+      if (!live) return;
       setDays(d); setStates(s as StateDay[]); setBills((b.data || []) as Billing[]); setErr("");
       const lastDay = (l.data as { day: string }[] | null)?.[0]?.day;
-      if (lastDay) { const { data } = await supabase!.from("dsr_days").select("*").eq("day", lastDay); setLatest((data || []) as Day[]); } else setLatest([]);
-    }).catch(e => setErr(`Couldn't load SO reports: ${errText(e)}. Run the latest database steps (009 and 010) in Supabase.`));
+      if (lastDay) { const { data } = await supabase!.from("dsr_days").select("*").eq("day", lastDay); if (live) setLatest((data || []) as Day[]); } else setLatest([]);
+      task.ok(`${plural(d.length, "SO day")} from ${range.from} to ${range.to}.`);
+    }).catch(e => { if (!live) return; task.fail(errText(e)); setErr(`Couldn't load SO reports: ${errText(e)}. Run the latest database steps (009 and 010) in Supabase.`); })
+    return () => { live = false; task.cancel(); };
   }, [range.from, range.to, reload]);
   // Product totals follow the people in view; waits until typing in the search box pauses.
   const sosKey = sos?.join(",") || "";
@@ -97,9 +102,10 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
   // ---------- upload: several workbooks, every sheet accounted for, nobody logged twice ----------
   async function read(files: File[]) {
     setMsg(null); setCheck(null); setReplaceChanged(false); setBusy("read");
+    const task = startTask(`Reading ${plural(files.length, "DSR workbook")}`, files.length);
     try {
       const books: DsrBook[] = [];
-      for (const f of files) books.push(readDsr(XLSX.read(await f.arrayBuffer(), { cellDates: false }), f.name));
+      for (let i = 0; i < files.length; i++) { task.step(i, files.length, files[i].name); await breathe(); books.push(readDsr(XLSX.read(await files[i].arrayBuffer(), { cellDates: false }), files[i].name)); }
       const book = mergeBooks(books);
       if (!book.days.length && !book.stateDays.length) throw new Error("No daily rows found. SO sheets need headings such as Name SO, Month/Date and Total Call.");
       const ds = book.days.map(d => d.day).sort();
@@ -111,7 +117,8 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
         if (!old) fresh.push(d); else if (same(d, old)) sameN++; else changed.push({ d, old });
       });
       setCheck({ book, files: files.map(f => f.name).join(", "), fresh, same: sameN, changed });
-    } catch (e) { setMsg({ kind: "err", text: `Couldn't read the file: ${errText(e)}` }); }
+      task.ok(`${plural(fresh.length, "new day")} to add. Press Add on the Upload DSR tab to save them.`);
+    } catch (e) { task.fail(errText(e)); setMsg({ kind: "err", text: `Couldn't read the file: ${errText(e)}` }); }
     finally { setBusy(""); }
   }
   async function post() {
@@ -119,6 +126,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     setBusy("post");
     const strip = (list: DsrDay[]) => list.map(({ sheet: _s, file: _f, ...d }) => d);
     let added = 0, replaced = 0, newSos = 0, first = true;
+    const total = check.fresh.length + (replaceChanged ? check.changed.length : 0), task = startTask("Saving DSR days", total);
     try {
       const send = async (list: DsrDay[], replace: boolean) => {
         for (let i = 0; i < list.length || (first && i === 0); i += 300) {
@@ -128,15 +136,15 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
           first = false;
           const r = data as { added: number; replaced: number; new_sos: number };
           added += r.added; replaced += r.replaced; newSos += r.new_sos;
-          setMsg({ kind: "ok", text: `Saving… ${fmt(added + replaced)} days` });
+          setMsg({ kind: "ok", text: `Saving… ${fmt(added + replaced)} days` }); task.step(added + replaced, total);
         }
       };
       await send(check.fresh, false);
       if (replaceChanged && check.changed.length) await send(check.changed.map(c => c.d), true);
       const text = `Added ${plural(added, "new day")}${replaced ? `, replaced ${plural(replaced, "day")}` : ""}${check.same ? `; ${plural(check.same, "day")} already logged were left as they were` : ""}${!replaceChanged && check.changed.length ? `; ${plural(check.changed.length, "day")} with different figures were kept as first logged` : ""}${newSos ? `; added ${plural(newSos, "new person", "new people")} to the sales team` : ""}.`;
-      setMsg({ kind: "ok", text }); notify(text); setCheck(null); setReload(x => x + 1);
+      setMsg({ kind: "ok", text }); notify(text); task.ok(text); setCheck(null); setReload(x => x + 1);
       if (newSos) await onChanged();
-    } catch (e) { setMsg({ kind: "err", text: `Stopped after ${plural(added + replaced, "day")}: ${errText(e)}` }); }
+    } catch (e) { const t = `Stopped after ${plural(added + replaced, "day")}: ${errText(e)}`; task.fail(t); setMsg({ kind: "err", text: t }); }
     finally { setBusy(""); }
   }
 
@@ -263,13 +271,19 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
 
   // ---------- SO bookings against distributor stock, product by product ----------
   const [checkRange, setCheckRange] = useState<Range>(() => PRESETS.find(p => p.id === "lastmonth")!.range());
-  const [stockRaw, setStockRaw] = useState<StockCheck[]>([]), [onlyFlagged, setOnlyFlagged] = useState(false);
+  const [stockRaw, setStockRaw] = useState<StockCheck[] | null>(null), [onlyFlagged, setOnlyFlagged] = useState(false), [checkReload, setCheckReload] = useState(0), [scShown, setScShown] = useState(200);
   useEffect(() => {
-    if (!supabase) return;
-    if (tab !== "checks") return;
-    fetchAll<StockCheck>((a, b) => supabase!.rpc("dsr_stock_check", { p_from: checkRange.from, p_to: checkRange.to }).range(a, b)).then(setStockRaw).catch(() => setStockRaw([]));
-  }, [checkRange.from, checkRange.to, reload, tab]);
-  const stockRows = useMemo(() => stockRaw.map(r => {
+    if (!supabase || tab !== "checks") return;
+    let live = true;
+    const task = startTask("Checking SO bookings against distributor stock", 0, true);
+    setStockRaw(null); setScShown(200);
+    fetchAll<StockCheck>((a, b) => supabase!.rpc("dsr_stock_check", { p_from: checkRange.from, p_to: checkRange.to }).range(a, b))
+      .then(r => { if (live) setStockRaw(r); task.ok(`${plural(r.length, "product line")} compared.`); })
+      .catch(e => { task.fail(errText(e)); if (live) setStockRaw([]); });
+    return () => { live = false; task.cancel(); };
+  }, [checkRange.from, checkRange.to, reload, checkReload, tab]);
+  const dbsInView = useMemo(() => new Set(view.map(d => d.distributor_id).filter(Boolean)), [view]);
+  const stockRows = useMemo(() => (stockRaw || []).map(r => {
     const so = n(r.so_qty), avail = n(r.opening) + n(r.received), drop = avail - n(r.closing);
     let kind = "ok", flag = "";
     if (!r.product_id) { kind = "noproduct"; flag = "product not in the product list: add the DSR products on the Pricing page"; }
@@ -277,7 +291,7 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     else if (so > avail + 0.05) { kind = "over"; flag = `booked ${fmt(so, 1)} doz, had ${fmt(avail, 1)}`; }
     else if (r.counted && so > drop + 0.5) { kind = "drop"; flag = `booked ${fmt(so, 1)} doz, stock went down only ${fmt(drop, 1)}`; }
     return { ...r, loc: locById.get(r.distributor_id), kind, flag };
-  }).filter(r => inView.size === officers.length || !filtered || view.some(d => d.distributor_id === r.distributor_id)), [stockRaw, locById, view]);
+  }).sort((a, b) => Number(!["over", "drop"].includes(a.kind)) - Number(!["over", "drop"].includes(b.kind)) || n(b.so_value) - n(a.so_value)).filter(r => !filtered || dbsInView.has(r.distributor_id)), [stockRaw, locById, dbsInView, filtered]);
   type SC = (typeof stockRows)[number];
   const sccols: Col<SC>[] = [
     { key: "db", label: "Distributor", value: r => r.loc?.name }, { key: "product", label: "Product", value: r => r.product },
@@ -348,7 +362,8 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
     </section>}
 
     {tab === "checks" && <>
-      <DsrLinker locations={locations} canManage={canManage} notify={notify} onLinked={() => setReload(x => x + 1)} />
+      <DsrLinker locations={locations} canManage={canManage} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
+      <SuspectLinks locations={locations} canManage={canManage} notify={notify} onChanged={() => setCheckReload(x => x + 1)} key={`s${checkReload}`} />
       <section className="card">
         <div className="rowhead"><h2>SO Bookings Against Distributor Stock</h2><DateRange value={checkRange} onChange={setCheckRange} /></div>
         <p className="hint">For each distributor, what SOs booked product by product in this period against what the distributor had: stock before the period plus stock received during it. Upload each distributor's month-end stock and bills, then check the month. Quantities are in dozens.</p>
@@ -360,11 +375,12 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
         </div>
         <div className="actions"><label className="inline"><input type="checkbox" checked={onlyFlagged} onChange={e => setOnlyFlagged(e.target.checked)} /> Only problems</label>{sct.active > 0 && <button className="link" onClick={sct.clear}>Clear Filters</button>}</div>
         {stockRows.length > 0 && sct.sortBar}
-        {stockRows.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{sccols.map(c => sct.head(c.key))}</tr></thead>
-          <tbody>{sct.rows.map((r, i) => <tr key={i} className={r.kind === "over" || r.kind === "drop" ? "flagged" : ""}>
+        {!stockRaw ? <p className="empty">Comparing bookings with stock…</p> : stockRows.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{sccols.map(c => sct.head(c.key))}</tr></thead>
+          <tbody>{sct.rows.slice(0, scShown).map((r, i) => <tr key={i} className={r.kind === "over" || r.kind === "drop" ? "flagged" : ""}>
             <td>{r.loc ? <button className="link strong" onClick={() => setReport(r.loc!)}>{r.loc.name}</button> : "Deleted"}</td><td>{r.product}</td><td>{fmt(r.so_qty, 1)}</td><td>{money(r.so_value)}</td>
             <td>{r.has_before ? fmt(r.opening, 1) : "—"}</td><td>{fmt(r.received, 1)}</td><td>{r.counted ? fmt(r.closing, 1) : "—"}</td><td className="wrap">{r.flag && <span className={r.kind === "over" || r.kind === "drop" ? "err" : "muted"}>{r.flag}</span>}</td></tr>)}</tbody></table></div>
           : <p className="empty">No SO bookings with a matched distributor in this period.</p>}
+        {sct.rows.length > scShown && <div className="actions"><span className="muted">Showing {fmt(scShown)} of {fmt(sct.rows.length)} lines.</span><button className="secondary" onClick={() => setScShown(x => x + 200)}>Show 200 More</button></div>}
       </section>
       <section className="card">
         <h2>Bookings, Billing And Collection By Distributor</h2>
@@ -418,6 +434,6 @@ export default function SOReports({ officers, locations, stock, canManage, onCha
 
     {tab === "staff" && <Staff officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />}
     {person && <SOReport so={person} officers={officers} locations={locations} stock={stock} onClose={() => setPerson(null)} onTeam={id => { setFocus(id); setTab("team"); }} />}
-    {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} onClose={() => setReport(null)} />}
+    {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} products={products} onClose={() => setReport(null)} />}
   </>;
 }

@@ -1,5 +1,6 @@
 import { Select, Combo } from "../components/Select";
 import { ask } from "../lib/ask";
+import { startTask, TaskHandle } from "../lib/tasks";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mode, Row, Field, Table, Layout, Skipped, FIELD_LABELS, emptyRow, today, localDate, isValidDate,
@@ -425,6 +426,18 @@ export default function Inventory({ locations, products, aliases, stock, officer
   };
   const posting = useRef(false);
   useEffect(() => { onBusy?.(busy || auto ? (fileTotal > 1 ? `${Math.min(fileNo, fileTotal)}/${fileTotal}` : "…") : ""); }, [busy, auto, fileNo, fileTotal]);
+  // Save All shows in the progress panel too, so it can be followed from any page.
+  const autoTask = useRef<TaskHandle | null>(null);
+  useEffect(() => {
+    if (auto && !autoTask.current) autoTask.current = startTask("Saving all stock files", fileTotal);
+    if (!auto && autoTask.current) {
+      const ok = autoLog.filter(x => x.ok).length, bad = autoLog.filter(x => !x.ok).length;
+      const note = `${plural(ok, "file")} saved${bad ? `, ${plural(bad, "file")} need a look on the Inventory page` : ""}.`;
+      if (bad) autoTask.current.fail(note); else autoTask.current.ok(note);
+      autoTask.current = null;
+    }
+  }, [auto]);
+  useEffect(() => { autoTask.current?.step(autoLog.length, fileTotal, autoLog.length ? `Last: ${autoLog[autoLog.length - 1].file}` : undefined); }, [autoLog.length, fileTotal]);
   function logAuto(ok: boolean, text: string) { setAutoLog(l => [...l, { file: file?.name || "file", ok, text }]); }
   useEffect(() => {
     if (!auto || busy || !file || !rows.length) return;

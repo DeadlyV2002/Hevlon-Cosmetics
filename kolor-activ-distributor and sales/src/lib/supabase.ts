@@ -33,7 +33,7 @@ export interface SalesOfficer {
 }
 export interface ProductAlias { product_id: string; alias: string }
 /** unit_price is the rate stock is valued at: the SS rate, or the last purchase rate until that's set. */
-export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number; status?: "ACTIVE" | "DORMANT"; category?: string | null }
+export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number; status?: "ACTIVE" | "DORMANT"; category?: string | null; box_pcs?: number | null }
 /** Standard margins in percent: what the super stockist and the distributor add when they bill onwards. */
 export interface Margins { ss: number; distributor: number }
 export interface Scheme {

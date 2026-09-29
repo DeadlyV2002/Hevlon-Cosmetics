@@ -6,7 +6,7 @@ import { editDistance, hasWord, GENERIC } from "./fuzzy";
 import { breathe, TaskHandle } from "./tasks";
 
 /** Words that don't tell one shop from another in a DB name (what it sells, titles, usual misspellings), on top of the usual business words. */
-const SHOP = new Set([...GENERIC, "trading", "trades", "trd", "trdrs", "tradrs", "tredrs", "treaders", "entprises", "eneterprises", "agencny", "ageny", "ajenci", "stor",
+const SHOP = new Set([...GENERIC, "trading", "trades", "trd", "trdrs", "tradrs", "tredrs", "treaders", "entprises", "eneterprises", "agencny", "ageny", "ajenci", "ajency", "agancy", "agensi", "agenci", "stor", "treders", "tredars", "enterprice", "enterprize", "entp",
   "cosmetic", "cosmetics", "cosmatic", "fancy", "bangles", "bangle", "bagles", "bangal", "sringar", "shringar", "singar", "srinagar", "sringaar", "manihari", "manihar",
   "gen", "associates", "marketing", "collection", "shri", "shree", "sri", "new", "db", "ji", "jee"]);
 /** Distinctive words of a DB name: "Ashish Cosmetic Store" → ["ashish"]. */
@@ -108,4 +108,11 @@ export async function unlinkName(distributorId: string, dbName: string) {
   const { data, error } = await supabase!.rpc("unlink_dsr_name", { p_distributor: distributorId, p_name: dbName });
   if (error) throw new Error(`${errText(error)}. Run database step 012.`);
   return (data as { days: number }).days;
+}
+
+/** The location a stock sheet's "DB name" line (and town) points to, when it's close enough to be sure. */
+export async function matchHolder(name: string, town: string, locations: Distributor[]): Promise<Distributor | undefined> {
+  if (!name.trim()) return undefined;
+  const [r] = await suggest([{ name, state: "", towns: new Set(town ? [town] : []), days: 0, value: 0, score: 0 }], locations);
+  return r?.guess;
 }

@@ -131,9 +131,10 @@ export function readPrimary(sheets: { name: string; grid: Grid }[], fileName = "
   out.pieces = sawPcs || !sawDozen;
   // Checks a person would do by eye.
   out.invoices.forEach(i => {
-    const sum = i.lines.reduce((a, l) => a + (l.raw ? 0 : l.pcs), 0), odd = i.lines.filter(l => l.raw);
+    const sum = i.lines.reduce((a, l) => a + (l.raw ? 0 : l.pcs), 0), odd = i.lines.filter(l => l.raw && !/\b(box|boxes|bx|bxs)\b/i.test(l.raw)), boxes = i.lines.filter(l => l.raw && /\b(box|boxes|bx|bxs)\b/i.test(l.raw));
+    if (boxes.length) out.notes.push(`${i.invoice || `Row ${i.row}`} (${i.ss}): ${boxes.map(l => `${l.item} "${l.raw}"`).join(", ")} in boxes; converted with the pieces per box below.`);
     if (odd.length) out.notes.push(`${i.invoice || `Row ${i.row}`} (${i.ss}): ${odd.map(l => `${l.item} "${l.raw}"`).join(", ")} written with a unit; read as ${odd.map(l => l.pcs).join(", ")} ${out.pieces ? "pieces" : "dozens"}. Check ${odd.length === 1 ? "it" : "them"}.`);
-    if (i.totalPcs !== null && Math.abs(i.totalPcs - sum) > 0.5 && !odd.length) out.notes.push(`${i.invoice || `Row ${i.row}`} (${i.ss}): items add up to ${sum}, the total column says ${i.totalPcs}.`);
+    if (i.totalPcs !== null && Math.abs(i.totalPcs - sum) > 0.5 && !odd.length && !boxes.length) out.notes.push(`${i.invoice || `Row ${i.row}`} (${i.ss}): items add up to ${sum}, the total column says ${i.totalPcs}.`);
     if (!i.date) out.notes.push(`${i.invoice || `Row ${i.row}`} (${i.ss}): no billing date; the upload date will be used.`);
   });
   const seen = new Map<string, number>();

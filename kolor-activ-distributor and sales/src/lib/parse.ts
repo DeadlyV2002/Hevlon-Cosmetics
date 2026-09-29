@@ -42,6 +42,9 @@ export function parseNum(v: Cell): number | null {
   if (v === null || v === undefined || typeof v === "boolean" || v instanceof Date) return null;
   const s = String(v).trim();
   if (!s || s === "-") return null;
+  // "24,00" is 24 with a comma for the decimal point, not 2,400 ("1,440" and "1,00,000" are thousands).
+  const dec = s.match(/^(-?\d+),(\d{1,2})$/);
+  if (dec) return Number(`${dec[1]}.${dec[2]}`);
   const m = s.replace(/[₹\s]/g, "").match(/-?\d[\d,]*(\.\d+)?|-?\.\d+/);
   if (!m) return null;
   let n = Number(m[0].replace(/,/g, ""));

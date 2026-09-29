@@ -1,5 +1,13 @@
 # Deployment Package Audit
 
+## v17 (29 Sep 2026) — migration 012: billing takes stock off the godown, pieces per box, free display items
+- Company billing to super stockists also takes the same stock off the company godown (a transfer from the godown to the SS). Billing saved earlier is caught up the next time the sheet is uploaded ("Take N Billed Lines Off The Godown"). The godown's own stock count (audit) then sets its real figure; billing dated before that count is set against it.
+- Quantities written in boxes ("346 Box") are converted with the pieces per box, entered once per SKU and remembered (Spicy Lips 5, Glamour Lip Color 6).
+- Categories follow the DSR list only: new SKUs take the DSR category of their sheet group; existing SKUs keep theirs. Display items (POP) are free: no rate, no stock value.
+- Closing stock sheets with a "DB name" line are matched to the distributor named there (with its town), not to a name elsewhere in the heading such as the SO's. The review no longer calls zero rows "already recorded" on a stock count. "24,00" is read as 24.
+- Fixed patterns that had lost their word boundaries: automatic "in pieces" detection on stock uploads, and the SS rate column in pricing imports.
+- Marking a location dormant says how to move its stock back to the godown (Move Stock, "Move everything it holds").
+
 ## v16 (29 Sep 2026) — migration 012 also adds post_primary_sales (company billing to super stockists)
 - Inventory upload recognises company billing sheets (SS primary sales): an item per column with category and rate rows above, or one line per item. Headings can sit anywhere near the top, columns in any order; blank continuation rows, text numbers ("1,440", "288 pcs"), text dates and total rows are handled, and anything odd ("346 Box") is listed for checking.
 - Preview matches each billed party to a super stockist (or a distributor billed directly) and each item to a SKU; new ones are added, including display material (stands, trays, bags, boards) under the POP category.

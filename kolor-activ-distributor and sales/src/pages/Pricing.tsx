@@ -157,11 +157,11 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       try {
         for (const sh of (await readAnyFile(file)).sheets) {
           const grid = sh.grid;
-          const hi = grid.findIndex(r => r.some(c => /ss|mrp/i.test(cellText(c))));
+          const hi = grid.findIndex(r => r.some(c => /\bss\b|mrp/i.test(cellText(c))));
           if (hi < 0) { unused.push(`${file.name} › ${sh.name}`); continue; }
           const head = grid[hi].map(c => cellText(c).toLowerCase());
           const col = (re: RegExp) => head.findIndex(h => re.test(h));
-          const cSku = col(/sku|code/), cName = col(/product|item|name/), cSs = col(/ss/), cMrp = col(/mrp/);
+          const cSku = col(/sku|code/), cName = col(/product|item|name/), cSs = col(/\bss\b/), cMrp = col(/mrp/);
           for (const r of grid.slice(hi + 1)) {
             const sku = cSku >= 0 ? cellText(r[cSku]) : "", name = cName >= 0 ? cellText(r[cName]) : "";
             if (!sku && !name) continue;

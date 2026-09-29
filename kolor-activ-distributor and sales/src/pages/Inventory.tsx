@@ -2,6 +2,7 @@ import { Select, Combo } from "../components/Select";
 import { ask } from "../lib/ask";
 import { startTask, TaskHandle } from "../lib/tasks";
 import { readPrimary, PrimaryRead } from "../lib/primary";
+import { matchHolder, nameScore } from "../lib/dsrLink";
 import PrimarySales from "../components/PrimarySales";
 import SsTally from "../components/SsTally";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -98,7 +99,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const si = readSheetInfo(g, l.headerRow);
     setSheetInfo(si.name || si.town || si.person || si.hq ? si : null);
     // Quantities in pieces when the quantity heading says so; the choice can be changed before saving.
-    setPieces(l.labels.some((lab, i) => l.mapping[i] === "quantity" && /(pcs|pieces|piece|nos)/.test(lab)) || /(in pcs|in pieces|pcs wise)/i.test(heading));
+    setPieces(l.labels.some((lab, i) => l.mapping[i] === "quantity" && /\b(pcs|pieces|piece|nos)\b/.test(lab)) || /\b(in pcs|in pieces|pcs wise)\b/i.test(heading));
     let h = holder, so = soDefault, d = date;
     if (det) { h = det.holder; so = det.so; d = headingDate(`${heading} ${f?.name || ""}`) || today(); }
     setHolder(h); setSoDefault(so); setDate(d);
@@ -126,6 +127,14 @@ export default function Inventory({ locations, products, aliases, stock, officer
       setBusy(`Finding the product table and whose stock ${f.name} is…`); await new Promise(r => setTimeout(r, 0));
       const g = t.sheets[0].grid, l0 = detectLayout(g, "COUNT");
       const det = detectFile(g, l0, titleText(g, l0), f.name, locations, officers);
+      // A "DB name" line above the table says whose stock it is; it wins over names found elsewhere in the heading (such as the SO's).
+      const info = readSheetInfo(g, l0.headerRow);
+      if (info.name && det.type !== "SO") {
+        const byInfo = await matchHolder(info.name, info.town, locations);
+        const guessed = locations.find(l => l.code === det.holder);
+        if (byInfo) { det.holder = byInfo.code; det.reasons = [...det.reasons.filter(r => !/appears in the heading/.test(r)), `the sheet names ${info.name}${info.town ? ` of ${info.town}` : ""}, which is ${byInfo.name}${byInfo.territory ? ` (${byInfo.territory})` : ""}`]; }
+        else if (guessed && nameScore(info.name, guessed) < 0.8) { det.holder = ""; det.reasons = [...det.reasons.filter(r => !/appears in the heading/.test(r)), `the sheet names "${info.name}"${info.town ? ` of ${info.town}` : ""}, which isn't in your list yet: choose it or add it below`]; }
+      }
       setDetection(det); setType(det.type); setTable(t); setSheet(0);
       setBusy("Reading the rows and matching products and rates…"); await new Promise(r => setTimeout(r, 0));
       const { l, res } = await load(t, 0, det.type, { name: f.name, hash }, det);
@@ -414,7 +423,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
       await supabase.from("import_formats").upsert({ signature: `${mode}:${formatSignature(layout)}`, mapping: layout.mapping, labels: layout.labels, updated_at: new Date().toISOString() });
     for (const a of Object.values(aliasPlan)) await supabase.from("product_aliases").insert({ product_id: a.productId, alias: a.name });
 
-    const skippedNote = nExcluded ? ` ${plural(nExcluded, "row")} already recorded ${nExcluded === 1 ? "was" : "were"} skipped.` : "";
+    const skippedNote = nExcluded && type !== "COUNT" ? ` ${plural(nExcluded, "row")} already recorded ${nExcluded === 1 ? "was" : "were"} skipped.` : "";
     const msg = type === "COUNT" ? `Stock count saved for ${holderLoc?.name}: ${data.increased} products up, ${data.decreased} down, ${data.unchanged} unchanged. Undo is on the History page.`
       : type === "SO" ? `Saved ${plural(data.posted_rows, "SO report line")}. The SO checks page compares them with distributor stock.`
       : `Saved ${plural(data.posted_rows, "row")}${data.transfers ? `, including ${plural(data.transfers, "transfer")}` : ""}.${skippedNote} Undo is on the History page.`;
@@ -542,7 +551,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     </section>}
 
     {(rows.length > 0 || skipped.length > 0) && <section className="card" ref={reviewRef}>
-      <div className="rowhead"><h2>Review ({plural(rows.length, "row")}{problemRows.length ? `, ${problemRows.length} need fixing` : ""}{nExcluded ? `, ${nExcluded} already recorded` : ""})</h2>
+      <div className="rowhead"><h2>Review ({plural(rows.length, "row")}{problemRows.length ? `, ${problemRows.length} need fixing` : ""}{nExcluded ? (type === "COUNT" ? `, ${nExcluded} with none in stock` : `, ${nExcluded} already recorded`) : ""})</h2>
         <div className="actions"><button className="secondary" onClick={clearAll}>Clear</button>
           <button onClick={() => post()} disabled={!!busy || !rows.length}>{busy === "Saving…" ? "Saving…" : saveLabel}</button>
         {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}</div></div>
@@ -614,7 +623,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
           {" "}Don't reduce the sender's stock; only add it to the receiver</label>
         {anySenderShort && <small>Some senders don't have enough stock in the app. Tick this when their stock isn't in the app yet (for example, before the godown's opening stock is uploaded).</small>}
       </div>}
-      {nExcluded > 0 && <p className="hint">{nExcluded} row{nExcluded > 1 ? "s were" : " was"} already recorded from the other side of the transfer, so {nExcluded > 1 ? "they're" : "it's"} skipped. Tick “save anyway” on a row to include it.</p>}
+      {nExcluded > 0 && <p className="hint">{type === "COUNT" ? <>{plural(nExcluded, "product")} in the sheet {nExcluded > 1 ? "have" : "has"} none in stock and {nExcluded > 1 ? "aren't" : "isn't"} in stock here either, so {nExcluded > 1 ? "they're" : "it's"} left as {nExcluded > 1 ? "they are" : "it is"}. Tick “save anyway” on a row to record a zero.</> : <>{nExcluded} row{nExcluded > 1 ? "s were" : " was"} already recorded from the other side of the transfer, so {nExcluded > 1 ? "they're" : "it's"} skipped. Tick “save anyway” on a row to include it.</>}</p>}
       {newProducts > 0 && <p className="hint">{newProducts} product name{newProducts > 1 ? "s aren't" : " isn't"} in your product list and will be created. If a name is just how this file writes one of your products, pick the product under “Same as”; the app remembers it.</p>}
       <div className="tablewrap"><table className="edit"><thead><tr>
         {cols.map(h => <th key={h}>{COL_LABEL[h]}</th>)}

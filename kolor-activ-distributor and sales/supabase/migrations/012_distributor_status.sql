@@ -181,37 +181,46 @@ end $$;
 revoke all on function public.unlink_dsr_name(uuid, text) from public, anon;
 grant execute on function public.unlink_dsr_name(uuid, text) to authenticated;
 
+-- Pieces in a box, for sheets that give some quantities in boxes.
+alter table public.products add column if not exists box_pcs int;
+
 -- ---------- Company billing to super stockists ----------
--- Each invoice line becomes stock received by that super stockist (bought from the company).
+-- Each invoice line becomes stock received by that super stockist (bought from the company), and
+-- the same quantity leaves the company godown it was sent from: a bill means the goods left.
 -- Lines already saved (same SS, invoice and product) are skipped, so the same growing sheet can be
--- uploaded every month and only new invoices go in. Billing dated on or before a stock count the SS
--- already sent is also taken off at that count: the count says what they held that day, and the
--- difference shows up as stock the billing says they should have had.
-create or replace function public.post_primary_sales(p_lines jsonb, p_source_file text default null)
+-- uploaded every month and only new invoices go in. Billing dated on or before a stock count already
+-- posted (the SS's or the godown's) is also set against that count: the count says what was held that
+-- day, and the difference shows up as the gap. Display items (POP) are free: they carry no rate.
+-- A line with no quantity or SS only adds the item to the SKU list.
+drop function if exists public.post_primary_sales(jsonb, text);
+create or replace function public.post_primary_sales(p_lines jsonb, p_source_file text default null, p_godown uuid default null)
 returns jsonb language plpgsql security definer set search_path=public as $$
-declare l jsonb; bid uuid; sid uuid; pid uuid; q numeric; rate numeric; d date; ref text; old numeric; cnt date; last_d date;
-        n_add int := 0; n_kept int := 0; n_changed int := 0; n_new int := 0; n_count int := 0; changed jsonb := '[]'::jsonb;
+declare l jsonb; t record; bid uuid; sid uuid; pid uuid; tid uuid; q numeric; rate numeric; d date; ref text; old numeric; cnt date; last_d date; free boolean;
+        n_add int := 0; n_kept int := 0; n_changed int := 0; n_new int := 0; n_count int := 0; n_godown int := 0; changed jsonb := '[]'::jsonb;
 begin
   if not is_manager() then raise exception 'Only HO admins and state managers can save company billing.'; end if;
   if jsonb_typeof(p_lines) <> 'array' or jsonb_array_length(p_lines) = 0 then raise exception 'No lines to save'; end if;
+  if p_godown is not null and not exists (select 1 from distributors where id = p_godown and kind = 'GODOWN') then raise exception 'That godown was not found.'; end if;
   insert into inventory_batches(mode, created_by, source_file) values ('INPUT', auth.uid(), p_source_file) returning id into bid;
   for l in select value from jsonb_array_elements(p_lines) loop
     sid := nullif(l->>'ss_id', '')::uuid;
     q := coalesce(nullif(l->>'qty', '')::numeric, 0);
-    rate := nullif(l->>'rate', '')::numeric;
+    free := coalesce((l->>'free')::boolean, false);
+    rate := case when free then 0 else nullif(l->>'rate', '')::numeric end;
     d := coalesce(nullif(l->>'date', '')::date, current_date);
     ref := coalesce(nullif(trim(l->>'invoice'), ''), 'Billing ' || d::text);
     pid := coalesce(nullif(l->>'product_id', '')::uuid, find_product(null, l->>'item'));
     if pid is null then
-      insert into products(sku, item_name, unit_price, ss_rate, category)
-      values (trim(l->>'item'), trim(l->>'item'), coalesce(rate, 0), rate, nullif(trim(l->>'category'), ''))
+      insert into products(sku, item_name, unit_price, category, box_pcs)
+      values (trim(l->>'item'), trim(l->>'item'), coalesce(rate, 0), nullif(trim(l->>'category'), ''), nullif(l->>'box_pcs', '')::int)
       returning id into pid;
       n_new := n_new + 1;
     else
+      -- Existing SKUs keep their category (from the DSR list); only an empty one is filled.
       update products set category = coalesce(nullif(category, ''), nullif(trim(l->>'category'), '')),
-                          ss_rate = coalesce(ss_rate, rate) where id = pid;
+                          box_pcs = coalesce(nullif(l->>'box_pcs', '')::int, box_pcs),
+                          unit_price = case when free then 0 else unit_price end where id = pid;
     end if;
-    -- A line without a quantity or SS only adds the item to the SKU list (display items not billed yet).
     if q <= 0 or sid is null then continue; end if;
     if not exists (select 1 from distributors where id = sid) then raise exception 'Super stockist not found for "%"', l->>'item'; end if;
     select sum(quantity) into old from inventory_transactions
@@ -224,8 +233,9 @@ begin
       end if;
       continue;
     end if;
-    insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source, party)
-    values (bid, sid, pid, 'INPUT', d, ref, q, coalesce(rate, 0), auth.uid(), 'PURCHASE', 'Company billing');
+    tid := case when p_godown is null then null else gen_random_uuid() end;
+    insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source, party, counterparty_id, transfer_id)
+    values (bid, sid, pid, 'INPUT', d, ref, q, coalesce(rate, 0), auth.uid(), 'PURCHASE', 'Company billing', p_godown, tid);
     n_add := n_add + 1;
     last_d := greatest(coalesce(last_d, d), d);
     select min(as_of) into cnt from inventory_batches where distributor_id = sid and mode = 'COUNT' and as_of >= d;
@@ -235,9 +245,26 @@ begin
       n_count := n_count + 1;
     end if;
   end loop;
+  -- The godown side, for this upload and for billing saved earlier without it.
+  if p_godown is not null then
+    for t in select * from inventory_transactions s where party = 'Company billing' and mode = 'INPUT' and source = 'PURCHASE'
+               and (s.counterparty_id is null or (s.counterparty_id = p_godown and not exists (select 1 from inventory_transactions o where o.transfer_id = s.transfer_id and o.distributor_id = p_godown))) loop
+      tid := coalesce(t.transfer_id, gen_random_uuid());
+      update inventory_transactions set counterparty_id = p_godown, transfer_id = tid where id = t.id;
+      insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source, counterparty_id, transfer_id, party)
+      values (bid, p_godown, t.product_id, 'OUTPUT', t.transaction_date, t.reference, t.quantity, t.unit_price, auth.uid(), 'TRANSFER', t.distributor_id, tid, 'Company billing');
+      n_godown := n_godown + 1;
+      select min(as_of) into cnt from inventory_batches where distributor_id = p_godown and mode = 'COUNT' and as_of >= t.transaction_date;
+      if cnt is not null then
+        insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source)
+        values (bid, p_godown, t.product_id, 'INPUT', cnt, 'Stock count (billed before this count)', t.quantity, t.unit_price, auth.uid(), 'COUNT');
+      end if;
+      last_d := greatest(coalesce(last_d, t.transaction_date), t.transaction_date);
+    end loop;
+  end if;
   update inventory_batches set as_of = last_d where id = bid;
-  if n_add = 0 then delete from inventory_batches where id = bid; end if;
-  return jsonb_build_object('added', n_add, 'kept', n_kept, 'changed', n_changed, 'changed_lines', changed, 'new_products', n_new, 'count_adjusted', n_count);
+  if n_add = 0 and n_godown = 0 then delete from inventory_batches where id = bid; end if;
+  return jsonb_build_object('added', n_add, 'kept', n_kept, 'changed', n_changed, 'changed_lines', changed, 'new_products', n_new, 'count_adjusted', n_count, 'godown_lines', n_godown);
 end $$;
-revoke all on function public.post_primary_sales(jsonb, text) from public, anon;
-grant execute on function public.post_primary_sales(jsonb, text) to authenticated;
+revoke all on function public.post_primary_sales(jsonb, text, uuid) from public, anon;
+grant execute on function public.post_primary_sales(jsonb, text, uuid) to authenticated;

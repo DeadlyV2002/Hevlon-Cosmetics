@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase, Distributor, Product, ProductAlias, matchDistributor, matchProduct, nextCode, proper, fmt, money, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, Product, ProductAlias, fetchAll, matchDistributor, matchProduct, nextCode, proper, fmt, money, plural, errText } from "../lib/supabase";
 import { normName } from "../lib/parse";
 import { similarity, guessProduct } from "../lib/fuzzy";
 import { PrimaryRead } from "../lib/primary";
@@ -7,7 +7,8 @@ import { runTask } from "../lib/tasks";
 import { ask } from "../lib/ask";
 import { Select } from "./Select";
 
-const NEW = "__new";
+const NEW = "__new", NEW_GODOWN = "__newgodown";
+const BOX = /\b(box|boxes|bx|bxs)\b/i;
 const PAGE = 40;
 const n = (v: unknown) => Number(v) || 0;
 
@@ -26,6 +27,12 @@ export default function PrimarySales({ read, fileName, locations, products, alia
   const [pieces, setPieces] = useState(read.pieces);
   const [busy, setBusy] = useState(false), [shown, setShown] = useState(PAGE), [allItems, setAllItems] = useState(false);
   const [saved, setSaved] = useState<Set<string> | null>(null);
+  // Billed stock leaves the company godown.
+  const godowns = useMemo(() => locations.filter(l => l.kind === "GODOWN"), [locations]);
+  const [godown, setGodown] = useState(() => godowns[0]?.id || NEW_GODOWN), [noGodown, setNoGodown] = useState(0);
+  // Quantities written in boxes ("346 Box"): pieces per box, remembered on the SKU.
+  const boxItems = useMemo(() => [...new Set(read.invoices.flatMap(i => i.lines.filter(l => l.raw && BOX.test(l.raw)).map(l => l.item)))], [read]);
+  const [boxPcs, setBoxPcs] = useState<Record<string, string>>({});
 
   // ---------- who each SS in the sheet is ----------
   const [ss, setSs] = useState<SsRow[]>(() => {
@@ -73,8 +80,22 @@ export default function PrimarySales({ read, fileName, locations, products, alia
       if (!it.how.includes("check")) return it;
       const taken = all.some(o => o !== it && o.pick === it.pick && (o.how === "same name" || (o.how.includes("check") && o.pcs > it.pcs)));
       return taken ? { ...it, pick: NEW, how: "new SKU (the similar one is its own column)" } : it;
+    }).map((it, _, all) => {
+      // Categories follow the DSR list: a new SKU takes the category the matched SKUs of its sheet group have ("Kajal" items sit under "Eye Shadow").
+      if (it.pick !== NEW || it.pop) return it;
+      const votes = new Map<string, number>();
+      all.filter(o => o.pick !== NEW && o.category === it.category).forEach(o => { const c = products.find(p => p.id === o.pick)?.category; if (c) votes.set(c, (votes.get(c) || 0) + 1); });
+      const best = [...votes].sort((x, y) => y[1] - x[1])[0];
+      return best ? { ...it, category: best[0] } : it;
     }).sort((a, b) => Number(a.how === "same name") - Number(b.how === "same name") || b.pcs - a.pcs);
   });
+
+  useEffect(() => {
+    setBoxPcs(b => ({ ...Object.fromEntries(boxItems.map(name => { const it = items.find(x => x.key === normName(name)); const p = products.find(x => x.id === it?.pick); return [normName(name), p?.box_pcs ? String(p.box_pcs) : ""]; })), ...b }));
+  }, [boxItems]);
+  const boxOf = (item: string) => Number(boxPcs[normName(item)]) || 0;
+  const pcsOf = (l: PrimaryRead["invoices"][number]["lines"][number]) => (l.raw && BOX.test(l.raw) ? l.pcs * boxOf(l.item) : l.pcs);
+  const boxMissing = boxItems.filter(name => !boxOf(name));
 
   // Invoices already saved for these super stockists, so the same sheet can come back each month with more rows.
   const ssIds = ss.map(s => s.pick).filter(id => id && id !== NEW).join(",");
@@ -89,7 +110,9 @@ export default function PrimarySales({ read, fileName, locations, products, alia
         const { data } = await supabase!.from("inventory_transactions").select("distributor_id,reference").eq("source", "PURCHASE").in("distributor_id", ids).in("reference", refs.slice(i, i + 150));
         (data || []).forEach((r: { distributor_id: string; reference: string }) => got.add(`${r.distributor_id}|${r.reference}`));
       }
-      if (live) setSaved(got);
+      // Billing saved before the godown was taken into account.
+      const earlier = await fetchAll<{ id: string }>((a, b) => supabase!.from("inventory_transactions").select("id").eq("party", "Company billing").eq("mode", "INPUT").is("counterparty_id", null).order("id").range(a, b)).catch(() => []);
+      if (live) { setSaved(got); setNoGodown(earlier.length); }
     })().catch(() => { if (live) setSaved(new Set()); });
     return () => { live = false; };
   }, [ssIds]);
@@ -107,12 +130,28 @@ export default function PrimarySales({ read, fileName, locations, products, alia
   async function save() {
     if (!supabase || !canManage) return;
     const dz = (pcs: number) => (pieces ? pcs / 12 : pcs);
-    if (!await ask(`Save ${plural(fresh.length, "invoice")} of company billing as stock received by ${plural(new Set(fresh.map(i => ssOf(i.ss, i.state)?.key)).size, "super stockist")}?${newSs.length ? `\n\n${plural(newSs.length, "new super stockist")} will be added.` : ""}${newItems.length ? `\n${plural(newItems.length, "new SKU")} will be added (${newItems.filter(i => i.pop).length} display items).` : ""}${read.invoices.length - fresh.length ? `\n\n${plural(read.invoices.length - fresh.length, "invoice")} already saved will be skipped.` : ""}`)) return;
+    if (boxMissing.length) { notify(`Enter how many pieces are in a box of ${boxMissing.join(", ")} first.`); return; }
+    const gName = godown === NEW_GODOWN ? "Company Godown (added now)" : godowns.find(g => g.id === godown)?.name;
+    const parts = [
+      fresh.length ? `Save ${plural(fresh.length, "invoice")} of company billing as stock received by ${plural(new Set(fresh.map(i => ssOf(i.ss, i.state)?.key)).size, "party", "parties")}.` : "",
+      gName ? `The same stock leaves ${gName}${noGodown && !fresh.length ? ` (${fmt(noGodown)} lines billed earlier)` : ""}.` : "Godown stock stays as it is.",
+      newSs.length ? `${plural(newSs.length, "new super stockist")} will be added.` : "",
+      newItems.length ? `${plural(newItems.length, "new SKU")} will be added (${newItems.filter(i => i.pop).length} free display items).` : "",
+      read.invoices.length - fresh.length ? `${plural(read.invoices.length - fresh.length, "invoice")} already saved will be skipped.` : "",
+    ].filter(Boolean);
+    if (!await ask(parts.join("\n\n"))) return;
     setBusy(true);
     try {
       const r = await runTask(`Saving billing from ${fileName}`, async task => {
         // New super stockists, with the sheet's spelling, state and town.
         const ids = new Map(ss.filter(s => s.pick !== NEW).map(s => [s.key, s.pick]));
+        // The company godown, added if the app doesn't have one yet.
+        let godownId = godown && godown !== NEW_GODOWN ? godown : null;
+        if (godown === NEW_GODOWN) {
+          const { data, error } = await supabase!.from("distributors").insert({ code: nextCode("GODOWN", locations), name: "Company Godown", company_name: "Hevlon Cosmetics", kind: "GODOWN", aliases: [] }).select("id").single();
+          if (error) throw new Error(errText(error));
+          godownId = (data as { id: string }).id;
+        }
         if (newSs.length) {
           const taken: { code: string }[] = [...locations];
           const payload = newSs.map(s => { const code = nextCode("SUPER_STOCKIST", taken); taken.push({ code }); return { code, name: proper(s.name), company_name: proper(s.name), kind: "SUPER_STOCKIST", state: s.state || null, territory: s.town ? proper(s.town) : null, aliases: [] }; });
@@ -136,24 +175,25 @@ export default function PrimarySales({ read, fileName, locations, products, alia
             const it = pick.get(normName(l.item));
             const k = `${sid}|${i.invoice}|${it?.pick !== NEW ? it?.pick : normName(l.item)}`;
             const e = lines.get(k);
-            if (e) { e.qty = n(e.qty) + dz(l.pcs); return; }
+            if (e) { e.qty = n(e.qty) + dz(pcsOf(l)); return; }
             lines.set(k, { ss_id: sid, date: i.date, invoice: i.invoice, product_id: it && it.pick !== NEW ? it.pick : null, item: proper(l.item),
-              category: it?.category || l.category || (it?.pop ? "POP" : ""), qty: dz(l.pcs), rate: l.rate !== null ? (pieces ? l.rate * 12 : l.rate) : null });
+              category: it?.category || l.category || (it?.pop ? "POP" : ""), qty: dz(pcsOf(l)), free: !!it?.pop, rate: it?.pop ? null : l.rate !== null ? (pieces ? l.rate * 12 : l.rate) : null });
           });
         });
         // Every item goes into the SKU list first, with its category (display material not billed yet included), before the invoice lines.
-        const itemLines = items.map(i => ({ ss_id: null, product_id: i.pick !== NEW ? i.pick : null, item: proper(i.name), category: i.category || (i.pop ? "POP" : ""), qty: 0, rate: i.rate !== null ? (pieces ? i.rate * 12 : i.rate) : null }));
-        const all = [...itemLines, ...lines.values()], out = { added: 0, kept: 0, changed: 0, new_products: 0, count_adjusted: 0, changed_lines: [] as unknown[] };
+        const itemLines = items.map(i => ({ ss_id: null, product_id: i.pick !== NEW ? i.pick : null, item: proper(i.name), category: i.category || (i.pop ? "POP" : ""), qty: 0, free: i.pop,
+          rate: i.pop ? null : i.rate !== null ? (pieces ? i.rate * 12 : i.rate) : null, box_pcs: boxOf(i.name) || null }));
+        const all = [...itemLines, ...lines.values()], out = { added: 0, kept: 0, changed: 0, new_products: 0, count_adjusted: 0, godown_lines: 0, changed_lines: [] as unknown[] };
         for (let k = 0; k < all.length; k += 400) {
-          const { data, error } = await supabase!.rpc("post_primary_sales", { p_lines: all.slice(k, k + 400), p_source_file: fileName });
+          const { data, error } = await supabase!.rpc("post_primary_sales", { p_lines: all.slice(k, k + 400), p_source_file: fileName, p_godown: godownId });
           if (error) throw new Error(`${errText(error)}. Run database step 012.`);
           const d = data as typeof out;
-          out.added += d.added; out.kept += d.kept; out.changed += d.changed; out.new_products += d.new_products; out.count_adjusted += d.count_adjusted; out.changed_lines.push(...d.changed_lines);
+          out.added += d.added; out.kept += d.kept; out.changed += d.changed; out.new_products += d.new_products; out.count_adjusted += d.count_adjusted; out.godown_lines += d.godown_lines || 0; out.changed_lines.push(...d.changed_lines);
           task.step(Math.min(k + 400, all.length), all.length, `${fmt(out.added)} lines saved`);
         }
         return out;
       }, 1, r => `${fmt(r.added)} invoice lines saved${r.kept ? `, ${fmt(r.kept)} already there` : ""}.`);
-      notify(`Saved ${fmt(r.added)} billing lines from ${fileName}${r.new_products ? `, added ${plural(r.new_products, "SKU")}` : ""}${newSs.length ? `, added ${plural(newSs.length, "super stockist")}` : ""}.${r.kept ? ` ${fmt(r.kept)} lines were already saved and were skipped.` : ""}${r.changed ? ` ${plural(r.changed, "saved line")} now show${r.changed === 1 ? "s" : ""} a different quantity in the sheet; they were kept as first saved.` : ""}${r.count_adjusted ? ` ${fmt(r.count_adjusted)} lines were billed before a stock count the SS had already sent, so they show against that count.` : ""}`);
+      notify(`${r.added ? `Saved ${fmt(r.added)} billing lines from ${fileName}` : `${fileName}: no new invoices`}${r.new_products ? `, added ${plural(r.new_products, "SKU")}` : ""}${newSs.length ? `, added ${plural(newSs.length, "super stockist")}` : ""}.${r.kept ? ` ${fmt(r.kept)} lines were already saved and were skipped.` : ""}${r.changed ? ` ${plural(r.changed, "saved line")} now show${r.changed === 1 ? "s" : ""} a different quantity in the sheet; they were kept as first saved.` : ""}${r.count_adjusted ? ` ${fmt(r.count_adjusted)} lines were billed before a stock count the SS had already sent, so they show against that count.` : ""}${r.godown_lines ? ` ${fmt(r.godown_lines)} lines taken off the godown's stock.` : ""}`);
       onDone(true);
     } catch (e) { notify(`Billing not saved: ${errText(e)}`); }
     finally { setBusy(false); }
@@ -164,7 +204,7 @@ export default function PrimarySales({ read, fileName, locations, products, alia
       <p className="hint">{fileName}: read as billing from the company to super stockists ({read.sheets.join(", ")}). Each invoice becomes stock the SS received, so their monthly closing stock can be checked against it.</p></div>
       <div className="actions"><button className="secondary" disabled={busy} onClick={() => onDone(false)}>Cancel</button>
         <button className="secondary" disabled={busy} onClick={onReadNormally} title="Read it like any other stock file (for example the godown's own sales register)">Read As A Normal Stock File</button>
-        <button disabled={busy || !canManage || !(fresh.length || newItems.length) || !saved} onClick={save}>{busy ? "Saving…" : !saved ? "Checking…" : fresh.length ? `Save ${plural(fresh.length, "Invoice")}` : newItems.length ? `Add ${plural(newItems.length, "New SKU")}` : "All Invoices Saved"}</button></div></div>
+        <button disabled={busy || !canManage || !(fresh.length || newItems.length || (noGodown && godown)) || !saved} onClick={save}>{busy ? "Saving…" : !saved ? "Checking…" : fresh.length ? `Save ${plural(fresh.length, "Invoice")}` : newItems.length ? `Add ${plural(newItems.length, "New SKU")}` : noGodown && godown ? `Take ${fmt(noGodown)} Billed Lines Off The Godown` : "All Invoices Saved"}</button></div></div>
     {!canManage && <div className="status err">Only HO admins and state managers can save company billing.</div>}
     <div className="cards">
       <div className="metric"><small>Invoices</small><b>{fmt(read.invoices.length)}</b><span className="muted">{saved ? `${fmt(fresh.length)} new, ${fmt(read.invoices.length - fresh.length)} saved before` : "checking…"}</span></div>
@@ -176,6 +216,14 @@ export default function PrimarySales({ read, fileName, locations, products, alia
       <label className="inline"><input type="radio" checked={pieces} onChange={() => setPieces(true)} /> Pieces</label>
       <label className="inline"><input type="radio" checked={!pieces} onChange={() => setPieces(false)} /> Dozens</label>
       <small>{read.pieces ? "The heading says pieces." : "No unit in the heading; dozens assumed."} Stock is kept in dozens, so pieces are divided by 12.</small></div>
+    <div className="unitpick"><span>Stock leaves from</span>
+      <Select value={godown} onChange={e => setGodown(e.target.value)} aria-label="Godown">
+        {godowns.map(g => <option key={g.id} value={g.id}>{g.name}{g.territory ? ` · ${g.territory}` : ""}</option>)}
+        {!godowns.length && <option value={NEW_GODOWN}>Company Godown (add it)</option>}
+        <option value="">Nowhere: don't change godown stock</option></Select>
+      <small>A bill means the goods left the godown, so the godown's stock goes down by what's billed. Your godown audit then shows the real figure.</small></div>
+    {boxItems.length > 0 && <div className="warn"><div>Some quantities are written in boxes. Enter the pieces in one box; it's remembered for next time.</div>
+      <div className="boxsizes">{boxItems.map(name => <label key={name} className="inline">{name}: <input type="number" min={1} value={boxPcs[normName(name)] || ""} onChange={e => setBoxPcs(b => ({ ...b, [normName(name)]: e.target.value }))} /> pieces per box</label>)}</div></div>}
     {(read.notes.length > 0 || toCheck > 0) && <div className="warn">
       {toCheck > 0 && <div>{plural(toCheck, "name")} matched by a similar spelling: check {toCheck === 1 ? "it" : "them"} below (marked "check").</div>}
       {read.notes.slice(0, 12).map((t, k) => <div key={k}>{t}</div>)}{read.notes.length > 12 && <div>…and {read.notes.length - 12} more.</div>}</div>}

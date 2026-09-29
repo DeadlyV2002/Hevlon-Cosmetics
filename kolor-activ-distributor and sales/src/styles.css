@@ -659,3 +659,4 @@ a.button.small{padding:5px 10px;font-size:13px;white-space:nowrap}
 .tallybody details{border:1px solid #e2e8f0;border-radius:8px;background:#fff;margin-top:6px}
 .tallybody summary{cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;padding:6px 10px;font-size:14px;list-style:none}
 .primary h3{margin:16px 0 6px}
+.boxsizes{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:6px}.boxsizes input{width:80px;display:inline-block;margin:0 4px}

@@ -71,7 +71,8 @@ export default function Distributors({ locations, stock, retailers, officers, pr
     if (!await ask(next === "DORMANT" ? `Mark ${d.name} as dormant? Their history stays; they get no stock reminders and can be hidden from lists.` : `Mark ${d.name} as active again?`, { ok: next === "DORMANT" ? "Mark Dormant" : "Mark Active" })) return;
     const { error } = await supabase.from("distributors").update({ status: next }).eq("id", d.id);
     if (error) return show("err", error.code === "42501" ? "Only HO admins and state managers can change this." : `Not changed: ${error.message}. Run database step 012.`);
-    show("ok", `${d.name} is now ${next === "DORMANT" ? "dormant" : "active"}.`); await onChanged();
+    const held = stock.filter(x => x.distributor_id === d.id && Number(x.current_stock) > 0);
+    show("ok", `${d.name} is now ${next === "DORMANT" ? "dormant" : "active"}.${next === "DORMANT" && held.length ? ` They still hold ${plural(held.length, "product")} in the app. When the stock comes back, use Move Stock on the Inventory page: from ${d.name} to your godown, then "Move everything it holds".` : ""}`); await onChanged();
   }
   const [openComments, setOpenComments] = useState<string | null>(null);
   const [report, setReport] = useState<Distributor | null>(null);

@@ -51,7 +51,7 @@ export default function SsTally({ locations, products, refresh }: { locations: D
       <div className="actions">{open && <DateRange value={range} onChange={setRange} />}<button className="secondary" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? "Hide" : "Show"}</button></div></div>
     {open && err && <div className="status err">{err}</div>}
     {open && <>
-    {!rows ? <p className="empty">Adding up billing and stock…</p> : !bySs.length ? <p className="empty">No company billing or stock for super stockists in this period. Upload the SS billing sheet in the box below.</p> :
+    {!rows ? <p className="empty">Adding up billing and stock…</p> : !bySs.length ? <p className="empty">No company billing or stock for super stockists in this period. Upload the SS billing sheet under Upload Stock Files above.</p> :
       <div className="sk-cats">{bySs.map(e => {
         const cats = [...e.lines.reduce((m, l) => m.set(l.category, [...(m.get(l.category) || []), l]), new Map<string, typeof e.lines>())].sort((a, b) => b[1].reduce((t, l) => t + n(l.in_purchase) * l.rate, 0) - a[1].reduce((t, l) => t + n(l.in_purchase) * l.rate, 0));
         const last = status.get(e.ss.id);

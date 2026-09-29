@@ -1,5 +1,17 @@
 # Deployment Package Audit
 
+## v18 (29 Sep 2026) — migration 012 also adds stock returns and "different people" for staff
+- Inventory page in a clearer order: Stock At A Glance first, then Upload Stock Files (only the drop box until a file is chosen), the super stockists' billed-vs-held check (collapsed), Download Stock, Stock Returned To The Godown, and Move Stock last.
+- Stock returned by a super stockist or distributor: it comes off their stock and into the godown, with the reason, freight both ways and how long it sat unsold; a returns log totals the cost.
+- Review table: numbered rows, a summary of every problem with its rows and how to fix it, "Show only rows that need fixing", and a fix hint beside each problem.
+- Set Aside For Later: a file that can't be saved yet goes to a Set Aside list and the queue carries on; Save All sets such files aside instead of stopping.
+- A stock sheet that doesn't name its distributor offers "add as new" with a name taken from the file name; after adding, the sheet is set to it.
+- Active / Dormant is a switch; marking a location dormant asks for the signed-in person's password.
+- Sales team: "Different People" keeps look-alike names apart (never offered for merging again).
+- Distributor tree moved to the Distributors page (Tree View); the Retailers page shows only retailers.
+- Categories: DSR uploads fill missing product categories; billing sheet headings map to DSR names. "Categories" button renamed "Stock By Category".
+- Pricing: prices per dozen and MRP per piece labelled; MRP checks compare like with like; the saved message shows next to Save Prices.
+
 ## v17 (29 Sep 2026) — migration 012: billing takes stock off the godown, pieces per box, free display items
 - Company billing to super stockists also takes the same stock off the company godown (a transfer from the godown to the SS). Billing saved earlier is caught up the next time the sheet is uploaded ("Take N Billed Lines Off The Godown"). The godown's own stock count (audit) then sets its real figure; billing dated before that count is set against it.
 - Quantities written in boxes ("346 Box") are converted with the pieces per box, entered once per SKU and remembered (Spicy Lips 5, Glamour Lip Color 6).

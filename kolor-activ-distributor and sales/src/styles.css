@@ -660,3 +660,18 @@ a.button.small{padding:5px 10px;font-size:13px;white-space:nowrap}
 .tallybody summary{cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;padding:6px 10px;font-size:14px;list-style:none}
 .primary h3{margin:16px 0 6px}
 .boxsizes{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:6px}.boxsizes input{width:80px;display:inline-block;margin:0 4px}
+
+/* Review: problems with their rows and fixes */
+.errsum{border:1px solid #fecaca;background:#fef2f2;border-radius:10px;padding:10px 12px;margin:10px 0;display:flex;flex-direction:column;gap:6px}
+.errsum .rowhead{margin:0}
+.errgroup{font-size:14px}
+.fixhint{display:block;color:#334155;font-size:12px;margin-top:2px}
+.fixhint::before{content:"→ ";color:#2563eb}
+td.rownum{color:#94a3b8;font-size:12px;text-align:right}
+.fixrow .newname{width:auto;min-width:220px;margin:0}
+/* Active / dormant switch */
+button.switch{display:inline-flex;align-items:center;gap:8px;background:none;color:#475569;padding:2px 4px;font-size:13px;font-weight:700;text-transform:none}
+button.switch i{position:relative;width:34px;height:20px;border-radius:999px;background:#cbd5e1;transition:background .15s;flex:none}
+button.switch i::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0f172a33;transition:left .15s}
+button.switch.on{color:#166534}button.switch.on i{background:#16a34a}button.switch.on i::after{left:16px}
+button.switch:disabled{opacity:1;cursor:default}

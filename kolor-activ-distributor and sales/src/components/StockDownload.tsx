@@ -46,7 +46,8 @@ function grouped(rows: Record<string, unknown>[], locCols: string[], catCol: str
 }
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "stock";
 
-export default function StockDownload({ locations, products, stock, notify }: { locations: Distributor[]; products: Product[]; stock: StockLine[]; notify: (m: string) => void }) {
+/** The stock tree at the top of the Inventory page; whatever the page puts between them sits above the download card at the bottom. */
+export default function StockDownload({ locations, products, stock, notify, children }: { locations: Distributor[]; products: Product[]; stock: StockLine[]; notify: (m: string) => void; children?: React.ReactNode }) {
   const [sel, setSel] = useState<Set<string>>(new Set()), [search, setSearch] = useState(""), [onlyStock, setOnlyStock] = useState(false);
   const [openSS, setOpenSS] = useState<Set<string>>(new Set()), [openLoc, setOpenLoc] = useState<string | null>(null);
   const [period, setPeriod] = useState<"latest" | "range">("latest");
@@ -162,21 +163,21 @@ export default function StockDownload({ locations, products, stock, notify }: { 
     <input type="checkbox" checked={sel.has(d.id)} onChange={ev => toggle([d.id], ev.target.checked)} />
     <span className="sk-name">{d.name}<small>{d.code}{d.territory ? ` · ${d.territory}` : ""}{d.status === "DORMANT" ? " · dormant" : ""}</small></span>
     <span className="sk-num">{e.units ? money(e.value) : "no stock"}<small>{e.units ? `${fmt(dz(e.units))} dz · ${fmt(pcs(e.units))} pcs · ${e.products} SKUs${e.last ? ` · ${e.last}` : ""}` : e.last ? `last update ${e.last}` : "never uploaded"}</small></span>
-    {e.units > 0 && <button className="secondary small" aria-expanded={openLoc === d.id} onClick={ev => { ev.preventDefault(); setOpenLoc(openLoc === d.id ? null : d.id); }}>{openLoc === d.id ? "Hide" : "Categories"}</button>}
+    {e.units > 0 && <button className="secondary small" aria-expanded={openLoc === d.id} title="Their stock grouped by category, each opening to its SKUs" onClick={ev => { ev.preventDefault(); setOpenLoc(openLoc === d.id ? null : d.id); }}>{openLoc === d.id ? "Hide" : "Stock By Category"}</button>}
   </label>{openLoc === d.id && breakdown(d.id)}</div>; };
 
-  return <section className="card">
+  return <><section className="card">
     <div className="rowhead"><h2>Stock At A Glance</h2>
       <div className="actions"><input className="search" placeholder="Search a location…" value={search} onChange={e => setSearch(e.target.value)} />
         <label className="inline"><input type="checkbox" checked={onlyStock} onChange={e => setOnlyStock(e.target.checked)} /> Only those holding stock</label></div></div>
-    <p className="hint">Who holds how much stock right now, at SS rate. It updates as soon as any stock is saved. Tick locations to download their stock, or download everything.</p>
+    <p className="hint">Who holds how much stock right now, valued at SS rate, by state and super stockist. It updates as soon as stock is saved. "Stock By Category" opens a location's stock by category and SKU. Tick locations to download just those (Download Stock, lower down).</p>
     <div className="sk-tree">{tree.map(([state, g]) => {
       const all = [...[...g.ss.entries()].flatMap(([ssId, ds]) => [...(byId.get(ssId) ? [byId.get(ssId)!] : []), ...ds]), ...g.godowns];
       const shown = all.filter(d => hit(d) && (!onlyStock || holds(d)));
       if (!shown.length) return null;
       const tot = sum(all);
       return <details key={state} className="rt-state" open={!!t || tree.length <= 2}>
-        <summary><h3>{state}</h3><span className="rt-badge">{money(tot.value)}</span><span className="rt-badge">{fmt(tot.units)} units</span><span className="rt-badge">{all.filter(holds).length} of {all.length} hold stock</span></summary>
+        <summary><h3>{state}</h3><span className="rt-badge">{money(tot.value)}</span><span className="rt-badge">{fmt(dz(tot.units))} dz</span><span className="rt-badge">{all.filter(holds).length} of {all.length} hold stock</span></summary>
         <div className="rt-branch">
           {g.godowns.filter(d => hit(d) && (!onlyStock || holds(d))).map(d => row(d, "godown"))}
           {[...g.ss.entries()].sort((a, b) => sum([...(byId.get(b[0]) ? [byId.get(b[0])!] : []), ...b[1]]).value - sum([...(byId.get(a[0]) ? [byId.get(a[0])!] : []), ...a[1]]).value).map(([ssId, ds]) => {
@@ -195,6 +196,11 @@ export default function StockDownload({ locations, products, stock, notify }: { 
         </div>
       </details>;
     })}</div>
+  </section>
+  {children}
+  <section className="card">
+    <h2>Download Stock</h2>
+    <p className="hint">An Excel file of stock by location, category and SKU, in dozens and pieces. It covers the locations ticked in Stock At A Glance, or everything.</p>
     <div className="actions downloadrow">
       <div className="periodpick">
         <label className="inline"><input type="radio" name="period" checked={period === "latest"} onChange={() => setPeriod("latest")} /> Latest stock</label>
@@ -203,7 +209,7 @@ export default function StockDownload({ locations, products, stock, notify }: { 
       </div>
       <button onClick={download} disabled={busy || !picked.length}>{busy ? "Preparing…" : sel.size ? `Download ${sel.size} Selected` : "Download All"}</button>
       {sel.size > 0 && <button className="link" onClick={() => setSel(new Set())}>Clear Selection</button>}
-      <span className="hint">{sel.size ? `${picked.length} selected` : `All ${picked.length} locations`} · {fmt(units)} units · {money(value)}</span>
+      <span className="hint">{sel.size ? `${picked.length} selected` : `All ${picked.length} locations`} · {fmt(dz(units))} dz · {money(value)}</span>
     </div>
-  </section>;
+  </section></>;
 }

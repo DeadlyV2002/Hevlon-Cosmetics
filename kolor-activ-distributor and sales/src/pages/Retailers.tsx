@@ -26,9 +26,11 @@ type Form = { name: string; distributor_id: string; owner_name: string; phone: s
 const blank: Form = { name: "", distributor_id: "", owner_name: "", phone: "", territory: "", code: "", state: "", region: "" };
 
 const ORDERS = [{ id: "name", label: "Name (A to Z)" }, { id: "billed", label: "Billing (highest first)" }, { id: "best", label: "Collection % (best first)" }, { id: "worst", label: "Collection % (worst first)" }, { id: "stock", label: "Stock value (highest first)" }];
-interface Props { retailers: Retailer[]; locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
+interface Props { retailers: Retailer[]; locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void;
+  /** Only the state → super stockist → distributor tree (used on the Distributors page). */
+  treeOnly?: boolean }
 
-export default function Retailers({ retailers, locations, stock, officers, canManage, onChanged, notify }: Props) {
+export default function Retailers({ retailers, locations, stock, officers, canManage, onChanged, notify, treeOnly }: Props) {
   const [scope, setScope] = useState<Scope>(emptyScope());
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"tree" | "table">("tree");
@@ -51,7 +53,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
     supabase.rpc("billing_summary", { p_from: range.from, p_to: range.to }).then(({ data }) => setBills((data || []) as Billing[]));
   }, [range.from, range.to]);
   // Retailer counts only mean something once retailers are loaded; until then the tree shows distributors.
-  const hasRetailers = retailers.length > 0;
+  const hasRetailers = !treeOnly && retailers.length > 0;
   const billMap = useMemo(() => new Map(bills.map(b => [`${b.party_type}|${b.party_id}`, b])), [bills]);
   const billOf = (id: string, t = "LOCATION") => billMap.get(`${t}|${id}`);
   const pctOf = (id: string, t = "LOCATION") => collectionPct(billOf(id, t));
@@ -82,7 +84,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
   const tree = useMemo(() => {
     const byDist = new Map<string, Retailer[]>();
     list.forEach(r => byDist.set(r.distributor_id || "", [...(byDist.get(r.distributor_id || "") || []), r]));
-    const dists = inScope.filter(d => (q || d.kind === "SUPER_STOCKIST" ? byDist.has(d.id) : true));
+    const dists = inScope.filter(d => (treeOnly ? (q || d.kind === "SUPER_STOCKIST" ? byDist.has(d.id) || d.kind === "SUPER_STOCKIST" : true) : byDist.has(d.id)));
     const states = new Map<string, Map<string, Distributor[]>>();
     dists.forEach(d => {
       const st = d.state || "No state";
@@ -92,7 +94,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
       m.set(ss, [...(m.get(ss) || []), d]);
     });
     return { states: [...states.entries()].sort((a, b) => a[0].localeCompare(b[0])), byDist };
-  }, [list, inScope, q]);
+  }, [list, inScope, q, treeOnly]);
 
   function edit(r: Retailer) {
     setEditing(r); setMsg(null);
@@ -191,7 +193,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
       {canManage && <td className="actions"><button className="secondary small" onClick={() => edit(r)}>Edit</button><button className="del" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>✕</button></td>}</tr>; })}</tbody></table>;
 
   return <>
-    {canManage && <section className="card upload">
+    {!treeOnly && canManage && <section className="card upload">
       <div className="rowhead"><h2>{editing ? `Edit ${editing.name}` : "Add retailer"}</h2>
         <label className="button secondary">Import from Excel<input hidden type="file" multiple accept={ACCEPT} onChange={e => { const [x, ...rest] = [...(e.target.files || [])]; if (x) { readImport(x); setQueue(rest); } e.target.value = ""; }} /></label></div>
       <div className="formgrid">
@@ -213,7 +215,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
       <p className="hint">Retailers are also added automatically when a distributor's sales file names a new one. The import reads columns such as Retailer / Outlet name, Distributor, Owner, Mobile and Beat.</p>
     </section>}
 
-    {preview && <section className="card">
+    {!treeOnly && preview && <section className="card">
       <div className="rowhead"><h2>Import preview — {preview.file}</h2>
         <div className="actions"><button className="secondary" onClick={() => (queue.length ? nextImport() : setPreview(null))}>{queue.length ? `Skip, Next File (${queue.length} Left)` : "Cancel"}</button>
           <button onClick={confirmImport} disabled={busy || !good.length}>{busy ? "Importing…" : `Import ${plural(good.length, "retailer")}`}</button></div></div>
@@ -231,19 +233,21 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
     </section>}
 
     <section className="card">
-      <div className="rowhead"><h2>Retailers ({list.length}{list.length !== retailers.length ? ` of ${retailers.length}` : ""})</h2>
-        <div className="actions">
+      <div className="rowhead"><h2>{treeOnly ? "Distributor Tree" : `Retailers (${list.length}${list.length !== retailers.length ? ` of ${retailers.length}` : ""})`}</h2>
+        {!treeOnly && <div className="actions">
           <div className="seg" role="group" aria-label="View"><button className={view === "tree" ? "on" : ""} onClick={() => setView("tree")}>Tree</button><button className={view === "table" ? "on" : ""} onClick={() => setView("table")}>Table</button></div>
           <input className="search" placeholder="Search retailers…" value={search} onChange={e => setSearch(e.target.value)} />
-          <button className="secondary" onClick={exportList} disabled={!list.length}>Export to Excel</button></div></div>
+          <button className="secondary" onClick={exportList} disabled={!list.length}>Export to Excel</button></div>}</div>
+      {treeOnly && <p className="hint">Every distributor by state and super stockist, with stock, billing and collection. Click a name for its report.</p>}
+      {!treeOnly && !retailers.length && <p className="empty">No retailers yet. Add them above or import a list. The distributor tree is on the Distributors page.</p>}
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={["DISTRIBUTOR", "SUPER_STOCKIST"]} saveKey="retailers" />
-      {view === "tree" && <div className="rt-sort">
+      {(treeOnly || view === "tree") && <div className="rt-sort">
         <label className="inline">Order distributors by <Select value={order} onChange={e => setOrder(e.target.value)} aria-label="Order distributors by">
           {ORDERS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}</Select></label>
         <DateRange value={range} onChange={setRange} />
         <small className="muted">Billing and collection over this period.</small>
       </div>}
-      {view === "tree" ? <div className="rtree">
+      {treeOnly || view === "tree" ? <div className="rtree">
         {tree.states.map(([state, supers]) => {
           const all = [...supers.values()].flat(), n = all.reduce((a, d) => a + (tree.byDist.get(d.id)?.length || 0), 0);
           return <details key={state} className="rt-state" open>
@@ -279,7 +283,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
             </div>
           </details>;
         })}
-        {!tree.states.length && <p className="empty">No distributors match.</p>}
+        {!tree.states.length && (treeOnly || retailers.length > 0) && <p className="empty">No distributors match.</p>}
       </div> : <div className="tablewrap"><table><thead><tr><th>Retailer</th><th>Code</th><th>Distributor</th><th>Super stockist</th><th>State</th><th>Region</th><th>Area / beat</th><th>Owner</th><th>Phone</th><th>First seen</th>{canManage && <th />}</tr></thead>
         <tbody>{list.slice(0, 2000).map(r => {
           const d = byId.get(r.distributor_id || ""), ss = d?.kind === "SUPER_STOCKIST" ? d : byId.get(d?.parent_id || "");

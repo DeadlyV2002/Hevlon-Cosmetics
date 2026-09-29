@@ -30,7 +30,11 @@ export interface Retailer { id: string; distributor_id: string | null; code: str
 export interface SalesOfficer {
   id: string; code: string; name: string; phone: string | null; state: string | null; region: string | null; aliases: string[]; active: boolean;
   designation?: string | null; manager_id?: string | null; hq?: string | null; zone?: string | null; areas?: string | null;
+  /** People with a similar name who were confirmed to be someone else. */
+  not_same?: string[] | null;
 }
+/** True when two people were marked as different people, so they're never offered for merging. */
+export const markedDifferent = (a: SalesOfficer, b: SalesOfficer) => !!(a.not_same?.includes(b.id) || b.not_same?.includes(a.id));
 export interface ProductAlias { product_id: string; alias: string }
 /** unit_price is the rate stock is valued at: the SS rate, or the last purchase rate until that's set. */
 export interface Product { id: string; sku: string; item_name: string; unit_price: number; ss_rate: number | null; mrp: number | null; purchase_rate: number; status?: "ACTIVE" | "DORMANT"; category?: string | null; box_pcs?: number | null }

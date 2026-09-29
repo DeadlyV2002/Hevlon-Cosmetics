@@ -268,3 +268,71 @@ begin
 end $$;
 revoke all on function public.post_primary_sales(jsonb, text, uuid) from public, anon;
 grant execute on function public.post_primary_sales(jsonb, text, uuid) to authenticated;
+
+-- ---------- Stock returned to the godown ----------
+-- A super stockist (or distributor) sends stock back: it leaves their stock and comes into the godown,
+-- with why, what the freight cost, and how long it had sat with them.
+create table if not exists public.stock_returns(
+  id uuid primary key default gen_random_uuid(),
+  batch_id uuid references public.inventory_batches(id) on delete cascade,
+  from_id uuid references public.distributors(id) on delete set null,
+  to_id uuid references public.distributors(id) on delete set null,
+  returned_on date not null,
+  reason text not null,
+  freight numeric(12,2),
+  note text,
+  quantity numeric(14,3) not null default 0,
+  value numeric(14,2) not null default 0,
+  days_held numeric(8,1),
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+alter table public.stock_returns enable row level security;
+drop policy if exists "read stock returns" on public.stock_returns;
+create policy "read stock returns" on public.stock_returns for select to authenticated using (true);
+grant select on public.stock_returns to authenticated;
+
+create or replace function public.post_return(p_from uuid, p_to uuid, p_date date, p_reason text, p_freight numeric, p_note text, p_lines jsonb)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare l jsonb; bid uuid; tid uuid; pid uuid; q numeric; rate numeric; have numeric; last_in date; n int := 0; tq numeric := 0; tv numeric := 0; td numeric := 0; ref text;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can record returns.'; end if;
+  if p_from = p_to then raise exception 'Pick two different locations.'; end if;
+  if jsonb_typeof(p_lines) <> 'array' or jsonb_array_length(p_lines) = 0 then raise exception 'Add the products that came back.'; end if;
+  ref := 'Return: ' || coalesce(nullif(trim(p_reason), ''), 'returned');
+  insert into inventory_batches(mode, created_by, source_file, distributor_id, as_of)
+  values ('OUTPUT', auth.uid(), 'Returned from ' || (select name from distributors where id = p_from) || ' to ' || (select name from distributors where id = p_to), p_from, p_date)
+  returning id into bid;
+  for l in select value from jsonb_array_elements(p_lines) loop
+    pid := (l->>'product_id')::uuid; q := coalesce(nullif(l->>'qty', '')::numeric, 0);
+    if q <= 0 then continue; end if;
+    perform pg_advisory_xact_lock(hashtext(p_from::text || pid::text));
+    have := stock_of(p_from, pid);
+    if have < q - 0.001 then raise exception '% holds only % dz of %', (select name from distributors where id = p_from), round(have, 2), (select item_name from products where id = pid); end if;
+    select coalesce(nullif(ss_rate, 0), unit_price, 0) into rate from products where id = pid;
+    select max(transaction_date) into last_in from inventory_transactions where distributor_id = p_from and product_id = pid and mode = 'INPUT' and transaction_date <= p_date;
+    tid := gen_random_uuid();
+    insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source, counterparty_id, transfer_id)
+    values (bid, p_from, pid, 'OUTPUT', p_date, ref, q, rate, auth.uid(), 'TRANSFER', p_to, tid),
+           (bid, p_to, pid, 'INPUT', p_date, ref, q, rate, auth.uid(), 'TRANSFER', p_from, tid);
+    n := n + 1; tq := tq + q; tv := tv + q * rate; td := td + q * coalesce(p_date - last_in, 0);
+  end loop;
+  if n = 0 then raise exception 'Add the quantities that came back.'; end if;
+  insert into stock_returns(batch_id, from_id, to_id, returned_on, reason, freight, note, quantity, value, days_held)
+  values (bid, p_from, p_to, p_date, coalesce(nullif(trim(p_reason), ''), 'returned'), p_freight, nullif(trim(p_note), ''), tq, tv, case when tq > 0 then round(td / tq, 1) end);
+  return jsonb_build_object('lines', n, 'quantity', tq, 'value', tv);
+end $$;
+revoke all on function public.post_return(uuid, uuid, date, text, numeric, text, jsonb) from public, anon;
+grant execute on function public.post_return(uuid, uuid, date, text, numeric, text, jsonb) to authenticated;
+
+-- ---------- Staff with similar names who are different people ----------
+alter table public.sales_officers add column if not exists not_same uuid[] not null default '{}';
+create or replace function public.mark_different_staff(p_a uuid, p_b uuid) returns void
+language plpgsql security definer set search_path=public as $$
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can change the sales team.'; end if;
+  update sales_officers set not_same = array(select distinct x from unnest(not_same || p_b) x) where id = p_a;
+  update sales_officers set not_same = array(select distinct x from unnest(not_same || p_a) x) where id = p_b;
+end $$;
+revoke all on function public.mark_different_staff(uuid, uuid) from public, anon;
+grant execute on function public.mark_different_staff(uuid, uuid) to authenticated;

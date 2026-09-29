@@ -1,5 +1,5 @@
 import { Select } from "../components/Select";
-import { ask } from "../lib/ask";
+import { ask, askPassword } from "../lib/ask";
 import { useDeferredValue, useMemo, useRef, useState } from "react";
 import { editDistance } from "../lib/fuzzy";
 import { startTask } from "../lib/tasks";
@@ -15,6 +15,7 @@ import Comments from "../components/Comments";
 import DeleteLocation from "../components/DeleteLocation";
 import Modal from "../components/Modal";
 import DistributorReport from "../components/DistributorReport";
+import Retailers from "./Retailers";
 import { useColumnFilters, Col } from "../components/ColumnFilter";
 
 interface Props {
@@ -68,13 +69,22 @@ export default function Distributors({ locations, stock, retailers, officers, pr
   async function toggleStatus(d: Distributor) {
     if (!supabase) return;
     const next = d.status === "DORMANT" ? "ACTIVE" : "DORMANT";
-    if (!await ask(next === "DORMANT" ? `Mark ${d.name} as dormant? Their history stays; they get no stock reminders and can be hidden from lists.` : `Mark ${d.name} as active again?`, { ok: next === "DORMANT" ? "Mark Dormant" : "Mark Active" })) return;
+    if (next === "DORMANT") {
+      // Marking someone dormant needs the signed-in person's password.
+      const pw = await askPassword(`Mark ${d.name} as dormant? Their history stays; they get no stock reminders and can be hidden from lists.
+
+Enter your password to confirm.`, { ok: "Mark Dormant" });
+      if (!pw) return;
+      const email = (await supabase.auth.getUser()).data.user?.email;
+      const { error: bad } = email ? await supabase.auth.signInWithPassword({ email, password: pw }) : { error: new Error("not signed in") };
+      if (bad) return show("err", `${d.name} was not changed: that password isn't right.`);
+    } else if (!await ask(`Mark ${d.name} as active again?`, { ok: "Mark Active" })) return;
     const { error } = await supabase.from("distributors").update({ status: next }).eq("id", d.id);
     if (error) return show("err", error.code === "42501" ? "Only HO admins and state managers can change this." : `Not changed: ${error.message}. Run database step 012.`);
     const held = stock.filter(x => x.distributor_id === d.id && Number(x.current_stock) > 0);
     show("ok", `${d.name} is now ${next === "DORMANT" ? "dormant" : "active"}.${next === "DORMANT" && held.length ? ` They still hold ${plural(held.length, "product")} in the app. When the stock comes back, use Move Stock on the Inventory page: from ${d.name} to your godown, then "Move everything it holds".` : ""}`); await onChanged();
   }
-  const [openComments, setOpenComments] = useState<string | null>(null);
+  const [openComments, setOpenComments] = useState<string | null>(null), [showTree, setShowTree] = useState(false);
   const [report, setReport] = useState<Distributor | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -344,7 +354,7 @@ export default function Distributors({ locations, stock, retailers, officers, pr
           const miss = incomplete(d);
           return <tr key={d.id}>{dcols.map(c => <td key={c.key} className={["company", "phone", "aliases"].includes(c.key) ? "wrap" : ""}>
             {c.key === "name" ? <><button className="link strong" onClick={() => setReport(d)}>{d.name}</button>{miss.length > 0 && <small className="missing">missing: {miss.join(", ")}</small>}</>
-              : c.key === "status" ? <button className={`statuspill ${d.status === "DORMANT" ? "dormant" : "active"}`} disabled={!canManage} title={canManage ? "Click to change" : undefined} onClick={() => toggleStatus(d)}>{d.status === "DORMANT" ? "Dormant" : "Active"}</button>
+              : c.key === "status" ? <button role="switch" aria-checked={d.status !== "DORMANT"} className={`switch${d.status === "DORMANT" ? "" : " on"}`} disabled={!canManage} title={canManage ? (d.status === "DORMANT" ? "Dormant: click to make active" : "Active: click to mark dormant (asks for your password)") : undefined} onClick={() => toggleStatus(d)}><i aria-hidden /><span>{d.status === "DORMANT" ? "Dormant" : "Active"}</span></button>
               : c.key === "value" ? fmt(c.value(d)) : c.key === "units" ? fmt(c.value(d)) : c.value(d) ?? ""}</td>)}
             <td><button className="secondary small" onClick={() => setOpenComments(d.id)}>💬 {count(d.id)}</button></td>
             {canManage && <td className="actions"><button className="secondary small" onClick={() => { setEditing(d); setMsg(null); toForm(); }}>Edit</button>
@@ -358,11 +368,13 @@ export default function Distributors({ locations, stock, retailers, officers, pr
   const listFirst = ofKind.length > 0;
   return <>
     <section className="tabs">
-      {KINDS.slice().reverse().map(k => <button key={k} className={tab === k ? "active" : ""} onClick={() => switchTab(k)}>
+      {KINDS.slice().reverse().map(k => <button key={k} className={tab === k && !showTree ? "active" : ""} onClick={() => { setShowTree(false); switchTab(k); }}>
         {KIND_PLURAL[k]} ({locations.filter(d => d.kind === k).length})</button>)}
+      <button className={showTree ? "active" : ""} onClick={() => setShowTree(true)}>Tree View</button>
     </section>
 
-    {listFirst ? <>{listCard}{addCard}</> : <>{addCard}{listCard}</>}
+    {showTree ? <Retailers treeOnly retailers={retailers} locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />
+      : listFirst ? <>{listCard}{addCard}</> : <>{addCard}{listCard}</>}
     {commentsFor && <Modal title={`Comments — ${commentsFor.name}`} subtitle={`${commentsFor.code}${commentsFor.territory ? ` · ${commentsFor.territory}` : ""}`} onClose={() => setOpenComments(null)}>
       <Comments location={commentsFor} userId={userId} canManage={canManage} onCount={n => setCounts(c => ({ ...c, [commentsFor.id]: n }))} /></Modal>}
     {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} products={products} onClose={() => setReport(null)} />}

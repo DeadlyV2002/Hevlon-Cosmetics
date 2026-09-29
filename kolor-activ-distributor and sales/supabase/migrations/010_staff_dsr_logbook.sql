@@ -34,6 +34,10 @@ begin
   insert into dsr_products(name, category, rate, position)
     select x->>'name', x->>'category', nullif(x->>'rate', '')::numeric, (x->>'position')::int from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x
     on conflict (name) do update set category = coalesce(nullif(excluded.category, ''), dsr_products.category), rate = coalesce(excluded.rate, dsr_products.rate), position = excluded.position, updated_at = now();
+  -- Products without a category take the DSR's (by name or another spelling), so stock is grouped the DSR way.
+  update products p set category = d.category from dsr_products d
+   where coalesce(p.category, '') = '' and coalesce(d.category, '') <> ''
+     and (norm_name(d.name) in (norm_name(p.item_name), norm_name(p.sku)) or exists (select 1 from product_aliases a where a.product_id = p.id and norm_name(a.alias) = norm_name(d.name)));
   -- A state total saved before totals were kept per workbook (no team) gives way to the per-workbook one.
   delete from dsr_state_days s using jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x
    where s.state = x->>'state' and s.day = (x->>'day')::date and s.team = '' and coalesce(x->>'team', '') <> '';

@@ -261,7 +261,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
         <div className="seg" role="group" aria-label="Show">{(["ALL", "ACTIVE", "DORMANT"] as const).map(k => <button key={k} className={pstatus === k ? "on" : ""} onClick={() => setPstatus(k)}>
           {k === "ALL" ? `All (${products.length})` : k === "ACTIVE" ? `Active (${products.filter(p => p.status !== "DORMANT").length})` : `Dormant (${products.filter(p => p.status === "DORMANT").length})`}</button>)}</div>
       </div>
-      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>Last purchase rate</th><th>SS rate</th><th>To distributor</th><th>To retailer</th><th>MRP</th><th>MRP ÷ SS rate</th></tr></thead>
+      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>Last purchase rate</th><th>SS rate / dozen</th><th>To distributor / dozen</th><th>To retailer / dozen</th><th>MRP / piece</th><th>MRP ÷ SS rate</th></tr></thead>
         <tbody>{shown.map(p => {
           const ss = Number(val(p, "ss_rate")) || 0, mrp = Number(val(p, "mrp")) || 0;
           const d = up(ss, now.ss), r = up(d, now.distributor);
@@ -271,9 +271,9 @@ export default function Pricing({ products, locations, margins, schemes, canMana
             <td>{p.purchase_rate ? rs(p.purchase_rate) : <span className="muted">none</span>}</td>
             <td><input inputMode="decimal" aria-label={`SS rate for ${p.item_name}`} value={val(p, "ss_rate")} disabled={!canManage} placeholder="not set" onChange={e => setVal(p, "ss_rate", e.target.value)} /></td>
             <td>{ss ? rs(d) : ""}</td>
-            <td>{ss ? rs(r) : ""}{ss && mrp && r > mrp ? <div className="err">above MRP</div> : null}</td>
+            <td>{ss ? rs(r) : ""}{ss && mrp && r > mrp * 12 ? <div className="err">above MRP ({rs(mrp * 12)} a dozen)</div> : null}</td>
             <td><input inputMode="decimal" aria-label={`MRP for ${p.item_name}`} value={val(p, "mrp")} disabled={!canManage} placeholder="not set" onChange={e => setVal(p, "mrp", e.target.value)} /></td>
-            <td>{ss && mrp ? `${fmt(mrp / ss, 1)}×` : ""}</td>
+            <td>{ss && mrp ? `${fmt((mrp * 12) / ss, 1)}×` : ""}</td>
           </tr>;
         })}</tbody></table></div>
         : <p className="muted">No products yet. They're added when stock is uploaded.</p>}
@@ -283,6 +283,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
         {drafts.size > 0 && <button className="secondary" onClick={() => setDrafts(new Map())}>Discard changes</button>}
         <span className="hint reserve">{badDraft ? "Prices must be numbers of 0 or more." : ""}</span>
       </div>}
+      {msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}
     </section>
   </>;
 }

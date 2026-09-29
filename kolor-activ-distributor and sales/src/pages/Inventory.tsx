@@ -5,6 +5,8 @@ import { readPrimary, PrimaryRead } from "../lib/primary";
 import { matchHolder, nameScore } from "../lib/dsrLink";
 import PrimarySales from "../components/PrimarySales";
 import SsTally from "../components/SsTally";
+import SetAside from "../components/SetAside";
+import ReturnStock from "../components/ReturnStock";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mode, Row, Field, Table, Layout, Skipped, FIELD_LABELS, emptyRow, today, localDate, isValidDate,
@@ -42,6 +44,29 @@ interface Props {
   onBusy?: (label: string) => void;
 }
 
+/** What to do about each kind of problem in the review table. */
+const FIXES: [RegExp, string][] = [
+  [/choose whose stock/, 'pick the distributor or super stockist in "Whose stock" at the top, or add it as new in the yellow box.'],
+  [/isn't in your list/, 'in the yellow box, say which of your locations it is (saved as its other name) or add it as new.'],
+  [/product missing/, "type the product name in the row, or remove the row with ✕."],
+  [/valid date/, "type the date in the Date box (day, month, year)."],
+  [/negative quantity/, "stock can't be below zero: correct it in the file or type 0."],
+  [/quantity must be more than 0/, "type the quantity, or remove the row with ✕."],
+  [/SO .* isn't in your SO list/, "in the yellow box, say which SO it is or add them as a new SO."],
+  [/SO missing/, "type the SO's name in the SO column."],
+  [/distributor missing/, "type the distributor in the Distributor column, or choose one at the top for all rows."],
+  [/product not found|never stocked/, 'pick your product under "Same as".'],
+  [/who received it|party missing/, 'type who received it in "Sent to".'],
+  [/has only .* in the app/, "upload that location's stock first, or tick \"Don't reduce the sender's stock\" below if their stock isn't in the app yet."],
+];
+const fixFor = (p: string) => FIXES.find(([re]) => re.test(p))?.[1] || "";
+/** A likely location name from a stock file's name: drops "DB", "closing stock", months and dates. */
+function nameFromFile(file: string) {
+  const words = file.replace(/\.[a-z0-9]+$/i, "").replace(/[_\-.()&]+/g, " ").split(/\s+/).filter(Boolean)
+    .filter(w => !/^(db|ss|closing|stocks?|stoks?|stoke|statement|format|report|month|of|and|the|\d+|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)$/i.test(w));
+  return proper(words.join(" "));
+}
+
 export default function Inventory({ locations, products, aliases, stock, officers, retailers, canManage, onPosted, onListsChanged, notify, onBusy }: Props) {
   const [type, setType] = useState<FileType>("COUNT");
   const [detection, setDetection] = useState<Detection | null>(null);
@@ -64,6 +89,12 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [status, setStatus] = useState<{ kind: "err" | "ok" | "info"; text: string } | null>(null);
   /** A sheet of company billing to super stockists, shown in its own preview. */
   const [primary, setPrimary] = useState<{ read: PrimaryRead; name: string; file: File } | null>(null);
+  /** Files put aside to deal with later, so one stuck distributor doesn't hold up the rest. */
+  const [aside, setAside] = useState<{ file: File; reason: string }[]>([]);
+  const current = useRef<File | null>(null);
+  const [onlyProblems, setOnlyProblems] = useState(false), [manual, setManual] = useState(false);
+  /** A name for a stock sheet that doesn't name its distributor, from the file name ("DB DITYA COSMETCS JADIA 08-2026" → "Ditya Cosmetcs Jadia"). */
+  const [newName, setNewName] = useState("");
   const [adding, setAdding] = useState<{ name: string; kind: Kind } | null>(null);
   /** Details printed above a closing stock table: DB name, town, SO/ASE, HQ, month, stock date. */
   const [sheetInfo, setSheetInfo] = useState<SheetInfo | null>(null);
@@ -110,6 +141,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
   }
 
   async function onFile(f: File, notBilling = false) {
+    current.current = f; setOnlyProblems(false); setNewName(nameFromFile(f.name));
     setBusy(`Reading ${f.name}…`); setStatus(null);
     try {
       const [t, hash] = await Promise.all([readAnyFile(f, setBusy), fileHash(f)]);
@@ -169,6 +201,14 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [fileNo, setFileNo] = useState(0), [fileTotal, setFileTotal] = useState(0);
   const [auto, setAuto] = useState(false), [autoLog, setAutoLog] = useState<{ file: string; ok: boolean; text: string }[]>([]);
   function nextFile() { if (!queue.length) return; const [f, ...rest] = queue; setQueue(rest); setFileNo(n => n + 1); onFile(f); }
+  /** Keeps the open file for later and moves on to the next one in the queue. */
+  function setAsideNow(reason: string) {
+    const f = current.current;
+    if (f) setAside(a => [...a.filter(x => x.file !== f), { file: f, reason }]);
+    clearAll(); setPrimary(null);
+    if (queue.length) setTimeout(nextFile, 200); else if (auto) { setAuto(false); setFileTotal(0); }
+  }
+  function openAside(f: File) { setAside(a => a.filter(x => x.file !== f)); onFile(f); }
   function startFiles(list: File[]) { const [f, ...rest] = list; if (!f) return; setQueue(rest); setFileNo(1); setFileTotal(list.length); setAutoLog([]); setAuto(false); onFile(f); }
   // DSR products not yet in the product list (so stock files can match the DSR names and rates).
   const [dsrMissing, setDsrMissing] = useState(0);
@@ -189,7 +229,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     guessed.current = "";
     await onListsChanged();
   }
-  function clearAll() { setSheetInfo(null); setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
+  function clearAll() { setManual(false); setSheetInfo(null); setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
 
   /** "This name in the file = that existing product": applied to every row with the same name and remembered on save. */
   const guessed = useRef("");
@@ -330,6 +370,16 @@ export default function Inventory({ locations, products, aliases, stock, officer
     });
   }, [rows, type, holderLoc, products, aliases, stockMap, existing, reduceSender, locations, officers, retailersByName, locById]);
 
+  // Every problem, grouped, with the rows it's on and what to do about it.
+  const problemGroups = useMemo(() => {
+    const m = new Map<string, { text: string; fix: string; rows: number[] }>();
+    checked.forEach((c, i) => { if (!c || c.excluded) return; c.problems.forEach(p => {
+      const key = p.replace(/"[^"]*"/g, '"…"').replace(/[\d,.]+/g, "N");
+      const e = m.get(key) || { text: p, fix: fixFor(p), rows: [] };
+      e.rows.push(i + 1); m.set(key, e);
+    }); });
+    return [...m.values()].sort((a, b) => b.rows.length - a.rows.length);
+  }, [checked]);
   const live = checked.filter(c => !c.excluded);
   const problemRows = checked.map((c, i) => (!c.excluded && c.problems.length ? i : -1)).filter(i => i >= 0);
   const nExcluded = checked.length - live.length;
@@ -416,6 +466,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
         if (await ask(`${error.message.replace("DUPLICATE_FILE: ", "")}.\n\nSaving it again will count it twice. Save anyway?`)) return post(true);
         return say("err", "Not saved: this file was already posted.");
       }
+      if (quiet) { logAuto(false, `set aside: ${error.message}`); setAsideNow(`save failed: ${error.message}`); return; }
       return say("err", `Save failed: ${error.message}`);
     }
     // Learn from this upload: the column layout and any product matches.
@@ -449,6 +500,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
     sku: "SKU", item_name: "Product (as in file)", quantity: type === "COUNT" ? "Counted qty" : "Qty", unit_price: "Rate",
   };
   const posting = useRef(false);
+  /** The type, whose-stock and date settings only show once there's a file or rows to work on. */
+  const working = manual || !!file || rows.length > 0;
   useEffect(() => { onBusy?.(busy || auto ? (fileTotal > 1 ? `${Math.min(fileNo, fileTotal)}/${fileTotal}` : "…") : ""); }, [busy, auto, fileNo, fileTotal]);
   // Save All shows in the progress panel too, so it can be followed from any page.
   const autoTask = useRef<TaskHandle | null>(null);
@@ -466,9 +519,9 @@ export default function Inventory({ locations, products, aliases, stock, officer
   useEffect(() => {
     if (!auto || busy || !file || !rows.length) return;
     if (blocker) {
-      setAuto(false);
-      logAuto(false, `needs a look: ${blocker}`);
-      say("err", `Save All stopped at ${file.name}: ${blocker} Fix it and press Save, then Save All again for the rest.`);
+      // One file that needs a look doesn't hold up the others: it's set aside and the queue carries on.
+      logAuto(false, `set aside: ${blocker}`);
+      setAsideNow(blocker);
       return;
     }
     // Wait for the rows to settle (products matched by similar name update them), then save once.
@@ -482,15 +535,13 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const showFixes = rows.length > 0 && (unknownLocs.length > 0 || unknownSOs.length > 0 || unknownParties.length > 0 || (type === "COUNT" && !holderLoc));
 
   return <>
-    <StockDownload locations={locations} products={products} stock={stock} notify={notify} />
-    <SsTally locations={locations} products={products} refresh={stock} />
-    {canManage && <MoveStock locations={locations} products={products} stock={stock} onMoved={onPosted} notify={notify} />}
+    <StockDownload locations={locations} products={products} stock={stock} notify={notify}>
 
     {primary && <PrimarySales read={primary.read} fileName={primary.name} locations={locations} products={products} aliases={aliases} canManage={canManage} notify={notify}
       onDone={async ok => { setPrimary(null); if (ok) await onPosted(); if (queue.length) nextFile(); }}
       onReadNormally={() => { const f = primary.file; setPrimary(null); onFile(f, true); }} />}
     <section className="card upload">
-      <div className="rowhead"><div><h2>Upload a file</h2><p>Drop in any stock file. The app works out what it is and whose stock it is; check its guess below.</p></div></div>
+      <div className="rowhead"><div><h2>Upload Stock Files</h2><p>Closing stock, stock received or sent, SO daily sheets, or company billing to super stockists. Choose several at once: the app works out what each file is and whose stock it is, and you check before saving.</p></div></div>
       {(busy || auto) && <div className="progress" role="status" aria-live="polite">
         <div className="lbl"><span>{busy || (auto ? "Checking the next file…" : "")}</span>{fileTotal > 1 && <span>File {Math.min(fileNo, fileTotal)} of {fileTotal}{auto ? " · saving all" : ""}</span>}</div>
         <div className="track"><div className={`fill${fileTotal > 1 ? "" : " indet"}`} style={{ width: `${fileTotal > 1 ? Math.round(((fileNo - (busy === "Saving…" ? 0.5 : 1)) / fileTotal) * 100) : 35}%` }} /></div>
@@ -501,9 +552,11 @@ export default function Inventory({ locations, products, aliases, stock, officer
       <label className="drop">
         <input type="file" multiple accept={ACCEPT} disabled={!!busy || auto || !locations.length} onChange={e => { startFiles([...(e.target.files || [])]); e.target.value = ""; }} />
         <b>{busy || (!locations.length ? "Loading your lists…" : "Choose files")}</b>
-        <small>Your Excel format, any Excel / CSV, Tally exports (Excel, XML, JSON, HTML, TXT, PDF), scanned PDFs, photos, SO daily sheets</small>
+        <small>Excel, CSV, Tally exports, PDFs or photos</small>
       </label>
-      {queue.length > 0 && <p className="hint">{queue.length} more {queue.length === 1 ? "file is" : "files are"} waiting: {queue.map(f => f.name).join(", ")}. Each opens after this one is saved. <button className="link" onClick={nextFile}>Skip To Next File</button></p>}
+      {!working && <button className="link" onClick={() => setManual(true)}>Enter Stock By Hand</button>}
+      {queue.length > 0 && <p className="hint">{queue.length} more {queue.length === 1 ? "file is" : "files are"} waiting: {queue.map(f => f.name).join(", ")}. Each opens after this one is saved. <button className="link" onClick={() => setAsideNow(blocker || "set aside by you")}>Set This One Aside And Open The Next</button></p>}
+      {working && <>
       <div className="tabs types">{TYPES.map(t => <button key={t.id} className={type === t.id ? "active" : ""} onClick={() => changeType(t.id)}>{t.label}</button>)}</div>
       {file && rows.length > 0 && type !== "SO" && <div className="unitpick"><b>Quantities in this file are in</b>
         <div className="seg" role="group" aria-label="Quantity unit"><button className={pieces ? "" : "on"} onClick={() => setPieces(false)}>Dozens</button><button className={pieces ? "on" : ""} onClick={() => setPieces(true)}>Pieces</button></div>
@@ -517,7 +570,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
         <small>Because {detection.reasons.join("; ")}.{!detection.sure && " If that's wrong, pick the right type above."}</small>
       </div> : null}
       <p className="hint">{info.help}</p>
-      {type === "COUNT" && <p className="hint">From Tally: <b>Stock Summary</b> → <b>Alt+F5</b> (Detailed) → <b>Alt+E</b> Export → Excel or XML.</p>}
+      {type === "COUNT" && !file && <p className="hint">From Tally: <b>Stock Summary</b> → <b>Alt+F5</b> (Detailed) → <b>Alt+E</b> Export → Excel or XML.</p>}
       <div className="bulk">
         <label>{type === "SO" ? "Distributor for all rows" : "Whose stock"}
           <Select value={holderLoc?.code || ""} onChange={e => (e.target.value ? setAll("distributor", e.target.value) : setHolder(""))}>
@@ -530,7 +583,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
         <label>{type === "COUNT" ? "Stock count date" : "Date for rows with no date in the file"}<input type="date" value={date} onChange={e => setAll("date", e.target.value)} /></label>
       </div>
       {!locations.length && <p className="warn">No locations yet. Add your godown, super stockists and distributors on the Distributors page first.</p>}
-      <button className="secondary" onClick={() => setRows(rs => [...rs, { ...emptyRow(), distributor: holder, date, so: soDefault }])}>+ Add row by hand</button>
+      <button className="secondary" onClick={() => setRows(rs => [...rs, { ...emptyRow(), distributor: holder, date, so: soDefault }])}>+ Add Row By Hand</button>
+      </>}
     </section>
 
     {table && layout && <section className="card">
@@ -553,6 +607,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     {(rows.length > 0 || skipped.length > 0) && <section className="card" ref={reviewRef}>
       <div className="rowhead"><h2>Review ({plural(rows.length, "row")}{problemRows.length ? `, ${problemRows.length} need fixing` : ""}{nExcluded ? (type === "COUNT" ? `, ${nExcluded} with none in stock` : `, ${nExcluded} already recorded`) : ""})</h2>
         <div className="actions"><button className="secondary" onClick={clearAll}>Clear</button>
+          <button className="secondary" title="Keep this file for later and carry on with the rest" onClick={() => setAsideNow(blocker || "set aside by you")}>Set Aside For Later</button>
           <button onClick={() => post()} disabled={!!busy || !rows.length}>{busy === "Saving…" ? "Saving…" : saveLabel}</button>
         {queue.length > 0 && <button className="secondary" disabled={!!busy || auto} onClick={() => setAuto(true)}>Save All {queue.length + 1} Files</button>}</div></div>
       {status && <div className={`status ${status.kind}`}>{status.text}</div>}
@@ -563,6 +618,12 @@ export default function Inventory({ locations, products, aliases, stock, officer
       {showFixes && <div className="fixbox">
         {(unknownLocs.length > 0 || (type === "COUNT" && !holderLoc)) && <div className="fixgroup">
           <b>{unknownLocs.length ? `Not in your list: ${unknownLocs.map(n => `"${n}"`).join(", ")}` : sheetInfo?.name ? `"${sheetInfo.name}"${sheetInfo.town ? ` in ${sheetInfo.town}` : ""} isn't in your list. Choose it above if it's listed under another name, or add it.` : "Whose stock is this file? Choose above."}</b>
+          {canManage && !unknownLocs.length && type === "COUNT" && !sheetInfo?.name && <div className="fixrow">
+            <span className="fixname">This sheet doesn't say whose stock it is. From the file name it looks like</span>
+            <input className="newname" value={newName} onChange={e => setNewName(e.target.value)} aria-label="Name for the new location" />
+            <span className="or">add it as a new</span>
+            {(["DISTRIBUTOR", "SUPER_STOCKIST"] as Kind[]).map(k => <button key={k} className="secondary small" disabled={!newName.trim()} onClick={() => setAdding({ name: newName.trim(), kind: k })}>{KIND_LABEL[k]}</button>)}
+            <span className="or">or pick it in "Whose stock" above, or</span><button className="secondary small" onClick={() => setAsideNow("whose stock isn't known")}>Set Aside</button></div>}
           {canManage && !unknownLocs.length && type === "COUNT" && sheetInfo?.name && <div className="fixrow"><span className="fixname">{sheetInfo.name}</span>
             <label>It is the same as…<Select value={fix[`loc:${sheetInfo.name}`] || ""} onChange={e => setFix({ ...fix, [`loc:${sheetInfo.name}`]: e.target.value })}>
               <option value="">choose…</option>{locOptions(false)}</Select></label>
@@ -609,7 +670,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
               const orig = normName(adding.name);
               const moves = type === "IN" || type === "OUT";
               setRows(rs => rs.map(r => ({ ...r, distributor: normName(r.distributor) === orig ? d.code : r.distributor, retailer: moves && normName(r.retailer) === orig ? d.code : r.retailer })));
-              if (normName(holder) === orig) setHolder(d.code);
+              if (normName(holder) === orig || (type === "COUNT" && !holderLoc)) setHolder(d.code);
               setAdding(null); await onListsChanged();
               say("ok", `Added ${d.name} as ${d.code}.`);
             }} />
@@ -625,17 +686,26 @@ export default function Inventory({ locations, products, aliases, stock, officer
       </div>}
       {nExcluded > 0 && <p className="hint">{type === "COUNT" ? <>{plural(nExcluded, "product")} in the sheet {nExcluded > 1 ? "have" : "has"} none in stock and {nExcluded > 1 ? "aren't" : "isn't"} in stock here either, so {nExcluded > 1 ? "they're" : "it's"} left as {nExcluded > 1 ? "they are" : "it is"}. Tick “save anyway” on a row to record a zero.</> : <>{nExcluded} row{nExcluded > 1 ? "s were" : " was"} already recorded from the other side of the transfer, so {nExcluded > 1 ? "they're" : "it's"} skipped. Tick “save anyway” on a row to include it.</>}</p>}
       {newProducts > 0 && <p className="hint">{newProducts} product name{newProducts > 1 ? "s aren't" : " isn't"} in your product list and will be created. If a name is just how this file writes one of your products, pick the product under “Same as”; the app remembers it.</p>}
-      <div className="tablewrap"><table className="edit"><thead><tr>
+      {problemGroups.length > 0 && <div className="errsum">
+        <div className="rowhead"><b>{plural(problemRows.length, "row")} need fixing before this file can be saved</b>
+          <label className="inline"><input type="checkbox" checked={onlyProblems} onChange={e => setOnlyProblems(e.target.checked)} /> Show only rows that need fixing</label></div>
+        {problemGroups.map(g => <div key={g.text} className="errgroup"><span className="err">{g.text}</span>
+          <small className="muted"> · {g.rows.length === 1 ? "row" : "rows"} {g.rows.slice(0, 15).join(", ")}{g.rows.length > 15 ? ` and ${g.rows.length - 15} more` : ""}</small>
+          {g.fix && <div className="fixhint">How to fix: {g.fix}</div>}</div>)}
+        <div className="fixhint">Can't fix it now? Press Set Aside For Later: the file waits in the Set Aside list and the rest carry on.</div>
+      </div>}
+      <div className="tablewrap"><table className="edit"><thead><tr><th>#</th>
         {cols.map(h => <th key={h}>{COL_LABEL[h]}</th>)}
         {type === "COUNT" && <><th>Current</th><th>Change</th></>}
         <th>Same as (your product)</th><th>Check</th><th /></tr></thead>
         <tbody>{rows.map((r, i) => {
           const ck = checked[i];
-          if (!ck) return null;
+          if (!ck || (onlyProblems && (ck.excluded || !ck.problems.length))) return null;
           const diff = r.quantity - ck.cur;
           const plan = aliasPlan[normName(r.item_name)];
           const planned = plan && products.find(p => p.id === plan.productId);
           return <tr key={i} className={ck.excluded ? "skip" : ck.problems.length ? "bad" : ""}>
+            <td className="rownum">{i + 1}</td>
             {cols.map(k => <td key={k}><input className={k} type={k === "quantity" || k === "unit_price" ? "number" : k === "date" ? "date" : "text"} value={r[k]} onChange={e => updateRow(i, k, e.target.value)} /></td>)}
             {type === "COUNT" && <><td>{fmt(ck.cur)}</td><td className={diff > 0 ? "in" : diff < 0 ? "out" : ""}>{diff > 0 ? "+" : ""}{fmt(diff)}</td></>}
             <td>{ck.p && !plan ? <small>{ck.p.item_name}</small>
@@ -643,7 +713,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
                   defaultValue={planned ? `${planned.sku} — ${planned.item_name}` : ""} onChange={e => matchTo(r.item_name, e.target.value)} />}</td>
             <td className="check">
               {ck.excluded ? <span className="muted">{ck.notes.join("; ")}</span>
-                : ck.problems.length ? <><span className="err">{ck.problems.join("; ")}</span>{ck.notes.length > 0 && <small className="muted"> ({ck.notes.join("; ")})</small>}</>
+                : ck.problems.length ? <><span className="err">{ck.problems.join("; ")}</span>{ck.notes.length > 0 && <small className="muted"> ({ck.notes.join("; ")})</small>}
+                  {ck.problems.map(p => fixFor(p)).filter(Boolean).slice(0, 1).map(t => <small key={t} className="fixhint">{t}</small>)}</>
                 : <span className="ok">{ck.notes.join("; ") || (plan ? "Ready, will remember" : !ck.p && type !== "SO" ? "Ready, new product" : "Ready")}</span>}
               {(ck.excluded || r.include) && <label className="inline small"><input type="checkbox" checked={!!r.include} onChange={e => updateRow(i, "include", e.target.checked)} /> save anyway</label>}
             </td>
@@ -661,5 +732,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
       </div>
     </section>}
     {!rows.length && status?.kind === "ok" && <div className="status ok">{status.text}</div>}
+    {aside.length > 0 && <SetAside files={aside} onOpen={openAside} onRemove={f => setAside(a => a.filter(x => x.file !== f))} />}
+    <SsTally locations={locations} products={products} refresh={stock} />
+    </StockDownload>
+    {canManage && <ReturnStock locations={locations} products={products} stock={stock} onSaved={onPosted} notify={notify} />}
+    {canManage && <MoveStock locations={locations} products={products} stock={stock} onMoved={onPosted} notify={notify} />}
   </>;
 }

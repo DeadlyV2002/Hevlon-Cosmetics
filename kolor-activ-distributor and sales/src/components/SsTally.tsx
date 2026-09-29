@@ -11,12 +11,12 @@ const pcs = (v: number) => fmt(Math.round(v * 12));
 
 /** Company billing against each super stockist's stock counts: what they were billed, what they report holding, and the gap. */
 export default function SsTally({ locations, products, refresh }: { locations: Distributor[]; products: Product[]; refresh: unknown }) {
-  const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "fy")!.range());
+  const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "fy")!.range()), [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Period[] | null>(null), [status, setStatus] = useState<Map<string, string | null>>(new Map()), [err, setErr] = useState("");
   const supers = useMemo(() => locations.filter(l => l.kind === "SUPER_STOCKIST"), [locations]);
   const prod = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
   useEffect(() => {
-    if (!supabase || !supers.length) return;
+    if (!supabase || !supers.length || !open) return;
     let live = true;
     const task = startTask("Tallying billing against SS stock", 0, true);
     Promise.all([
@@ -25,7 +25,7 @@ export default function SsTally({ locations, products, refresh }: { locations: D
     ]).then(([p, s]) => { if (!live) return; setRows(p); setStatus(new Map(s.map(x => [x.location_id, x.last_count]))); setErr(""); task.ok(); })
       .catch(e => { if (live) { setErr(errText(e)); setRows([]); } task.fail(errText(e)); });
     return () => { live = false; task.cancel(); };
-  }, [range.from, range.to, supers, refresh]);
+  }, [range.from, range.to, supers, refresh, open]);
 
   // Per SS: billed, other stock in, recorded sales on, the gap found at stock counts, and stock now.
   const bySs = useMemo(() => {
@@ -45,10 +45,11 @@ export default function SsTally({ locations, products, refresh }: { locations: D
   }, [rows, supers, prod]);
 
   return <section className="card">
-    <div className="rowhead"><div><h2>Company Billing Against SS Stock</h2>
-      <p className="hint">For each super stockist: stock billed by the company in the period, what they sent on (where their sales files are uploaded), and the gap found when their closing stock counts came in. A minus gap means they reported less than the billing says they should hold, which is stock sold on or missing.</p></div>
-      <DateRange value={range} onChange={setRange} /></div>
-    {err && <div className="status err">{err}</div>}
+    <div className="rowhead"><div><h2>Super Stockists: What We Billed Vs What They Hold</h2>
+      <p className="hint">Checks each super stockist's closing stock against the company's bills to them. Billed stock should either still be with them or have gone on to their distributors; a minus gap is stock that isn't accounted for.</p></div>
+      <div className="actions">{open && <DateRange value={range} onChange={setRange} />}<button className="secondary" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? "Hide" : "Show"}</button></div></div>
+    {open && err && <div className="status err">{err}</div>}
+    {open && <>
     {!rows ? <p className="empty">Adding up billing and stock…</p> : !bySs.length ? <p className="empty">No company billing or stock for super stockists in this period. Upload the SS billing sheet in the box below.</p> :
       <div className="sk-cats">{bySs.map(e => {
         const cats = [...e.lines.reduce((m, l) => m.set(l.category, [...(m.get(l.category) || []), l]), new Map<string, typeof e.lines>())].sort((a, b) => b[1].reduce((t, l) => t + n(l.in_purchase) * l.rate, 0) - a[1].reduce((t, l) => t + n(l.in_purchase) * l.rate, 0));
@@ -65,5 +66,6 @@ export default function SsTally({ locations, products, refresh }: { locations: D
                   <td>{fmt(n(l.out_sale) + n(l.out_transfer), 1)}</td><td className={l.gap < -0.05 ? "out" : l.gap > 0.05 ? "in" : ""}>{l.gap ? fmt(l.gap, 1) : "—"}</td><td>{fmt(l.closing, 1)}</td><td>{pcs(n(l.closing))}</td></tr>)}</tbody></table></div></details>)}
           </div></details>;
       })}</div>}
+    </>}
   </section>;
 }

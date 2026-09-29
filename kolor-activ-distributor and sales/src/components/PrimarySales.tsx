@@ -8,6 +8,9 @@ import { ask } from "../lib/ask";
 import { Select } from "./Select";
 
 const NEW = "__new", NEW_GODOWN = "__newgodown";
+/** The billing sheet's category headings under the names the DSR list uses for the same products. */
+const DSR_NAMES: Record<string, string> = { kajal: "Eye Shadow", foundation: "Compact", "eye shadow & blush": "Eye Shadow", "eye shadow and blush": "Eye Shadow", glycerine: "Lip Care", glycerin: "Lip Care" };
+const dsrCategory = (c: string) => DSR_NAMES[c.trim().toLowerCase()] || c.trim();
 const BOX = /\b(box|boxes|bx|bxs)\b/i;
 const PAGE = 40;
 const n = (v: unknown) => Number(v) || 0;
@@ -181,7 +184,7 @@ export default function PrimarySales({ read, fileName, locations, products, alia
           });
         });
         // Every item goes into the SKU list first, with its category (display material not billed yet included), before the invoice lines.
-        const itemLines = items.map(i => ({ ss_id: null, product_id: i.pick !== NEW ? i.pick : null, item: proper(i.name), category: i.category || (i.pop ? "POP" : ""), qty: 0, free: i.pop,
+        const itemLines = items.map(i => ({ ss_id: null, product_id: i.pick !== NEW ? i.pick : null, item: proper(i.name), category: i.pop ? "POP" : dsrCategory(i.category), qty: 0, free: i.pop,
           rate: i.pop ? null : i.rate !== null ? (pieces ? i.rate * 12 : i.rate) : null, box_pcs: boxOf(i.name) || null }));
         const all = [...itemLines, ...lines.values()], out = { added: 0, kept: 0, changed: 0, new_products: 0, count_adjusted: 0, godown_lines: 0, changed_lines: [] as unknown[] };
         for (let k = 0; k < all.length; k += 400) {

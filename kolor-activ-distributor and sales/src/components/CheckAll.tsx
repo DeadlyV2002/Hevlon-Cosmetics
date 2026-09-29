@@ -1,5 +1,5 @@
 import { ReactNode, useState } from "react";
-import { supabase, Distributor, SalesOfficer, fetchAll, fmt, money, plural, errText } from "../lib/supabase";
+import { supabase, Distributor, SalesOfficer, markedDifferent, fetchAll, fmt, money, plural, errText } from "../lib/supabase";
 import { localDate } from "../lib/parse";
 import { similarity } from "../lib/fuzzy";
 import { teamTotal } from "../lib/dsr";
@@ -69,10 +69,11 @@ export default function CheckAll({ checks, officers, locations, canManage, onOpe
       // People who look like the same person. The fuller name is kept; the other becomes an alias.
       const pairs: [SalesOfficer, SalesOfficer][] = [];
       const bare = officers.map(o => o.name.replace(/^(md|mohd|mr)\.?\s+/i, ""));
-      for (let i = 0; i < officers.length; i++) for (let j = i + 1; j < officers.length; j++) if (similarity(bare[i], bare[j]) >= 0.85) pairs.push(officers[i].name.length >= officers[j].name.length ? [officers[i], officers[j]] : [officers[j], officers[i]]);
+      for (let i = 0; i < officers.length; i++) for (let j = i + 1; j < officers.length; j++) if (!markedDifferent(officers[i], officers[j]) && similarity(bare[i], bare[j]) >= 0.85) pairs.push(officers[i].name.length >= officers[j].name.length ? [officers[i], officers[j]] : [officers[j], officers[i]]);
       const merge = async (keep: SalesOfficer, drop: SalesOfficer) => { const { error } = await supabase!.rpc("merge_staff", { p_keep: keep.id, p_drop: drop.id }); if (error) throw new Error(errText(error)); };
       const dupLines: Line[] = pairs.map(([k, d]) => ({ cells: [`${k.name} / ${d.name}`, k.zone || k.state || "", d.zone || d.state || "", `${Math.round(similarity(k.name, d.name) * 100)}% alike`,
-        canManage ? <button className="secondary small" onClick={() => fix({ label: `Merge ${d.name} into ${k.name}`, run: async () => { await merge(k, d); return `${d.name} is now another name for ${k.name}.`; } })}>Merge</button> : ""], ok: false }));
+        canManage ? <span className="actions"><button className="secondary small" onClick={() => fix({ label: `Merge ${d.name} into ${k.name}`, run: async () => { await merge(k, d); return `${d.name} is now another name for ${k.name}.`; } })}>Same Person: Merge</button>
+          <button className="secondary small" onClick={() => fix({ label: `Keep ${d.name} and ${k.name} separate`, run: async () => { const { error } = await supabase!.rpc("mark_different_staff", { p_a: k.id, p_b: d.id }); if (error) throw new Error(errText(error)); return `${d.name} and ${k.name} are kept as different people.`; } })}>Different People</button></span> : ""], ok: false }));
       const flaggedFirst = (l: Line[]) => [...l].sort((x, y) => Number(x.ok) - Number(y.ok) || Number(!!x.cant) - Number(!!y.cant));
       const bad = (l: Line[]) => l.filter(x => !x.ok && !x.cant).length;
       const items: CheckItem[] = [
@@ -94,9 +95,9 @@ export default function CheckAll({ checks, officers, locations, canManage, onOpe
           fixes: canManage && noProduct.size ? [{ label: `Add ${plural(noProduct.size, "DSR Product")} To The Product List`, hint: `${[...noProduct].slice(0, 6).join(", ")}${noProduct.size > 6 ? "…" : ""}`,
             run: async () => { const { data, error } = await supabase!.rpc("products_from_dsr"); if (error) throw new Error(errText(error)); return `Added ${plural((data as { added: number }).added, "product")}.`; } }] : [] },
         { id: "dupes", label: "Sales team without duplicate entries", count: dupLines.length,
-          help: "Pairs of names 85% or more alike (MD / Mohd ignored). Merging keeps the fuller name, moves every day and distributor to it, and saves the other spelling so future DSRs match.",
+          help: "Pairs of names 85% or more alike (MD / Mohd ignored). Same Person: Merge keeps the fuller name, moves every day and distributor to it, and saves the other spelling so future DSRs match. Different People keeps both and stops asking.",
           head: ["Names", "Zone", "Zone", "Alike", ""], lines: dupLines,
-          fixes: canManage && pairs.length ? [{ label: `Merge All ${plural(pairs.length, "Pair")}`, hint: "Only if every pair listed is the same person.",
+          fixes: canManage && pairs.length ? [{ label: `Merge All ${plural(pairs.length, "Pair")}`, hint: "Only if every pair listed is the same person. Otherwise use the buttons on each row.",
             run: async t => { for (let i = 0; i < pairs.length; i++) { await merge(...pairs[i]); t.step(i + 1, pairs.length); } return `Merged ${plural(pairs.length, "pair")}.`; } }] : [] },
         { id: "dsr", label: `SO daily reports for ${month}`, count: soDays.length, info: true, help: `${plural(soDays.length, "SO-day")} uploaded for the month; the checks above use them.${noStock.size ? ` ${plural(noStock.size, "distributor")} with bookings sent no stock before the month.` : ""}` },
       ];

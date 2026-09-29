@@ -16,7 +16,9 @@ export interface DsrProduct { name: string; category: string; rate: number | nul
 /** team: the SOs in the same workbook (names, sorted), so a state total is checked against its own SOs. */
 export interface DsrStateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number; team: string }
 export interface SheetInfo { file: string; name: string; kind: "SO daily" | "State total" | "Summary" | "Empty"; rows: number; note: string }
-export interface DsrBook { days: DsrDay[]; stateDays: DsrStateDay[]; products: DsrProduct[]; sheets: SheetInfo[]; dupes: string[] }
+export interface DsrBook { days: DsrDay[]; stateDays: DsrStateDay[]; products: DsrProduct[]; sheets: SheetInfo[]; dupes: string[];
+  /** Figures too large to be real (a phone number typed in Total Calls, say); saved as blank and listed for checking. */
+  odd?: string[] }
 
 export const ATTENDANCE = ["Present", "Half Day", "Meeting", "Leave", "Weekly Off", "Holiday", "Absent", "No Report"] as const;
 const CODES: Record<string, string> = { p: "Present", present: "Present", a: "Absent", absent: "Absent", l: "Leave", leave: "Leave", cl: "Leave", sl: "Leave",
@@ -113,7 +115,17 @@ export function mergeBooks(books: DsrBook[]): DsrBook {
     b.products.forEach(p => { if (!products.has(p.name)) products.set(p.name, { ...p, position: products.size }); });
     b.stateDays.forEach(s => states.set(`${s.state}|${s.day}|${s.team}`, s));
   }
-  return { days, stateDays: [...states.values()], products: [...products.values()], sheets: books.flatMap(b => b.sheets), dupes };
+  // One impossible figure must not stop the whole upload: it's left blank and listed.
+  const odd: string[] = [];
+  const fix = (who: string, day: string, x: { total_calls: number; productive_calls: number; sale_value: number }, maxCalls: number) => {
+    if (x.total_calls > maxCalls || x.total_calls < 0) { odd.push(`${who} on ${dmy(day)}: Total Calls ${x.total_calls}`); x.total_calls = 0; }
+    if (x.productive_calls > maxCalls || x.productive_calls < 0) { odd.push(`${who} on ${dmy(day)}: Productive Calls ${x.productive_calls}`); x.productive_calls = 0; }
+    if (Math.abs(x.sale_value) > 1e9) { odd.push(`${who} on ${dmy(day)}: Secondary ₹${x.sale_value}`); x.sale_value = 0; }
+  };
+  days.forEach(d => fix(d.so, d.day, d, 2000));
+  const stateDays = [...states.values()];
+  stateDays.forEach(d => fix(`${d.state} state total`, d.day, d, 1000000));
+  return { days, stateDays, products: [...products.values()], sheets: books.flatMap(b => b.sheets), dupes, odd };
 }
 
 /** The SO figures behind a state total: that workbook's SOs on that day. */

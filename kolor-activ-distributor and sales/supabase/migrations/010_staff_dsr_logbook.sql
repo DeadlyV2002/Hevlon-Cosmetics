@@ -22,6 +22,17 @@ drop policy if exists "read dsr state days" on public.dsr_state_days;
 create policy "read dsr state days" on public.dsr_state_days for select to authenticated using (true);
 grant select on public.dsr_state_days to authenticated;
 
+-- A whole number from a sheet, or null when it isn't one or is too large for the column.
+create or replace function public.safe_int(t text) returns int
+language sql immutable as $$
+  select case when trim(t) ~ '^-?[0-9]+([.][0-9]+)?$' then case when abs(trim(t)::numeric) < 2147483647 then round(trim(t)::numeric)::int end end
+$$;
+-- A money figure from a sheet, or null when it isn't one or is too large for the column.
+create or replace function public.safe_money(t text) returns numeric
+language sql immutable as $$
+  select case when trim(t) ~ '^-?[0-9]+([.][0-9]+)?$' then case when abs(trim(t)::numeric) < 1000000000000 then round(trim(t)::numeric, 2) end end
+$$;
+
 -- Adds DSR days. A person's day that is already logged is kept unless p_replace is true, so the
 -- same workbook can be uploaded every day and only the new days go in. The reporting manager on
 -- the sheet becomes the person's senior (added as an ASM if not on the staff list).
@@ -32,7 +43,7 @@ declare d jsonb; sid uuid; mid uuid; did uuid; n_new int := 0; n_kept int := 0; 
 begin
   if auth.uid() is null then raise exception 'Sign in first.'; end if;
   insert into dsr_products(name, category, rate, position)
-    select x->>'name', x->>'category', nullif(x->>'rate', '')::numeric, (x->>'position')::int from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x
+    select x->>'name', x->>'category', nullif(x->>'rate', '')::numeric, safe_int(x->>'position') from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x
     on conflict (name) do update set category = coalesce(nullif(excluded.category, ''), dsr_products.category), rate = coalesce(excluded.rate, dsr_products.rate), position = excluded.position, updated_at = now();
   -- Products without a category take the DSR's (by name or another spelling), so stock is grouped the DSR way.
   update products p set category = d.category from dsr_products d
@@ -42,7 +53,7 @@ begin
   delete from dsr_state_days s using jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x
    where s.state = x->>'state' and s.day = (x->>'day')::date and s.team = '' and coalesce(x->>'team', '') <> '';
   insert into dsr_state_days(state, day, team, total_calls, productive_calls, sale_value, source_file)
-    select x->>'state', (x->>'day')::date, coalesce(x->>'team', ''), nullif(x->>'total_calls', '')::numeric::int, nullif(x->>'productive_calls', '')::numeric::int, nullif(x->>'sale_value', '')::numeric, p_source
+    select x->>'state', (x->>'day')::date, coalesce(x->>'team', ''), safe_int(x->>'total_calls'), safe_int(x->>'productive_calls'), safe_money(x->>'sale_value'), p_source
       from jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x
     on conflict (state, day, team) do update set total_calls = excluded.total_calls, productive_calls = excluded.productive_calls, sale_value = excluded.sale_value,
       source_file = excluded.source_file, updated_at = now();
@@ -72,8 +83,8 @@ begin
     insert into dsr_days(so_id, day, state, manager, hq, db_name, distributor_id, town, beat, remark, attendance, total_calls, productive_calls, sale_value, source_file, updated_at)
     values (sid, (d->>'day')::date, d->>'state', d->>'manager', d->>'hq', nullif(d->>'db_name', ''), find_distributor(nullif(d->>'db_name', '')),
             d->>'town', d->>'beat', d->>'remark', d->>'attendance',
-            coalesce(nullif(d->>'total_calls', '')::numeric, 0)::int, coalesce(nullif(d->>'productive_calls', '')::numeric, 0)::int,
-            coalesce(nullif(d->>'sale_value', '')::numeric, 0), p_source, now())
+            coalesce(safe_int(d->>'total_calls'), 0), coalesce(safe_int(d->>'productive_calls'), 0),
+            coalesce(safe_money(d->>'sale_value'), 0), p_source, now())
     on conflict (so_id, day) do update set state = excluded.state, manager = excluded.manager, hq = excluded.hq, db_name = excluded.db_name,
       distributor_id = excluded.distributor_id, town = excluded.town, beat = excluded.beat, remark = excluded.remark, attendance = excluded.attendance,
       total_calls = excluded.total_calls, productive_calls = excluded.productive_calls, sale_value = excluded.sale_value,

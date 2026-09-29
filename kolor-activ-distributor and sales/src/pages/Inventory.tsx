@@ -1,6 +1,9 @@
 import { Select, Combo } from "../components/Select";
 import { ask } from "../lib/ask";
 import { startTask, TaskHandle } from "../lib/tasks";
+import { readPrimary, PrimaryRead } from "../lib/primary";
+import PrimarySales from "../components/PrimarySales";
+import SsTally from "../components/SsTally";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mode, Row, Field, Table, Layout, Skipped, FIELD_LABELS, emptyRow, today, localDate, isValidDate,
@@ -58,6 +61,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [reduceSender, setReduceSender] = useState(true);
   const [existing, setExisting] = useState<Existing[]>([]);
   const [status, setStatus] = useState<{ kind: "err" | "ok" | "info"; text: string } | null>(null);
+  /** A sheet of company billing to super stockists, shown in its own preview. */
+  const [primary, setPrimary] = useState<{ read: PrimaryRead; name: string; file: File } | null>(null);
   const [adding, setAdding] = useState<{ name: string; kind: Kind } | null>(null);
   /** Details printed above a closing stock table: DB name, town, SO/ASE, HQ, month, stock date. */
   const [sheetInfo, setSheetInfo] = useState<SheetInfo | null>(null);
@@ -103,11 +108,21 @@ export default function Inventory({ locations, products, aliases, stock, officer
     return { l, res: extract(t, sh, l, tp, h, d, so) };
   }
 
-  async function onFile(f: File) {
+  async function onFile(f: File, notBilling = false) {
     setBusy(`Reading ${f.name}…`); setStatus(null);
     try {
       const [t, hash] = await Promise.all([readAnyFile(f, setBusy), fileHash(f)]);
       if (!t.sheets.length) throw new Error("The file is empty.");
+      // Company billing to super stockists (SS name, invoice and an item per column) has its own reader.
+      const pr = readPrimary(t.sheets, f.name);
+      // A sheet with an item per column is billing; one line per item only when most parties are super stockists (not a distributor's own sales register).
+      const supersList = locations.filter(l => l.kind === "SUPER_STOCKIST");
+      const billing = pr && pr.invoices.length > 0 && (pr.wide ? pr.items.length >= 3 : pr.invoices.filter(i => matchDistributor(i.ss, supersList)).length >= pr.invoices.length / 2);
+      if (pr && billing && !notBilling) {
+        clearAll(); setPrimary({ read: pr, name: f.name, file: f });
+        say("info", `${f.name}: ${plural(pr.invoices.length, "invoice")} of company billing to ${new Set(pr.invoices.map(i => i.ss)).size} super stockists. Check the matches, then save.`);
+        return;
+      }
       setBusy(`Finding the product table and whose stock ${f.name} is…`); await new Promise(r => setTimeout(r, 0));
       const g = t.sheets[0].grid, l0 = detectLayout(g, "COUNT");
       const det = detectFile(g, l0, titleText(g, l0), f.name, locations, officers);
@@ -459,8 +474,12 @@ export default function Inventory({ locations, products, aliases, stock, officer
 
   return <>
     <StockDownload locations={locations} products={products} stock={stock} notify={notify} />
+    <SsTally locations={locations} products={products} refresh={stock} />
     {canManage && <MoveStock locations={locations} products={products} stock={stock} onMoved={onPosted} notify={notify} />}
 
+    {primary && <PrimarySales read={primary.read} fileName={primary.name} locations={locations} products={products} aliases={aliases} canManage={canManage} notify={notify}
+      onDone={async ok => { setPrimary(null); if (ok) await onPosted(); if (queue.length) nextFile(); }}
+      onReadNormally={() => { const f = primary.file; setPrimary(null); onFile(f, true); }} />}
     <section className="card upload">
       <div className="rowhead"><div><h2>Upload a file</h2><p>Drop in any stock file. The app works out what it is and whose stock it is; check its guess below.</p></div></div>
       {(busy || auto) && <div className="progress" role="status" aria-live="polite">

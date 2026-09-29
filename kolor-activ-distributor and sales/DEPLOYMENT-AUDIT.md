@@ -1,5 +1,12 @@
 # Deployment Package Audit
 
+## v16 (29 Sep 2026) — migration 012 also adds post_primary_sales (company billing to super stockists)
+- Inventory upload recognises company billing sheets (SS primary sales): an item per column with category and rate rows above, or one line per item. Headings can sit anywhere near the top, columns in any order; blank continuation rows, text numbers ("1,440", "288 pcs"), text dates and total rows are handled, and anything odd ("346 Box") is listed for checking.
+- Preview matches each billed party to a super stockist (or a distributor billed directly) and each item to a SKU; new ones are added, including display material (stands, trays, bags, boards) under the POP category.
+- Each invoice line is saved as stock the party received from the company. Lines already saved (same party, invoice, product) are skipped, so the same sheet can be uploaded every month. Billing dated before a stock count the SS already sent is taken off at that count, so the count keeps showing what they held.
+- New "Company Billing Against SS Stock" panel on Inventory: per SS, billed, sent on, gap at stock counts and stock now, by category and SKU, in dozens and pieces.
+- Tested with SS Primary Sales Report - In Pcs.xlsx: 310 invoices, April to August 2026, 28 parties, 173 items, 20,36,725 pieces (the sheet's total plus two cells written "346 Box" and "59 Box").
+
 ## v15 (28 Sep 2026) — migration 012 also speeds up the stock check and linking, adds unlinking and "stock sent through"
 - SO bookings against distributor stock worked out in one pass (26 s to 0.2 s on the test data); DB-name matching runs in small steps; tables show 200 rows at a time.
 - DSR DB-name matching ignores shop words (Traders, Cosmetic, Agency…), so "… Traders" no longer links to A K Traders; only near-certain matches are pre-selected. Wrong links can be reviewed and unlinked.

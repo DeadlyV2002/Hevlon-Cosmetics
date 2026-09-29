@@ -655,3 +655,7 @@ a.button.small{padding:5px 10px;font-size:13px;white-space:nowrap}
 @media (min-width:900px){.reportgrid{grid-template-columns:minmax(0,1fr) minmax(0,1.6fr)}}
 .topstock .sk-cats{margin:8px 0 0}
 .topstock .tablewrap{overflow-x:auto}
+.tallybody{padding:4px 10px 10px}.tallybody .sk-cats,.tallybody>details{margin-top:6px}
+.tallybody details{border:1px solid #e2e8f0;border-radius:8px;background:#fff;margin-top:6px}
+.tallybody summary{cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;padding:6px 10px;font-size:14px;list-style:none}
+.primary h3{margin:16px 0 6px}

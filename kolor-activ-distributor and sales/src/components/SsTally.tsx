@@ -16,7 +16,8 @@ export default function SsTally({ locations, products, refresh }: { locations: D
   const supers = useMemo(() => locations.filter(l => l.kind === "SUPER_STOCKIST"), [locations]);
   const prod = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
   useEffect(() => {
-    if (!supabase || !supers.length || !open) return;
+    if (!supabase || !open) return;
+    if (!supers.length) { setRows([]); return; }
     let live = true;
     const task = startTask("Tallying billing against SS stock", 0, true);
     Promise.all([

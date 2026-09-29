@@ -6,6 +6,7 @@ import { teamTotal } from "../lib/dsr";
 import { SURE } from "./DsrLinker";
 import { loadUnlinked, suggest, linkNames, suspectLinks, unlinkName } from "../lib/dsrLink";
 import { runTask, startTask, TaskHandle } from "../lib/tasks";
+import { dmy } from "../lib/dates";
 
 /** A one-click fix: does the work and says what it did. */
 export interface Fix { label: string; hint?: string; run: (t: TaskHandle) => Promise<string> }
@@ -46,7 +47,7 @@ export default function CheckAll({ checks, officers, locations, canManage, onOpe
       const byState = new Map<string, number>(); soDays.forEach(d => { const k = `${d.state}|${d.day}`; byState.set(k, (byState.get(k) || 0) + Number(d.sale_value)); });
       const stateLines: Line[] = stateDays.map(s => {
         const sos = s.team ? teamTotal(s.team, s.day, soDays, officers) : byState.get(`${s.state}|${s.day}`) || 0, tot = Number(s.sale_value);
-        return { cells: [`${s.state} ${s.day}`, money(tot), money(sos), money(tot - sos)], ok: Math.abs(tot - sos) <= Math.max(100, tot * 0.01) };
+        return { cells: [`${s.state} ${dmy(s.day)}`, money(tot), money(sos), money(tot - sos)], ok: Math.abs(tot - sos) <= Math.max(100, tot * 0.01) };
       });
       // SO bookings against the distributor's stock, product by product.
       const noProduct = new Set<string>(), noStock = new Set<string>();

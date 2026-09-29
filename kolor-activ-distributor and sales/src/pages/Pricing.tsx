@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, Margins, Scheme, schemesOn, marginsOn, matchProduct, fmt, plural, errText } from "../lib/supabase";
 import { cellText, parseNum, today } from "../lib/parse";
 import { readAnyFile, ACCEPT } from "../lib/readers";
+import { dmy } from "../lib/dates";
 
 interface Props {
   products: Product[]; locations: Distributor[]; margins: Margins; schemes: Scheme[];
@@ -17,7 +18,7 @@ const emptyScheme = (): SchemeForm => ({ name: "", starts_on: today(), ends_on: 
 const rs = (n: number) => `₹${Number.isInteger(Math.round(n * 100) / 100) ? fmt(n) : fmt(n, 2)}`;
 const pct = (n: number) => `${fmt(n, 2).replace(/\.?0+$/, "")}%`;
 const up = (n: number, p: number) => Math.round(n * (1 + p / 100) * 100) / 100;
-const shortDate = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+const shortDate = (d: string) => dmy(d);
 
 export default function Pricing({ products, locations, margins, schemes, canManage, onChanged, notify }: Props) {
   const day = today();

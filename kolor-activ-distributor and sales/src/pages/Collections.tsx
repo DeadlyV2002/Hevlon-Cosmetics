@@ -11,6 +11,7 @@ import DistributorReport, { Billing } from "../components/DistributorReport";
 import { readAnyFile, ACCEPT } from "../lib/readers";
 import { findHeader } from "../lib/sheet";
 import { cellText, parseNum, toISODate, today, Grid } from "../lib/parse";
+import { dmy } from "../lib/dates";
 
 interface Payment { id: string; payer_id: string | null; payer_retailer_id: string | null; payee_id: string | null; paid_on: string; amount: number; mode: string | null; reference: string | null; note: string | null; source_file: string | null }
 interface Props { locations: Distributor[]; stock: StockLine[]; officers: SalesOfficer[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
@@ -85,7 +86,7 @@ export default function Collections({ locations, stock, officers, canManage, onC
   ];
   const ptable = useColumnFilters(inPeriod, pcols);
   async function remove(p: Payment) {
-    if (!supabase || !await ask(`Delete the payment of ${money(p.amount)} by ${who(p.payer_id)} on ${p.paid_on}?`)) return;
+    if (!supabase || !await ask(`Delete the payment of ${money(p.amount)} by ${who(p.payer_id)} on ${dmy(p.paid_on)}?`)) return;
     const { error } = await supabase.from("payments").delete().eq("id", p.id);
     if (error) return notify(`Not deleted: ${error.message}`);
     setReload(x => x + 1);
@@ -117,7 +118,7 @@ export default function Collections({ locations, stock, officers, canManage, onC
           <td><button className="link" onClick={() => setReport(r.loc)}>{r.loc.name}</button></td><td>{KIND_LABEL[r.loc.kind]}</td><td>{r.ss}</td><td>{r.loc.state}</td>
           <td>{money(r.billed)}</td><td>{money(r.collected)}</td>
           <td><span className={`pctbar${r.pct === null ? "" : r.pct < 50 ? " low" : r.pct < 80 ? " mid" : " good"}`}>{r.pct === null ? "—" : `${fmt(r.pct)}%`}</span></td>
-          <td>{money(r.owed)}</td><td>{r.lastBill || "—"}</td><td>{r.lastPay || "never"}</td><td className="wrap">{r.flag && <span className="err">{r.flag}</span>}</td></tr>)}</tbody></table>
+          <td>{money(r.owed)}</td><td>{dmy(r.lastBill) || "—"}</td><td>{dmy(r.lastPay) || "never"}</td><td className="wrap">{r.flag && <span className="err">{r.flag}</span>}</td></tr>)}</tbody></table>
         {!table.rows.length && <p className="empty">No rows match the column filters.</p>}</div>
         : <p className="empty">No bills or payments in this period yet. Billing comes from stock posted to super stockists and distributors; payments are recorded below.</p>}
     </section>
@@ -128,7 +129,7 @@ export default function Collections({ locations, stock, officers, canManage, onC
       <div className="rowhead"><h2>Payments ({ptable.rows.length})</h2>{ptable.active > 0 && <button className="link" onClick={ptable.clear}>Clear Filters</button>}</div>
       {inPeriod.length > 0 && ptable.sortBar}
       {inPeriod.length ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{pcols.map(c => ptable.head(c.key))}<th>Note</th>{canManage && <th />}</tr></thead>
-        <tbody>{ptable.rows.map(p => <tr key={p.id}><td>{p.paid_on}</td><td>{who(p.payer_id)}</td><td>{who(p.payee_id)}</td><td>{money(p.amount)}</td><td>{p.mode}</td><td>{p.reference}</td><td className="wrap">{p.note}</td>
+        <tbody>{ptable.rows.map(p => <tr key={p.id}><td>{dmy(p.paid_on)}</td><td>{who(p.payer_id)}</td><td>{who(p.payee_id)}</td><td>{money(p.amount)}</td><td>{p.mode}</td><td>{p.reference}</td><td className="wrap">{p.note}</td>
           {canManage && <td><button className="del" aria-label="Delete payment" onClick={() => remove(p)}>✕</button></td>}</tr>)}</tbody></table></div>
         : <p className="empty">No payments recorded in this period.</p>}
     </section>
@@ -213,7 +214,7 @@ function PaymentForm({ parties, byId, onSaved, notify }: { parties: Distributor[
       <div className="rowhead"><b>Import preview — {preview.file}</b><div className="actions"><button className="secondary" onClick={() => setPreview(null)}>Cancel</button>
         <button disabled={busy || !preview.rows.some(r => !r.problem)} onClick={post}>Import {plural(preview.rows.filter(r => !r.problem).length, "Payment")}</button></div></div>
       <div className="tablewrap"><table><thead><tr><th>Date</th><th>Paid By</th><th>Paid To</th><th>Amount</th><th>Mode</th><th>Reference</th><th>Check</th></tr></thead>
-        <tbody>{preview.rows.slice(0, 500).map((r, i) => <tr key={i} className={r.problem ? "bad" : ""}><td>{r.date}</td><td>{r.payer?.name || r.payerText}</td><td>{r.payee === undefined ? r.payeeText : r.payee?.name || COMPANY}</td>
+        <tbody>{preview.rows.slice(0, 500).map((r, i) => <tr key={i} className={r.problem ? "bad" : ""}><td>{dmy(r.date)}</td><td>{r.payer?.name || r.payerText}</td><td>{r.payee === undefined ? r.payeeText : r.payee?.name || COMPANY}</td>
           <td>{money(r.amount)}</td><td>{r.mode}</td><td>{r.reference}</td><td>{r.problem ? <span className="err">{r.problem}</span> : <span className="ok">Ready</span>}</td></tr>)}</tbody></table></div>
     </div>}
   </section>;

@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { cellText, normName, parseNum, toISODate, today, sheetRows } from "./parse";
 import { labelOf } from "./sheet";
 import { plural } from "./supabase";
+import { dmy } from "./dates";
 
 export interface DsrLine { product: string; category: string; qty: number; rate: number | null }
 export interface DsrDay {
@@ -106,7 +107,7 @@ export function mergeBooks(books: DsrBook[]): DsrBook {
   for (const b of books) {
     for (const d of b.days) {
       const k = `${normName(d.so)}|${d.day}`, first = seen.get(k);
-      if (first) { dupes.push(`${d.so} on ${d.day}: in ${first.file ? `${first.file} › ` : ""}${first.sheet} and ${d.file ? `${d.file} › ` : ""}${d.sheet}${first.sale_value !== d.sale_value || first.total_calls !== d.total_calls ? " (different figures)" : ""}`); continue; }
+      if (first) { dupes.push(`${d.so} on ${dmy(d.day)}: in ${first.file ? `${first.file} › ` : ""}${first.sheet} and ${d.file ? `${d.file} › ` : ""}${d.sheet}${first.sale_value !== d.sale_value || first.total_calls !== d.total_calls ? " (different figures)" : ""}`); continue; }
       seen.set(k, d); days.push(d);
     }
     b.products.forEach(p => { if (!products.has(p.name)) products.set(p.name, { ...p, position: products.size }); });

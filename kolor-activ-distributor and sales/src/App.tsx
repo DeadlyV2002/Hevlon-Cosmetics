@@ -19,10 +19,14 @@ import { AskHost } from "./lib/ask";
 import { guessProduct } from "./lib/fuzzy";
 import { useSessionLog } from "./components/LogBook";
 import Tasks from "./components/Tasks";
+import logoUrl from "./assets/kolor-activ-logo.jpg";
 
 export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "Collections" | "SO reports" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
 const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "Collections", "SO reports", "SO checks", "Reports", "Pricing", "History", "Settings"];
 const ROLE_LABEL: Record<Role, string> = { HO_ADMIN: "HO admin", STATE_MANAGER: "State manager", DISTRIBUTOR_MANAGER: "Distributor manager", SALESMAN: "Salesman" };
+
+/** The Kolor Activ logo, cropped to the artwork; white on the dark sidebar. */
+const Logo = ({ light }: { light?: boolean }) => <span className={`brandlogo${light ? " light" : ""}`} role="img" aria-label="Kolor Activ" style={{ backgroundImage: `url(${logoUrl})` }} />;
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -121,10 +125,10 @@ export default function App() {
   }
   const canManage = role === "HO_ADMIN" || role === "STATE_MANAGER";
 
-  if (!supabase) return <div className="login"><div className="loginCard"><div className="brand">KA</div><h1>Setup needed</h1><p>VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are not set in Vercel. Add them and redeploy.</p></div></div>;
+  if (!supabase) return <div className="login"><div className="loginCard"><Logo /><h1>Setup needed</h1><p>VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are not set in Vercel. Add them and redeploy.</p></div></div>;
   if (!session) return (
     <div className="login"><form className="loginCard" onSubmit={e => { e.preventDefault(); login(); }}>
-      <div className="brand">KA</div><h1>Kolor Activ</h1><p>Distributor Sales &amp; Inventory Control</p>
+      <Logo /><p>Distributor Sales &amp; Inventory Control</p>
       <input placeholder="Email" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} />
       <input placeholder="Password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} />
       <button type="submit" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
@@ -135,7 +139,7 @@ export default function App() {
   return (
     <div className="app">
       <aside>
-        <div className="logo">KA</div><strong>Kolor Activ</strong><small>Distributor control</small>
+        <Logo light /><small>Distributor control</small>
         <nav>{NAV.filter(n => n !== "Pricing" || canPrice).map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); if (n === "Inventory") setInvOpened(true); }}>{n}{n === "Inventory" && invBusy && <span className="navbusy" title="Upload in progress">{invBusy === "…" ? "working" : invBusy}</span>}</button>)}</nav>
         <button className="secondary logout" onClick={() => supabase!.auth.signOut()}>Sign out</button>
       </aside>

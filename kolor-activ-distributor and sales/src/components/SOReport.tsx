@@ -5,13 +5,14 @@ import { ChartData } from "../lib/insights";
 import { ChartView } from "./Charts";
 import Modal from "./Modal";
 import { exportPng, printOnly, togglePresent } from "../lib/present";
+import { dmy } from "../lib/dates";
 
 interface Day { day: string; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number; distributor_id: string | null; db_name: string | null; town: string | null; beat: string | null; remark: string | null }
 interface Prod { product: string; category: string | null; qty: number; value: number }
 const n = (x: unknown) => Number(x) || 0;
 const WORK = new Set(["Present", "Half Day", "Meeting"]);
 const mon = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
-const dayLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+const dayLabel = (d: string) => `${new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short" })} ${dmy(d)}`;
 const change = (a: number, b: number) => (!b ? (a ? "new" : "—") : `${a >= b ? "+" : "−"}${fmt(Math.abs(((a - b) / b) * 100))}%`);
 
 /** One salesperson's report: a short summary, with the detail in sections that open on click. */

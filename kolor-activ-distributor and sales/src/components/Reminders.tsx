@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase, plural, errText } from "../lib/supabase";
+import { dmy } from "../lib/dates";
 
 interface Cfg { enabled: boolean; send_day: number; due_day: number; every: number; max_follow_ups: number; email: boolean; whatsapp: boolean; super_stockists: boolean; wa_template: string; wa_language: string }
 const DEFAULT: Cfg = { enabled: false, send_day: 1, due_day: 7, every: 3, max_follow_ups: 3, email: true, whatsapp: true, super_stockists: true, wa_template: "stock_update_reminder", wa_language: "en" };
@@ -7,7 +8,7 @@ interface Status { location_id: string; code: string; name: string; kind: string
 
 const lastMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; };
 const monthName = (p: string) => new Date(`${p}T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-const day = (t: string | null) => (t ? new Date(t).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "");
+const day = (t: string | null) => dmy(t);
 
 /** Monthly stock-update reminders to distributors and super stockists, by email and WhatsApp. */
 export default function Reminders({ canEdit }: { canEdit: boolean }) {

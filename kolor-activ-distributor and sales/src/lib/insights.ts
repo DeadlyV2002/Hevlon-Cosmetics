@@ -4,6 +4,7 @@
 import { supabase, Distributor, Kind, KINDS, KIND_LABEL, Product, SalesOfficer, StockLine, fetchAll, fmt, money, plural, missingFields } from "./supabase";
 import { Scope, applyScope, emptyScope } from "../components/FilterBar";
 import { localDate, today } from "./parse";
+import { dmy } from "./dates";
 
 export type ChartKind = "stock_trend" | "stock_where" | "aged" | "so_spikes" | "reorders" | "flows" | "no_stock_sales"
   | "running_low" | "stale" | "count_losses" | "top_products" | "slow_products" | "so_claims" | "new_outlets"
@@ -46,7 +47,7 @@ const rpc = <T,>(fn: string, args: Record<string, unknown>) =>
   once<T[]>(`${fn}:${JSON.stringify(args)}`, () => fetchAll<T>((a, b) => supabase!.rpc(fn, args).range(a, b)));
 const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return localDate(d); };
 const daysSince = (d: string) => Math.max(0, Math.round((Date.parse(today()) - Date.parse(d.slice(0, 10))) / 86400000));
-const shortDate = (d: string) => new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+const shortDate = (d: string) => dmy(d);
 
 interface Maps { loc: Map<string, Distributor>; prod: Map<string, Product> }
 const mapsCache = new WeakMap<Ctx, Maps>();

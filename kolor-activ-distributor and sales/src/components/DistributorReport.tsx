@@ -4,13 +4,14 @@ import { ChartData } from "../lib/insights";
 import { ChartView } from "./Charts";
 import Modal from "./Modal";
 import { exportPng, printOnly, togglePresent } from "../lib/present";
+import { dmy } from "../lib/dates";
 
 interface Month { month: string; bought_units: number; bought_value: number; sold_units: number; sold_value: number; closing_units: number; closing_value: number; paid: number; so_value: number }
 export interface Billing { party_type: string; party_id: string; billed: number; collected: number; billed_all: number; collected_all: number; last_bill: string | null; last_payment: string | null }
 
 const n = (x: unknown) => Number(x) || 0;
 const mon = (d: string) => new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
-const day = (d?: string | null) => (d ? new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—");
+const day = (d?: string | null) => (d ? dmy(d) : "—");
 /** "+12%" / "−8%" / "new" / "—" */
 function change(now: number, before: number) {
   if (!before) return now ? "new" : "—";

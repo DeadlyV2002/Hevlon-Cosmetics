@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase, fetchAll, errText } from "../lib/supabase";
 import { useColumnFilters, Col } from "./ColumnFilter";
+import { dmy, dmyTime } from "../lib/dates";
 
 interface Session { id: string; user_id: string; email: string | null; started_at: string; last_seen: string; active_seconds: number; user_agent: string | null }
 
@@ -43,7 +44,7 @@ export default function LogBook() {
   const cols: Col<Session>[] = [
     { key: "who", label: "User", value: s => s.email }, { key: "day", label: "Date", value: s => s.started_at.slice(0, 10) },
     { key: "start", label: "Signed In", value: s => new Date(s.started_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) },
-    { key: "end", label: "Last Seen", value: s => new Date(s.last_seen).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" }) },
+    { key: "end", label: "Last Seen", value: s => dmyTime(s.last_seen) },
     { key: "len", label: "Open For", value: s => Math.round(len(s) / 60), num: true },
     { key: "active", label: "Actively Used", value: s => Math.round(s.active_seconds / 60), num: true },
     { key: "share", label: "Active %", value: s => (len(s) > 60 ? Math.min(100, Math.round((s.active_seconds / len(s)) * 100)) : null), num: true },
@@ -56,7 +57,7 @@ export default function LogBook() {
     {err && <div className="status err">{err}</div>}
     {rows && (rows.length ? <div className="tablewrap"><table><thead><tr>{cols.map(c => t.head(c.key))}</tr></thead>
       <tbody>{t.rows.map(s => { const share = cols[6].value(s) as number | null; return <tr key={s.id} className={share !== null && share < 20 ? "flagged" : ""}>
-        <td>{s.email}</td><td>{s.started_at.slice(0, 10)}</td><td>{cols[2].value(s)}</td><td>{cols[3].value(s)}</td><td>{dur(len(s))}</td><td>{dur(s.active_seconds)}</td>
+        <td>{s.email}</td><td>{dmy(s.started_at)}</td><td>{cols[2].value(s)}</td><td>{cols[3].value(s)}</td><td>{dur(len(s))}</td><td>{dur(s.active_seconds)}</td>
         <td>{share === null ? "—" : `${share}%`}</td><td>{device(s.user_agent)}</td></tr>; })}</tbody></table></div>
       : <p className="empty">No sign-ins recorded yet.</p>)}
   </section>;

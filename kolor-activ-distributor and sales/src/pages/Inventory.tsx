@@ -22,6 +22,7 @@ import {
 import StockDownload from "../components/StockDownload";
 import MoveStock from "../components/MoveStock";
 import LocationForm from "../components/LocationForm";
+import { dmy } from "../lib/dates";
 
 const TYPES: { id: FileType; label: string; help: string }[] = [
   { id: "COUNT", label: "Closing stock", help: "A stock count: Tally Stock Summary, a stock statement, or your stock format. The location's stock is set to these quantities and the difference is recorded. Products not in the file keep their stock." },
@@ -347,7 +348,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
         if (i >= 0) {
           taken.add(i);
           excluded = !r.include;
-          notes.push(`already recorded on ${existing[i].transaction_date}${existing[i].reference ? ` (${existing[i].reference})` : ""}`);
+          notes.push(`already recorded on ${dmy(existing[i].transaction_date)}${existing[i].reference ? ` (${existing[i].reference})` : ""}`);
         }
       }
       if (!excluded && h) {

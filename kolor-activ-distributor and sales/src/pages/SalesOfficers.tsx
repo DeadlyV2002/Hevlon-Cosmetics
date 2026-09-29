@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ask } from "../lib/ask";
 import { supabase, SalesOfficer, fmt, errText } from "../lib/supabase";
+import { dmy, dmyTime } from "../lib/dates";
 
 interface Report { id: string; created_at: string; source_file: string | null; lines: number; units: number; from_date: string | null; to_date: string | null; so_names: string | null }
 
@@ -23,8 +24,8 @@ export default function SalesOfficers({ officers, canManage, onChanged, notify }
     <div className="rowhead"><h2>SO Sales Sheets Uploaded</h2><button className="secondary" onClick={loadReports}>Refresh</button></div>
     <p className="hint">SO sheets uploaded on the Inventory page, used for the checks above.{canManage ? " Remove takes a sheet out of every check." : ""} The sales team list is on the SO Reports page.</p>
     <div className="tablewrap"><table><thead><tr><th>Uploaded</th><th>File</th><th>SO(s)</th><th>Dates</th><th>Lines</th><th>Units</th>{canManage && <th />}</tr></thead>
-      <tbody>{reports.map(r => <tr key={r.id}><td>{new Date(r.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</td>
-        <td className="wrap">{r.source_file}</td><td className="wrap">{r.so_names}</td><td>{r.from_date}{r.to_date && r.to_date !== r.from_date ? ` to ${r.to_date}` : ""}</td>
+      <tbody>{reports.map(r => <tr key={r.id}><td>{dmyTime(r.created_at)}</td>
+        <td className="wrap">{r.source_file}</td><td className="wrap">{r.so_names}</td><td>{dmy(r.from_date)}{r.to_date && r.to_date !== r.from_date ? ` to ${dmy(r.to_date)}` : ""}</td>
         <td>{r.lines}</td><td>{fmt(r.units)}</td>{canManage && <td><button className="secondary small" onClick={() => undo(r)}>Remove</button></td>}</tr>)}</tbody></table>
       {!reports.length && <p className="empty">No SO sheets uploaded yet.</p>}</div>
   </section>;

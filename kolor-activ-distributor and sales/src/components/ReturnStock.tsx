@@ -4,6 +4,7 @@ import { today } from "../lib/parse";
 import { ask } from "../lib/ask";
 import { runTask } from "../lib/tasks";
 import { Select } from "./Select";
+import { dmy } from "../lib/dates";
 
 interface Line { productId: string; qty: string }
 interface Returned { id: string; from_id: string | null; to_id: string | null; returned_on: string; reason: string; freight: number | null; note: string | null; quantity: number; value: number; days_held: number | null }
@@ -36,7 +37,7 @@ export default function ReturnStock({ locations, products, stock, onSaved, notif
 
   async function save() {
     if (!supabase || !ready || !fromLoc || !toLoc) return;
-    if (!await ask(`Record ${fmt(total, 2)} dz (${fmt(Math.round(total * 12))} pieces) of ${plural(lines.length, "product")} returned from ${fromLoc.name} to ${toLoc.name} on ${date}?\n\nReason: ${reason}${freight ? `. Freight ₹${freight}` : ""}. It comes off ${fromLoc.name}'s stock and goes into ${toLoc.name}.`)) return;
+    if (!await ask(`Record ${fmt(total, 2)} dz (${fmt(Math.round(total * 12))} pieces) of ${plural(lines.length, "product")} returned from ${fromLoc.name} to ${toLoc.name} on ${dmy(date)}?\n\nReason: ${reason}${freight ? `. Freight ₹${freight}` : ""}. It comes off ${fromLoc.name}'s stock and goes into ${toLoc.name}.`)) return;
     setBusy(true);
     try {
       const r = await runTask(`Recording the return from ${fromLoc.name}`, async () => {
@@ -95,7 +96,7 @@ export default function ReturnStock({ locations, products, stock, onSaved, notif
           <div className="metric"><small>Sat unsold, on average</small><b>{tot.q ? `${fmt(tot.d / tot.q)} days` : "—"}</b><span className="muted">since it last reached them</span></div>
         </div>
         <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Date</th><th>From</th><th>Into</th><th>Reason</th><th>Dozens</th><th>Pieces</th><th>Value</th><th>Freight</th><th>Days unsold</th><th>Note</th></tr></thead>
-          <tbody>{log.map(r => <tr key={r.id}><td>{r.returned_on}</td><td>{name(r.from_id)}</td><td>{name(r.to_id)}</td><td>{r.reason}</td><td>{fmt(r.quantity, 2)}</td><td>{fmt(Math.round(n(r.quantity) * 12))}</td>
+          <tbody>{log.map(r => <tr key={r.id}><td>{dmy(r.returned_on)}</td><td>{name(r.from_id)}</td><td>{name(r.to_id)}</td><td>{r.reason}</td><td>{fmt(r.quantity, 2)}</td><td>{fmt(Math.round(n(r.quantity) * 12))}</td>
             <td>{money(r.value)}</td><td>{r.freight !== null ? money(r.freight) : "—"}</td><td>{r.days_held ?? "—"}</td><td className="wrap">{r.note}</td></tr>)}</tbody></table></div>
       </>}
     </>}

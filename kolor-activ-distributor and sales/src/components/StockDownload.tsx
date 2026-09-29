@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, StockLine, KIND_LABEL, fetchAll, fmt, money, errText } from "../lib/supabase";
 import { today } from "../lib/parse";
 import DateRange, { Range, defaultRange } from "./DateRange";
+import { dmy } from "../lib/dates";
 
 interface PeriodRow {
   location_id: string; product_id: string; opening: number; qty_in: number; qty_out: number; closing: number;
@@ -103,7 +104,7 @@ export default function StockDownload({ locations, products, stock, notify, chil
           : { ...where(d), "Opening (dz)": dz(t.opening), "Received (dz)": dz(t.inq), "Sent / sold (dz)": dz(t.outq), "Closing (dz)": dz(t.closing), "Closing (pieces)": pcs(t.closing), "Products in stock": t.products, "Closing value ₹": Math.round(t.value) };
       });
       const wb = XLSX.utils.book_new();
-      const title = period === "latest" ? `Latest stock as on ${today()}` : `Stock from ${range.from} to ${range.to}`;
+      const title = period === "latest" ? `Latest stock as on ${dmy(today())}` : `Stock from ${dmy(range.from)} to ${dmy(range.to)}`;
       const sheet = (data: object[], empty: string) => (data.length ? XLSX.utils.json_to_sheet(data) : XLSX.utils.aoa_to_sheet([[empty]]));
       XLSX.utils.book_append_sheet(wb, detail.length ? grouped(detail, ["Location", "Code", "Type", "State", "Region", "Super stockist"], "Category") : sheet(detail, `No stock for this selection. ${title}.`), "Stock");
       XLSX.utils.book_append_sheet(wb, sheet(summary, title), "Summary");
@@ -162,7 +163,7 @@ export default function StockDownload({ locations, products, stock, notify, chil
   const row = (d: Distributor, cls = "") => { const e = perLoc.get(d.id) || zero; return <div key={d.id} className="sk-item"><label className={`sk-row ${cls}${e.units ? "" : " none"}`}>
     <input type="checkbox" checked={sel.has(d.id)} onChange={ev => toggle([d.id], ev.target.checked)} />
     <span className="sk-name">{d.name}<small>{d.code}{d.territory ? ` · ${d.territory}` : ""}{d.status === "DORMANT" ? " · dormant" : ""}</small></span>
-    <span className="sk-num">{e.units ? money(e.value) : "no stock"}<small>{e.units ? `${fmt(dz(e.units))} dz · ${fmt(pcs(e.units))} pcs · ${e.products} SKUs${e.last ? ` · ${e.last}` : ""}` : e.last ? `last update ${e.last}` : "never uploaded"}</small></span>
+    <span className="sk-num">{e.units ? money(e.value) : "no stock"}<small>{e.units ? `${fmt(dz(e.units))} dz · ${fmt(pcs(e.units))} pcs · ${e.products} SKUs${e.last ? ` · ${dmy(e.last)}` : ""}` : e.last ? `last update ${dmy(e.last)}` : "never uploaded"}</small></span>
     {e.units > 0 && <button className="secondary small" aria-expanded={openLoc === d.id} title="Their stock grouped by category, each opening to its SKUs" onClick={ev => { ev.preventDefault(); setOpenLoc(openLoc === d.id ? null : d.id); }}>{openLoc === d.id ? "Hide" : "Stock By Category"}</button>}
   </label>{openLoc === d.id && breakdown(d.id)}</div>; };
 

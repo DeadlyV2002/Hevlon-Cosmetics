@@ -675,3 +675,9 @@ button.switch i{position:relative;width:34px;height:20px;border-radius:999px;bac
 button.switch i::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0f172a33;transition:left .15s}
 button.switch.on{color:#166534}button.switch.on i{background:#16a34a}button.switch.on i::after{left:16px}
 button.switch:disabled{opacity:1;cursor:default}
+/* Logo: the artwork sits at 188,154 (1624 × 300) in a 2000 × 608 image; the box shows just that part */
+.brandlogo{--w:196px;display:block;width:var(--w);height:calc(var(--w) * 300 / 1624);background-repeat:no-repeat;
+  background-size:calc(var(--w) * 2000 / 1624) auto;background-position:calc(var(--w) * -188 / 1624) calc(var(--w) * -154 / 1624)}
+.brandlogo.light{filter:invert(1);mix-blend-mode:screen;margin:2px 0 6px}
+.loginCard .brandlogo{--w:240px;margin:4px auto 10px}
+.loginCard > p{text-align:center}

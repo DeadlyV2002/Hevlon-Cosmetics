@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ask } from "../lib/ask";
+import { confirmWithPassword } from "../lib/confirm";
 import { supabase, SalesOfficer, validPhone, cleanPhones, proper, properOrNull, plural, errText, markedDifferent } from "../lib/supabase";
 import { cellText, normName } from "../lib/parse";
 import { similarity } from "../lib/fuzzy";
@@ -123,6 +124,18 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
     if (error) return setMsg({ kind: "err", text: `Not saved: ${errText(error)}. Run database step 012.` });
     setMsg({ kind: "ok", text: `${a.name} and ${b.name} are kept as different people.` }); await onChanged();
   }
+  /** Active / dormant. Marking someone dormant needs the signed-in person's password. */
+  async function toggleActive(o: SalesOfficer) {
+    if (!supabase) return;
+    if (o.active) {
+      const r = await confirmWithPassword(`Mark ${o.name} as dormant? Their reports and history stay; they drop out of "not reported" lists.`, "Mark Dormant");
+      if (r === "cancelled") return;
+      if (r === "wrong") return setMsg({ kind: "err", text: `${o.name} was not changed: that password isn't right.` });
+    } else if (!await ask(`Mark ${o.name} as active again?`, { ok: "Mark Active" })) return;
+    const { error } = await supabase.from("sales_officers").update({ active: !o.active }).eq("id", o.id);
+    if (error) return setMsg({ kind: "err", text: `Not changed: ${errText(error)}` });
+    setMsg({ kind: "ok", text: `${o.name} is now ${o.active ? "dormant" : "active"}.` }); await onChanged();
+  }
   async function merge(keep: SalesOfficer, drop: SalesOfficer) {
     if (!supabase || !await ask(`Merge "${drop.name}" into "${keep.name}"? Their daily reports, distributors and team move to ${keep.name}, and "${drop.name}" is kept as another spelling.`)) return;
     const { error } = await supabase.rpc("merge_staff", { p_keep: keep.id, p_drop: drop.id });
@@ -134,7 +147,7 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
     { key: "name", label: "Name", value: o => o.name }, { key: "desig", label: "Post", value: o => o.designation },
     { key: "boss", label: "Reports To", value: o => byId.get(o.manager_id || "")?.name }, { key: "zone", label: "Zone", value: o => o.zone || o.state },
     { key: "hq", label: "HQ", value: o => o.hq || o.region }, { key: "areas", label: "Areas", value: o => o.areas }, { key: "phone", label: "Phone", value: o => o.phone },
-    { key: "status", label: "Status", value: o => (o.active ? "Working" : "Left") },
+    { key: "status", label: "Status", value: o => (o.active ? "Active" : "Dormant") },
   ];
   const t = useColumnFilters(officers, cols);
   const f = (k: keyof Form) => ({ value: String(form[k]), onChange: (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value }) });
@@ -156,7 +169,7 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
         <label>Phone<input {...f("phone")} inputMode="tel" /></label>
         <label className="wide">Areas they cover <small>towns or beats, comma-separated</small><input {...f("areas")} /></label>
         <label className="wide">Other names in their sheets <small>optional</small><input {...f("aliases")} /></label>
-        {editing && <label className="inline"><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Still working</label>}
+        {editing && <label className="inline"><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Active</label>}
       </div>
       <div className="actions">{editing && <button className="secondary" onClick={() => { setEditing(null); setForm(blank); }}>Cancel</button>}
         <button disabled={busy} onClick={save}>{editing ? "Save Changes" : "Add Person"}</button></div>
@@ -166,7 +179,9 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
       <div className="duplist">{dupes.slice(0, 20).map(([a, b]) => <span key={a.id + b.id} className="chip">{b.name} / {a.name}<button className="secondary small" onClick={() => merge(a, b)}>Same Person: Merge</button><button className="secondary small" onClick={() => different(a, b)}>Different People</button></span>)}</div></div>}
     {t.sortBar}
     <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{cols.map(c => t.head(c.key))}{canManage && <th />}</tr></thead>
-      <tbody>{t.rows.map(o => <tr key={o.id} className={o.active ? "" : "muted"}>{cols.map(c => <td key={c.key} className={c.key === "areas" ? "wrap" : ""}>{c.key === "name" ? <b>{o.name}</b> : c.value(o)}</td>)}
+      <tbody>{t.rows.map(o => <tr key={o.id} className={o.active ? "" : "muted"}>{cols.map(c => <td key={c.key} className={c.key === "areas" ? "wrap" : ""}>{c.key === "name" ? <b>{o.name}</b>
+        : c.key === "status" ? <button role="switch" aria-checked={o.active} className={`switch${o.active ? " on" : ""}`} disabled={!canManage} title={canManage ? (o.active ? "Active: click to mark dormant (asks for your password)" : "Dormant: click to make active") : undefined} onClick={() => toggleActive(o)}><i aria-hidden /><span>{o.active ? "Active" : "Dormant"}</span></button>
+        : c.value(o)}</td>)}
         {canManage && <td><button className="secondary small" onClick={() => { setEditing(o); setOpen(true); setMsg(null); setForm({ name: o.name, designation: o.designation || "SO", manager_id: o.manager_id || "", zone: o.zone || o.state || "", hq: o.hq || o.region || "", areas: o.areas || "", phone: o.phone || "", aliases: (o.aliases || []).join(", "), active: o.active }); }}>Edit</button></td>}</tr>)}</tbody></table>
       {!officers.length && <p className="empty">No staff yet. Import your staff list, or upload a DSR and the people in it are added.</p>}</div>
   </section>;

@@ -14,6 +14,7 @@ import DistributorReport, { Billing, collectionPct } from "../components/Distrib
 import { readDsr, mergeBooks, DsrBook, DsrDay, teamTotal as sheetTeamTotal } from "../lib/dsr";
 import { exportPng } from "../lib/present";
 import { startTask, breathe } from "../lib/tasks";
+import { dmy, longDate } from "../lib/dates";
 
 interface Day { id: string; so_id: string; day: string; state: string | null; manager: string | null; hq: string | null; db_name: string | null; distributor_id: string | null; town: string | null; beat: string | null; remark: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number }
 interface Prod { product: string; category: string | null; qty: number; value: number }
@@ -82,7 +83,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
       setDays(d); setStates(s as StateDay[]); setBills((b.data || []) as Billing[]); setErr("");
       const lastDay = (l.data as { day: string }[] | null)?.[0]?.day;
       if (lastDay) { const { data } = await supabase!.from("dsr_days").select("*").eq("day", lastDay); if (live) setLatest((data || []) as Day[]); } else setLatest([]);
-      task.ok(`${plural(d.length, "SO day")} from ${range.from} to ${range.to}.`);
+      task.ok(`${plural(d.length, "SO day")} from ${dmy(range.from)} to ${dmy(range.to)}.`);
     }).catch(e => { if (!live) return; task.fail(errText(e)); setErr(`Couldn't load SO reports: ${errText(e)}. Run the latest database steps (009 and 010) in Supabase.`); })
     return () => { live = false; task.cancel(); };
   }, [range.from, range.to, reload]);
@@ -209,7 +210,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
     return out;
   }, [range.from, range.to]);
   const byDay = useMemo(() => { const m = new Map<string, number>(); view.forEach(d => m.set(d.day, (m.get(d.day) || 0) + n(d.sale_value))); return m; }, [view]);
-  const trend: ChartData = { type: "lines", unit: "money", summary: "", x: dates.map(d => `${Number(d.slice(8))} ${new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { month: "short" })}`),
+  const trend: ChartData = { type: "lines", unit: "money", summary: "", x: dates.map(d => dmy(d)),
     series: [{ key: "sec", name: "Secondary", slot: 1 }], values: [dates.map(d => byDay.get(d) || 0)] };
   const topPeople: ChartData = { type: "bars", unit: "money", summary: "", more: Math.max(0, sums.length - 12), series: [{ key: "v", name: "Secondary", slot: 1 }],
     rows: [...sums].sort((a, b) => b.value - a.value).slice(0, 12).map(s => ({ key: s.soId, label: s.so?.name || "Unknown", sub: s.so?.hq || "", values: [s.value] })) };
@@ -327,7 +328,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
         <div className="metric"><small>Distributors worked</small><b>{fmt(new Set(view.map(d => d.distributor_id || d.db_name).filter(Boolean)).size)}</b></div>
       </div>
       {latestDay && <section className="card">
-        <div className="rowhead"><h2>Latest Day: {new Date(`${latestDay}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</h2>
+        <div className="rowhead"><h2>Latest Day: {new Date(`${latestDay}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long" })}, {longDate(latestDay)}</h2>
           <span className="muted">{money(latestRows.reduce((a, d) => a + n(d.sale_value), 0))} secondary · {plural(latestRows.filter(d => WORKING.has(d.attendance || "")).length, "person", "people")} working</span></div>
         <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Name</th><th>Attendance</th><th>DB</th><th>Town / Beat</th><th>Calls</th><th>PC</th><th>Secondary</th><th>Remark</th></tr></thead>
           <tbody>{[...latestRows].sort((a, b) => n(b.sale_value) - n(a.sale_value)).map(d => <tr key={d.id}><td>{byId.get(d.so_id)?.name}</td><td><i className={cls(d.attendance)}>{d.attendance}</i></td>
@@ -335,7 +336,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
             {notReported.map(o => <tr key={o.id} className="flagged"><td>{o.name}</td><td><i className="att a-none">No report</i></td><td colSpan={6} className="muted">Nothing logged for this day</td></tr>)}</tbody></table></div>
       </section>}
       {view.length > 0 ? <section className="card" ref={charts}>
-        <div className="rowhead"><h2>Charts</h2><button className="secondary" onClick={() => charts.current && exportPng(charts.current, "SO charts", `Sales team, ${range.from} to ${range.to}`).catch(e => notify(errText(e)))}>Export Charts</button></div>
+        <div className="rowhead"><h2>Charts</h2><button className="secondary" onClick={() => charts.current && exportPng(charts.current, "SO charts", `Sales team, ${dmy(range.from)} to ${dmy(range.to)}`).catch(e => notify(errText(e)))}>Export Charts</button></div>
         <div className="reportcharts">
           <section><h3>Secondary sales by day</h3><ChartView data={trend} size="focus" labels={false} /></section>
           <section><h3>Top people by secondary</h3><ChartView data={topPeople} size="card" /></section>
@@ -384,7 +385,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
       </section>
       <section className="card">
         <h2>Bookings, Billing And Collection By Distributor</h2>
-        {stateGaps.length > 0 && <div className="warn">The state total sheet doesn't match the SO sheets on {plural(stateGaps.length, "day")}: {stateGaps.slice(0, 5).map(s => `${s.state} ${s.day} (state total ${money(s.sale_value)}, SOs add up to ${money(s.sos)})`).join("; ")}{stateGaps.length > 5 ? "…" : ""}.</div>}
+        {stateGaps.length > 0 && <div className="warn">The state total sheet doesn't match the SO sheets on {plural(stateGaps.length, "day")}: {stateGaps.slice(0, 5).map(s => `${s.state} ${dmy(s.day)} (state total ${money(s.sale_value)}, SOs add up to ${money(s.sos)})`).join("; ")}{stateGaps.length > 5 ? "…" : ""}.</div>}
         {dbRows.length > 0 ? <div className="tablewrap scrolltable"><table className="nice"><thead><tr><th>Distributor</th><th>SOs</th><th>SO Bookings</th><th>Billed To Them</th><th>Stock Now</th><th>Collection %</th><th>Flag</th></tr></thead>
           <tbody>{dbRows.slice(0, 300).map(r => <tr key={r.id} className={r.flag ? "flagged" : ""}><td>{r.loc ? <button className="link strong" onClick={() => setReport(r.loc!)}>{r.loc.name}</button> : "Deleted"}</td>
             <td className="wrap">{[...r.sos].join(", ")}</td><td>{money(r.value)}</td><td>{money(r.billed)}</td><td>{money(r.stockV)}</td><td>{r.cp === null ? "—" : `${fmt(r.cp)}%`}</td><td className="wrap">{r.flag && <span className="err">{r.flag}</span>}</td></tr>)}</tbody></table></div>
@@ -396,8 +397,8 @@ export default function SOReports({ officers, locations, stock, products, canMan
     {tab === "attendance" && (sums.length ? <section className="card">
       <h2>Attendance</h2>
       <div className="legend attlegend">{Object.entries(SHORT).map(([k, v]) => <span key={k}><i className={cls(k)}>{v}</i>{k}</span>)}</div>
-      <div className="tablewrap scrolltable"><table className="attgrid"><thead><tr><th>Name</th>{gridDates.map(d => <th key={d} title={d}>{Number(d.slice(8))}<small>{wd(d).slice(0, 2)}</small></th>)}<th>Working days</th></tr></thead>
-        <tbody>{sums.map(s => <tr key={s.soId}><td>{s.so?.name}</td>{gridDates.map(d => { const a = grid.get(`${s.soId}|${d}`); return <td key={d} title={`${d}: ${a || "no row"}`}>{a && <i className={cls(a)}>{SHORT[a] || "?"}</i>}</td>; })}<td><b>{working(s)}</b></td></tr>)}</tbody></table></div>
+      <div className="tablewrap scrolltable"><table className="attgrid"><thead><tr><th>Name</th>{gridDates.map(d => <th key={d} title={dmy(d)}>{Number(d.slice(8))}<small>{wd(d).slice(0, 2)}</small></th>)}<th>Working days</th></tr></thead>
+        <tbody>{sums.map(s => <tr key={s.soId}><td>{s.so?.name}</td>{gridDates.map(d => { const a = grid.get(`${s.soId}|${d}`); return <td key={d} title={`${dmy(d)}: ${a || "no row"}`}>{a && <i className={cls(a)}>{SHORT[a] || "?"}</i>}</td>; })}<td><b>{working(s)}</b></td></tr>)}</tbody></table></div>
     </section> : <p className="empty">No daily reports in this period.</p>)}
 
     {tab === "log" && (view.length ? <section className="card">
@@ -405,7 +406,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
       {dt.sortBar}
       <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{dcols.map(c => dt.head(c.key))}</tr></thead>
         <tbody>{dt.rows.slice(0, 2000).map(d => <tr key={d.id} className={WORKING.has(d.attendance || "") ? "" : "muted"}>{dcols.map(c => <td key={c.key} className={c.key === "remark" || c.key === "beat" ? "wrap" : ""}>
-          {c.key === "att" ? <i className={cls(d.attendance)}>{d.attendance}</i> : c.key === "value" ? money(c.value(d)) : c.value(d)}</td>)}</tr>)}</tbody></table></div>
+          {c.key === "att" ? <i className={cls(d.attendance)}>{d.attendance}</i> : c.key === "value" ? money(c.value(d)) : c.key === "day" ? dmy(d.day) : c.value(d)}</td>)}</tr>)}</tbody></table></div>
       {dt.rows.length > 2000 && <p className="hint">Showing 2,000 of {dt.rows.length}. Export to Excel for all of them.</p>}
     </section> : <p className="empty">No daily reports in this period.</p>)}
 
@@ -421,7 +422,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
       <p className="hint">Upload the DSR workbooks for any states, one or several at a time, every day. Every sheet is read: SO sheets give each person's days, the state total is used to check them, and summary sheets are noted. New days are added; a day already logged for a person stays unless you choose to replace it.</p>
       {check && <div className="fixbox">
         <b>{check.files}</b>: {plural(check.fresh.length, "new day")} to add, {plural(check.same, "day")} already logged with the same figures{check.book.stateDays.length ? `, ${plural(check.book.stateDays.length, "state-total day")}` : ""}, {plural(check.book.products.length, "product")} with SS rates.
-        {check.changed.length > 0 && <div className="warn">{plural(check.changed.length, "day")} {check.changed.length === 1 ? "is" : "are"} already logged for the same person with different figures, which is a discrepancy: {check.changed.slice(0, 6).map(c => `${c.d.so} on ${c.d.day} (logged ${money(c.old.sale_value)}, ${c.old.total_calls} calls; now ${money(c.d.sale_value)}, ${c.d.total_calls} calls)`).join("; ")}{check.changed.length > 6 ? "…" : ""}.
+        {check.changed.length > 0 && <div className="warn">{plural(check.changed.length, "day")} {check.changed.length === 1 ? "is" : "are"} already logged for the same person with different figures, which is a discrepancy: {check.changed.slice(0, 6).map(c => `${c.d.so} on ${dmy(c.d.day)} (logged ${money(c.old.sale_value)}, ${c.old.total_calls} calls; now ${money(c.d.sale_value)}, ${c.d.total_calls} calls)`).join("; ")}{check.changed.length > 6 ? "…" : ""}.
           <label className="inline"><input type="checkbox" checked={replaceChanged} onChange={e => setReplaceChanged(e.target.checked)} /> Replace them with this upload</label></div>}
         {check.book.dupes.length > 0 && <div className="warn">The same person appears twice on the same day in this upload ({plural(check.book.dupes.length, "time")}); only the first is used: {check.book.dupes.slice(0, 5).join("; ")}{check.book.dupes.length > 5 ? "…" : ""}.</div>}
         <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>File</th><th>Sheet</th><th>Read As</th><th>Rows</th><th>Note</th></tr></thead>

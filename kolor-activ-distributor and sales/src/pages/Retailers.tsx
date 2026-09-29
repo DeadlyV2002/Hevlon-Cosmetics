@@ -10,6 +10,7 @@ import DateRange, { PRESETS, Range } from "../components/DateRange";
 import DistributorReport, { Billing, collectionPct } from "../components/DistributorReport";
 import { STATES, normalizeState } from "../lib/india";
 import FilterBar, { Scope, emptyScope, applyScope, scopeLabel } from "../components/FilterBar";
+import { dmy } from "../lib/dates";
 
 type RField = "name" | "distributor" | "owner_name" | "phone" | "territory" | "code";
 const R_LABELS: Record<RField | "ignore", string> = { ignore: "— ignore —", name: "Retailer name", distributor: "Distributor", owner_name: "Owner", phone: "Phone", territory: "Area / beat", code: "Code" };
@@ -189,7 +190,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
   const retailerTable = (rs: Retailer[]) => <table className="inner"><thead><tr><th>Retailer</th><th>Code</th><th>Owner</th><th>Phone</th><th>Area / beat</th><th>Billed</th><th>Paid</th><th>Collection %</th><th>First seen</th>{canManage && <th />}</tr></thead>
     <tbody>{[...rs].sort((a, b) => a.name.localeCompare(b.name)).map(r => { const rb = billOf(r.id, "RETAILER"), rp = pctOf(r.id, "RETAILER"); return <tr key={r.id}><td>{r.name}</td><td>{r.code}</td><td>{r.owner_name}</td><td>{r.phone}</td><td>{r.territory}</td>
       <td>{rb ? money(rb.billed) : "—"}</td><td>{rb ? money(rb.collected) : "—"}</td><td>{rp === null ? "—" : <span className={`pctbar${rp < 50 ? " low" : rp < 80 ? " mid" : " good"}`}>{fmt(rp)}%</span>}</td>
-      <td>{String(r.created_at || "").slice(0, 10)}</td>
+      <td>{dmy(r.created_at)}</td>
       {canManage && <td className="actions"><button className="secondary small" onClick={() => edit(r)}>Edit</button><button className="del" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>✕</button></td>}</tr>; })}</tbody></table>;
 
   return <>
@@ -288,7 +289,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
         <tbody>{list.slice(0, 2000).map(r => {
           const d = byId.get(r.distributor_id || ""), ss = d?.kind === "SUPER_STOCKIST" ? d : byId.get(d?.parent_id || "");
           return <tr key={r.id}><td>{r.name}</td><td>{r.code}</td><td>{d?.name}</td><td>{ss?.name}</td><td>{d?.state}</td><td>{d?.region}</td><td>{r.territory}</td><td>{r.owner_name}</td><td>{r.phone}</td>
-            <td>{String(r.created_at || "").slice(0, 10)}</td>
+            <td>{dmy(r.created_at)}</td>
             {canManage && <td className="actions"><button className="secondary small" onClick={() => edit(r)}>Edit</button><button className="del" aria-label={`Delete ${r.name}`} onClick={() => remove(r)}>✕</button></td>}</tr>;
         })}</tbody></table>
         {list.length > 2000 && <p className="hint">Showing 2,000 of {list.length}. Narrow the filters or export to Excel for all of them.</p>}

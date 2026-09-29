@@ -9,6 +9,7 @@ import SalesOfficers from "./SalesOfficers";
 import { startTask } from "../lib/tasks";
 import CheckAll, { CheckItem, Fix, whatsapp } from "../components/CheckAll";
 import { normName } from "../lib/parse";
+import { dmy, dmyText } from "../lib/dates";
 
 type Tab = "oversell" | "aged" | "vs" | "retailers" | "low" | "stale" | "counts";
 interface Oversell { distributor_id: string; product_id: string; report_date: string; so_qty: number; so_total: number; available: number; so_names: string; has_stock_data: boolean }
@@ -166,7 +167,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
     const rows = t.count ? rowsFor[t.id]() : [], head = rows.length ? Object.keys(rows[0]) : [], x = extra[t.id];
     return { id: t.id, label: t.label, count: t.count, help: t.help, tab: t.id, fixes: t.count ? fixesFor(t.id) : [],
       head: x ? [...head, x.head] : head,
-      lines: rows.map((r, i) => ({ cells: [...Object.values(r as Record<string, unknown>).map(v => (typeof v === "number" ? fmt(v, 2) : String(v ?? ""))), ...(x ? [x.cell(i)] : [])], ok: false })) };
+      lines: rows.map((r, i) => ({ cells: [...Object.values(r as Record<string, unknown>).map(v => (typeof v === "number" ? fmt(v, 2) : dmyText(String(v ?? "")))), ...(x ? [x.cell(i)] : [])], ok: false })) };
   }), [data, scope, so, agedDays, staleDays, byId, productById, canManage, range.from, range.to]);
 
   return <>
@@ -189,20 +190,20 @@ export default function SOChecks({ locations, products, officers, canManage, onC
         <div className="tablewrap">
           {tab === "oversell" && <table><thead><tr><th>Date</th><th>SO(s)</th><th>Distributor</th><th>Product</th><th>SO sales that day</th><th>SO sales so far</th><th>Distributor had</th><th>Sold without stock</th></tr></thead>
             <tbody>{oversell.map(o => { const p = prod(o.product_id); return <tr key={`${o.distributor_id}${o.product_id}${o.report_date}`}>
-              <td>{o.report_date}</td><td className="wrap">{o.so_names}</td><td>{loc(o.distributor_id)?.name}</td><td>{pname(o.product_id)}</td>
+              <td>{dmy(o.report_date)}</td><td className="wrap">{o.so_names}</td><td>{loc(o.distributor_id)?.name}</td><td>{pname(o.product_id)}</td>
               <td>{fmt(o.so_qty)}</td><td>{fmt(o.so_total)}</td><td>{fmt(o.available)}{!o.has_stock_data && <small className="missing">no stock data yet</small>}</td>
               <td className="out"><b>{fmt(n(o.so_total) - n(o.available))}</b></td></tr>; })}</tbody></table>}
           {tab === "aged" && <table><thead><tr><th>Distributor</th><th>Product</th><th>Stock</th><th>Unsold over {agedDays} days</th><th>Oldest stock</th><th>Last sold / sent</th><th>Aged value</th><th>SOs covering</th></tr></thead>
             <tbody>{aged.map(a => { const p = prod(a.product_id), age = daysSince(a.oldest_in, range.to); return <tr key={`${a.location_id}${a.product_id}`}>
               <td>{loc(a.location_id)?.name}<small className="muted">{ssOf(loc(a.location_id))}</small></td><td>{pname(a.product_id)}</td>
-              <td>{fmt(a.stock)}</td><td><b>{fmt(a.aged_qty)}</b></td><td>{age !== null ? `${age} days` : "—"}</td><td>{a.last_out || "never"}</td><td>{money(a.value)}</td><td className="wrap">{covers(a.location_id) || <span className="muted">none in this period</span>}</td></tr>; })}</tbody></table>}
+              <td>{fmt(a.stock)}</td><td><b>{fmt(a.aged_qty)}</b></td><td>{age !== null ? `${age} days` : "—"}</td><td>{dmy(a.last_out) || "never"}</td><td>{money(a.value)}</td><td className="wrap">{covers(a.location_id) || <span className="muted">none in this period</span>}</td></tr>; })}</tbody></table>}
           {tab === "vs" && <table><thead><tr><th>Distributor</th><th>Product</th><th>SO reported</th><th>Distributor's own sales / out</th><th>Extra claimed</th><th>Extra value</th><th>SO(s)</th><th>Compared up to</th></tr></thead>
             <tbody>{vs.map(v => <tr key={`${v.distributor_id}${v.product_id}`}>
               <td>{loc(v.distributor_id)?.name}</td><td>{pname(v.product_id)}</td><td>{fmt(v.so_checked)}</td><td>{fmt(v.dist_out)}</td>
               <td className="out"><b>{fmt(n(v.so_checked) - n(v.dist_out))}</b></td><td>{money((n(v.so_checked) - n(v.dist_out)) * price(v.product_id))}</td><td className="wrap">{v.so_names}</td>
-              <td>{v.data_until}</td></tr>)}</tbody></table>}
+              <td>{dmy(v.data_until)}</td></tr>)}</tbody></table>}
           {tab === "retailers" && <table><thead><tr><th>Date</th><th>SO</th><th>Distributor</th><th>Retailer</th><th>Problem</th><th>Product</th><th>Qty</th>{canManage && <th />}</tr></thead>
-            <tbody>{retailerProblems.slice(0, 2000).map(l => <tr key={l.id}><td>{l.report_date}</td><td>{l.so_name}</td><td>{l.distributor_name}</td><td>{l.retailer_name}</td>
+            <tbody>{retailerProblems.slice(0, 2000).map(l => <tr key={l.id}><td>{dmy(l.report_date)}</td><td>{l.so_name}</td><td>{l.distributor_name}</td><td>{l.retailer_name}</td>
               <td>{l.retailer_status === "MISSING" ? "no retailer given" : l.retailer_status === "OTHER_DISTRIBUTOR" ? <span className="err">listed under {l.retailer_other_distributor}</span> : "not in your retailer list"}</td>
               <td>{l.item_name}</td><td>{fmt(l.quantity)}</td>
               {canManage && <td>{l.retailer_status === "UNKNOWN" && <button className="secondary small" onClick={() => addRetailer(l)}>Add to list</button>}</td>}</tr>)}</tbody></table>}
@@ -211,9 +212,9 @@ export default function SOChecks({ locations, products, officers, canManage, onC
               <td>{fmt(p.closing)}</td><td>{fmt(p.qty_out)}</td><td className={p.cover < 2 ? "out" : ""}><b>{p.cover.toFixed(1)}</b></td></tr>)}</tbody></table>}
           {tab === "stale" && <table><thead><tr><th>Location</th><th>Type</th><th>State</th><th>Last stock count</th><th>Last sales file</th><th>Last file of its own</th><th>Days since their own data</th></tr></thead>
             <tbody>{stale.map(s => { const d = loc(s.location_id); return <tr key={s.location_id}><td>{d?.name}</td><td>{d ? KIND_LABEL[d.kind] : ""}</td><td>{d?.state}</td>
-              <td>{s.last_count || "never"}</td><td>{s.last_sale || "never"}</td><td>{s.last_file || "never"}</td><td><b>{s.days ?? "never sent"}</b></td></tr>; })}</tbody></table>}
+              <td>{dmy(s.last_count) || "never"}</td><td>{dmy(s.last_sale) || "never"}</td><td>{dmy(s.last_file) || "never"}</td><td><b>{s.days ?? "never sent"}</b></td></tr>; })}</tbody></table>}
           {tab === "counts" && <table><thead><tr><th>Date</th><th>Location</th><th>Product</th><th>Change</th><th>Value</th><th>File</th></tr></thead>
-            <tbody>{counts.map(c => <tr key={c.id}><td>{c.counted_on}</td><td>{c.place}</td><td>{pname(c.product_id)}</td>
+            <tbody>{counts.map(c => <tr key={c.id}><td>{dmy(c.counted_on)}</td><td>{c.place}</td><td>{pname(c.product_id)}</td>
               <td className={c.change > 0 ? "in" : "out"}>{c.change > 0 ? "+" : ""}{fmt(c.change)}</td><td>{money(c.change * price(c.product_id))}</td><td className="wrap">{c.source_file}</td></tr>)}</tbody></table>}
           {!current.count && !loading && <p className="empty">{tab === "stale" || tab === "low" || tab === "counts" ? "Nothing here for this selection." : "Nothing found for this selection and period."}</p>}
         </div>

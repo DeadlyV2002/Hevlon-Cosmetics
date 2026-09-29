@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ask } from "../lib/ask";
 import { supabase, Distributor, errText } from "../lib/supabase";
+import { dmyTime } from "../lib/dates";
 
 interface Comment { id: string; body: string; author_id: string | null; author_email: string | null; created_at: string }
 
@@ -45,7 +46,7 @@ export default function Comments({ location, userId, canManage, onCount }: { loc
     {list === null ? <p className="hint">Loading…</p> : !list.length ? <p className="empty">No comments yet.</p>
       : <ul className="commentlist">{list.map(c => <li key={c.id}>
         <p>{c.body}</p>
-        <small>{c.author_email || "someone"} · {new Date(c.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
+        <small>{c.author_email || "someone"} · {dmyTime(c.created_at)}
           {(c.author_id === userId || canManage) && <button className="link danger" onClick={() => remove(c)}>Delete</button>}</small>
       </li>)}</ul>}
   </div>;

@@ -5,6 +5,7 @@ import { localDate } from "../lib/parse";
 import { ChartConfig, ChartData, ChartKind, Ctx, KIND_SPECS, chartTitle, cleanCharts, defaultCharts, newChart } from "../lib/insights";
 import { ChartView, ChartSize } from "../components/Charts";
 import ChartEditor from "../components/ChartEditor";
+import { dmy } from "../lib/dates";
 
 interface Props { ctx: Ctx; userId: string; version: number; openKind: ChartKind | null; onOpened: () => void }
 
@@ -174,7 +175,7 @@ function Kpis({ ctx, version }: { ctx: Ctx; version: number }) {
     }).catch(() => setT(null));
   }, [version]);
   const stockValue = ctx.stock.reduce((a, s) => a + Number(s.stock_value || 0), 0);
-  const day = t?.lastDay ? new Date(`${t.lastDay}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "";
+  const day = t?.lastDay ? dmy(t.lastDay) : "";
   return <div className="kpis dashkpis">
     <div className="kpi"><small>Stock held (at SS rate)</small><b>{money(stockValue)}</b><span>{plural(new Set(ctx.stock.filter(s => Number(s.current_stock)).map(s => s.distributor_id)).size, "location")}</span></div>
     <div className="kpi"><small>Secondary this month</small><b>{money(t?.dsrMonth)}</b><span>from SO daily reports</span></div>

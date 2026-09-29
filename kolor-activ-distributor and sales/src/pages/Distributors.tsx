@@ -1,5 +1,6 @@
 import { Select } from "../components/Select";
-import { ask, askPassword } from "../lib/ask";
+import { ask } from "../lib/ask";
+import { confirmWithPassword } from "../lib/confirm";
 import { useDeferredValue, useMemo, useRef, useState } from "react";
 import { editDistance } from "../lib/fuzzy";
 import { startTask } from "../lib/tasks";
@@ -70,19 +71,14 @@ export default function Distributors({ locations, stock, retailers, officers, pr
     if (!supabase) return;
     const next = d.status === "DORMANT" ? "ACTIVE" : "DORMANT";
     if (next === "DORMANT") {
-      // Marking someone dormant needs the signed-in person's password.
-      const pw = await askPassword(`Mark ${d.name} as dormant? Their history stays; they get no stock reminders and can be hidden from lists.
-
-Enter your password to confirm.`, { ok: "Mark Dormant" });
-      if (!pw) return;
-      const email = (await supabase.auth.getUser()).data.user?.email;
-      const { error: bad } = email ? await supabase.auth.signInWithPassword({ email, password: pw }) : { error: new Error("not signed in") };
-      if (bad) return show("err", `${d.name} was not changed: that password isn't right.`);
+      const r = await confirmWithPassword(`Mark ${d.name} as dormant? Their history stays; they get no stock reminders and can be hidden from lists.`, "Mark Dormant");
+      if (r === "cancelled") return;
+      if (r === "wrong") return show("err", `${d.name} was not changed: that password isn't right.`);
     } else if (!await ask(`Mark ${d.name} as active again?`, { ok: "Mark Active" })) return;
     const { error } = await supabase.from("distributors").update({ status: next }).eq("id", d.id);
     if (error) return show("err", error.code === "42501" ? "Only HO admins and state managers can change this." : `Not changed: ${error.message}. Run database step 012.`);
     const held = stock.filter(x => x.distributor_id === d.id && Number(x.current_stock) > 0);
-    show("ok", `${d.name} is now ${next === "DORMANT" ? "dormant" : "active"}.${next === "DORMANT" && held.length ? ` They still hold ${plural(held.length, "product")} in the app. When the stock comes back, use Move Stock on the Inventory page: from ${d.name} to your godown, then "Move everything it holds".` : ""}`); await onChanged();
+    show("ok", `${d.name} is now ${next === "DORMANT" ? "dormant" : "active"}.${next === "DORMANT" && held.length ? ` They still hold ${plural(held.length, "product")} in the app. When it comes back, record it on the Inventory page under Stock Returned To The Godown ("Everything They Hold").` : ""}`); await onChanged();
   }
   const [openComments, setOpenComments] = useState<string | null>(null), [showTree, setShowTree] = useState(false);
   const [report, setReport] = useState<Distributor | null>(null);

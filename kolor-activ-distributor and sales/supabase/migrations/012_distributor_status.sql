@@ -376,3 +376,29 @@ begin
 end $$;
 revoke all on function public.merge_locations(uuid, uuid) from public, anon;
 grant execute on function public.merge_locations(uuid, uuid) to authenticated;
+
+-- ---------- Separating a name that was merged into the wrong person ----------
+-- The other name becomes its own person again (same zone and state), and the two are marked as
+-- different people so they aren't offered for merging again. Days already merged stay where they are:
+-- the app can't tell which of them came from the other name. Sheets from now on match the new person.
+create or replace function public.split_staff_name(p_id uuid, p_name text) returns uuid
+language plpgsql security definer set search_path=public as $$
+declare src sales_officers%rowtype; nid uuid;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can change the sales team.'; end if;
+  select * into src from sales_officers where id = p_id;
+  if src.id is null then raise exception 'That person no longer exists.'; end if;
+  if nullif(trim(p_name), '') is null then raise exception 'No name to separate.'; end if;
+  update sales_officers set aliases = array(select a from unnest(coalesce(aliases, '{}')) a where norm_name(a) <> norm_name(p_name)) where id = p_id;
+  select id into nid from sales_officers where norm_name(name) = norm_name(p_name) and id <> p_id limit 1;
+  if nid is null then
+    insert into sales_officers(code, name, state, zone, designation, active)
+    values ('SO' || lpad((coalesce((select max(substring(code from '^SO(\d+)$')::int) from sales_officers), 0) + 1)::text, 3, '0'), trim(p_name), src.state, src.zone, 'SO', true)
+    returning id into nid;
+  end if;
+  update sales_officers set not_same = array(select distinct x from unnest(not_same || nid) x) where id = p_id;
+  update sales_officers set not_same = array(select distinct x from unnest(not_same || p_id) x) where id = nid;
+  return nid;
+end $$;
+revoke all on function public.split_staff_name(uuid, text) from public, anon;
+grant execute on function public.split_staff_name(uuid, text) to authenticated;

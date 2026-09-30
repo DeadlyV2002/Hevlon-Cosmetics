@@ -135,6 +135,17 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
     if (error) return setMsg({ kind: "err", text: `Not changed: ${errText(error)}` });
     setMsg({ kind: "ok", text: `${o.name} is now ${o.active ? "dormant" : "active"}.` }); await onChanged();
   }
+  /** Similar-looking people, shown on the row of the one that would be kept. */
+  const likes = useMemo(() => { const m = new Map<string, SalesOfficer[]>(); dupes.forEach(([a, b]) => m.set(a.id, [...(m.get(a.id) || []), b])); return m; }, [dupes]);
+  /** A name merged into the wrong person becomes its own person again. */
+  async function separate(o: SalesOfficer, name: string) {
+    if (!supabase || !await ask(`Make "${name}" a separate person from ${o.name}?
+
+From now on, sheets with the name "${name}" go to the new entry. Days already merged stay with ${o.name}.`, { ok: "Separate" })) return;
+    const { error } = await supabase.rpc("split_staff_name", { p_id: o.id, p_name: name });
+    if (error) return setMsg({ kind: "err", text: `Not separated: ${errText(error)}. Run database step 012.` });
+    setMsg({ kind: "ok", text: `${name} is now a separate person from ${o.name}.` }); await onChanged();
+  }
   async function merge(keep: SalesOfficer, drop: SalesOfficer) {
     if (!supabase || !await ask(`Merge "${drop.name}" into "${keep.name}"? Their daily reports, distributors and team move to ${keep.name}, and "${drop.name}" is kept as another spelling.`)) return;
     const { error } = await supabase.rpc("merge_staff", { p_keep: keep.id, p_drop: drop.id });
@@ -186,7 +197,9 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
       <div className="duplist">{dupes.slice(0, 20).map(([a, b]) => <span key={a.id + b.id} className="chip">{b.name} / {a.name}<button className="secondary small" onClick={() => merge(a, b)}>Same Person: Merge</button><button className="secondary small" onClick={() => different(a, b)}>Different People</button></span>)}</div></div>}
     {t.sortBar}
     <div className="tablewrap scrolltable"><table className="nice"><thead><tr>{cols.map(c => t.head(c.key))}{canManage && <th />}</tr></thead>
-      <tbody>{t.rows.map(o => <tr key={o.id} className={o.active ? "" : "muted"}>{cols.map(c => <td key={c.key} className={c.key === "areas" ? "wrap" : ""}>{c.key === "name" ? <b>{o.name}</b>
+      <tbody>{t.rows.map(o => <tr key={o.id} className={o.active ? "" : "muted"}>{cols.map(c => <td key={c.key} className={c.key === "areas" ? "wrap" : ""}>{c.key === "name" ? <><b>{o.name}</b>
+          {(o.aliases || []).length > 0 && <div className="namechips"><small className="muted">Also:</small>{(o.aliases || []).map(a => <span key={a} className="chip">{a}{canManage && <button className="link" title={`${a} is someone else: make them a separate person`} onClick={() => separate(o, a)}>Separate</button>}</span>)}</div>}
+          {canManage && (likes.get(o.id) || []).length > 0 && <div className="namechips"><small className="muted">Looks like:</small>{likes.get(o.id)!.map(b => <span key={b.id} className="chip warnchip">{b.name}<button className="secondary small" onClick={() => merge(o, b)}>Same Person</button><button className="secondary small" onClick={() => different(o, b)}>Different</button></span>)}</div>}</>
         : c.key === "status" ? <button role="switch" aria-checked={o.active} className={`switch${o.active ? " on" : ""}`} disabled={!canManage} title={canManage ? (o.active ? "Active: click to mark dormant (asks for your password)" : "Dormant: click to make active") : undefined} onClick={() => toggleActive(o)}><i aria-hidden /><span>{o.active ? "Active" : "Dormant"}</span></button>
         : c.value(o)}</td>)}
         {canManage && <td><button className="secondary small" onClick={() => { setEditing(o); setOpen(true); setMsg(null); setForm({ name: o.name, designation: o.designation || "SO", manager_id: o.manager_id || "", zone: o.zone || o.state || "", hq: o.hq || o.region || "", areas: o.areas || "", phone: o.phone || "", aliases: (o.aliases || []).join(", "), active: o.active }); }}>Edit</button></td>}</tr>)}</tbody></table>

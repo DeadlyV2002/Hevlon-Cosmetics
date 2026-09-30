@@ -58,9 +58,13 @@ export function looksAlike(a: string, b: string) {
   const bare = (x: string) => normName(x.replace(/^(md|mohd|mr|smt|shri)\.?\s+/i, ""));
   const x = bare(a), y = bare(b), fx = x.replace(/ /g, ""), fy = y.replace(/ /g, "");
   if (!fx || !fy) return false;
-  if (fx === fy || sameWords(x, y) || similarity(x, y) >= 0.85) return true;
+  if (fx === fy || sameWords(x, y)) return true;
   const [short, long] = fx.length <= fy.length ? [fx, fy] : [fy, fx];
   if (short.length >= 6 && long.startsWith(short)) return true;
+  // Two full names with clearly different first names are different people ("Ajay Kumar Singh" / "Aman Kumar Singh").
+  const [f1, f2] = [x.split(" "), y.split(" ")];
+  if (f1.length >= 2 && f2.length >= 2 && similarity(f1[0], f2[0]) < 0.7) return false;
+  if (similarity(x, y) >= 0.85) return true;
   // The first names nearly the same ("Upendar" / "Upendra") and one person has just the one name.
   const [w1, w2] = [x.split(" "), y.split(" ")];
   return (w1.length === 1 || w2.length === 1) && w1[0].length >= 5 && similarity(w1[0], w2[0]) >= 0.7;

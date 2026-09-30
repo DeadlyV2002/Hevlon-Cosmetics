@@ -2,7 +2,7 @@ import { Select } from "../components/Select";
 import { ask } from "../lib/ask";
 import { confirmWithPassword } from "../lib/confirm";
 import { useDeferredValue, useMemo, useRef, useState } from "react";
-import { editDistance } from "../lib/fuzzy";
+import { editDistance, closeLocation } from "../lib/fuzzy";
 import { startTask } from "../lib/tasks";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, Kind, KINDS, KIND_LABEL, KIND_PLURAL, Retailer, SalesOfficer, StockLine, nextCode, missingFields, matchDistributor, matchSO, cleanPhones, proper, fmt, plural, errText } from "../lib/supabase";
@@ -179,7 +179,7 @@ export default function Distributors({ locations, stock, retailers, officers, pr
       const ssName = tab === "DISTRIBUTOR" ? proper(v("super_stockist")) : "";
       // "Direct", "Company" or "Kolor Activ" in the SS column: the company supplies them itself.
       const isDirect = /^(direct|company|kolor|hevlon|ho|head office|self)/i.test(ssName.trim());
-      if (ssName && !isDirect) { const ss = matchDistributor(ssName, supers); if (ss) parent_id = ss.id; else { newSS = ssName; parent_id = null; } }
+      if (ssName && !isDirect) { const ss = matchDistributor(ssName, supers) || closeLocation(ssName, supers, normalizeState(v("state")) || existing?.state, proper(v("ss_town"))); if (ss) parent_id = ss.id; else { newSS = ssName; parent_id = null; } }
       if (isDirect) parent_id = null;
       const row: Row = {
         id: existing?.id, code, kind: tab, name,

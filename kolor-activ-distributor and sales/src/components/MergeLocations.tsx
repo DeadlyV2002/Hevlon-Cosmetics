@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { supabase, Distributor, StockLine, KIND_LABEL, plural, errText } from "../lib/supabase";
 import { normName } from "../lib/parse";
 import { nameScore, sameState } from "../lib/dsrLink";
+import { sameBusinessName, otherTown } from "../lib/fuzzy";
 import { ask } from "../lib/ask";
 import { runTask } from "../lib/tasks";
 import { Select } from "./Select";
@@ -13,18 +14,18 @@ export default function MergeLocations({ locations, stock, onMerged, notify }: {
   const kids = useMemo(() => { const m = new Map<string, number>(); locations.forEach(l => { if (l.parent_id) m.set(l.parent_id, (m.get(l.parent_id) || 0) + 1); }); return m; }, [locations]);
   // The entry with more attached to it is kept.
   const weight = (l: Distributor) => (kids.get(l.id) || 0) * 1000 + (held.get(l.id) || 0);
-  // Pairs of the same kind, in the same state, whose names are nearly the same.
+  // Pairs of the same kind, in the same state and town, whose names are nearly the same
+  // ("New Maa Kamakhya" / "New Maa Kamakhya Enterprises", "Parlar House" / "Parlor House").
   const pairs = useMemo(() => {
     const out: [Distributor, Distributor][] = [];
-    if (!open) return out;
     for (let i = 0; i < locations.length; i++) for (let j = i + 1; j < locations.length; j++) {
       const a = locations[i], b = locations[j];
-      if (a.kind !== b.kind || !sameState(a.state, b.state)) continue;
-      if (Math.max(nameScore(a.name, b), nameScore(b.name, a)) < 0.85 && normName(a.name) !== normName(b.name)) continue;
+      if (a.kind !== b.kind || !sameState(a.state, b.state) || otherTown(a.territory, b.territory)) continue;
+      if (normName(a.name) !== normName(b.name) && !sameBusinessName(a.name, b.name) && Math.max(nameScore(a.name, b), nameScore(b.name, a)) < 0.85) continue;
       out.push(weight(a) >= weight(b) ? [a, b] : [b, a]);
     }
     return out;
-  }, [locations, held, kids, open]);
+  }, [locations, held, kids]);
   const shown = pairs.filter(([a, b]) => !hidden.has(`${a.id}|${b.id}`));
 
   async function merge(k: Distributor, d: Distributor) {
@@ -47,7 +48,7 @@ export default function MergeLocations({ locations, stock, onMerged, notify }: {
     {locations.filter(l => l.kind === k && l.id !== skip).map(l => <option key={l.id} value={l.id}>{l.name} ({l.code}){l.territory ? ` · ${l.territory}` : ""}{l.state ? ` · ${l.state}` : ""}</option>)}</optgroup>);
 
   return <section className="card">
-    <div className="rowhead"><div><h2>Merge Two Entries{shown.length ? ` (${shown.length} look alike)` : ""}</h2>
+    <div className="rowhead"><div><h2>Merge Two Entries{shown.length ? <em className="tag warn"> {shown.length} look alike</em> : null}</h2>
       <p className="hint">When the same distributor or super stockist is in the list twice (spelt differently, or added again by an upload), merge them: everything moves to the one you keep.</p></div>
       <button className="secondary" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? "Hide" : "Merge"}</button></div>
     {open && <>

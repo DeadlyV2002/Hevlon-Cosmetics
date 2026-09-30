@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase, Distributor, Product, ProductAlias, fetchAll, matchDistributor, matchProduct, nextCode, proper, fmt, money, plural, errText } from "../lib/supabase";
 import { normName } from "../lib/parse";
-import { similarity, guessProduct } from "../lib/fuzzy";
+import { similarity, guessProduct, closeLocation } from "../lib/fuzzy";
 import { PrimaryRead } from "../lib/primary";
 import { runTask } from "../lib/tasks";
 import { ask } from "../lib/ask";
@@ -48,6 +48,9 @@ export default function PrimarySales({ read, fileName, locations, products, alia
     return [...m.values()].sort((a, b) => b.value - a.value).map(e => {
       const exact = matchDistributor(e.name, supers) || matchDistributor(e.name, dists.filter(d => !e.state || !d.state || normName(d.state) === normName(e.state)));
       if (exact) return { ...e, pick: exact.id, how: `same name${kindNote(exact)}` };
+      // The same name with or without "Enterprises", or a letter off ("Parlar House" / "Parlor House").
+      const close = closeLocation(e.name, supers, e.state, e.town) || closeLocation(e.name, dists, e.state, e.town);
+      if (close) return { ...e, pick: close.id, how: `similar name${kindNote(close)}, check` };
       // A close spelling in the same state ("Parlar House" / "Parlour House").
       let best: Distributor | undefined, score = 0;
       [...supers, ...dists].filter(s => !e.state || !s.state || normName(s.state) === normName(e.state)).forEach(s => {

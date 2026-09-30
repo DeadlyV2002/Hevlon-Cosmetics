@@ -69,3 +69,22 @@ export function looksAlike(a: string, b: string) {
   const [w1, w2] = [x.split(" "), y.split(" ")];
   return (w1.length === 1 || w2.length === 1) && w1[0].length >= 5 && similarity(w1[0], w2[0]) >= 0.7;
 }
+
+/** The distinctive part of a business name, run together: "New Maa Kamakhya Enterprises" → "newmaakamakhya". */
+const businessKey = (s: string) => keyWords(s.replace(/\(.*?\)/g, " ")).join("");
+/** One business written two ways: "New Maa Kamakhya" / "New Maa Kamakhya Enterprises", "Parlar House" / "Parlor House". */
+export function sameBusinessName(a: string, b: string) {
+  const x = businessKey(a), y = businessKey(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  return Math.min(x.length, y.length) >= 5 && 1 - editDistance(x, y) / Math.max(x.length, y.length) >= 0.85;
+}
+/** Two different towns ("Belur" / "Halisahar"), so a shared name like "Mahabir Enterprise" is two businesses. */
+export const otherTown = (a?: string | null, b?: string | null) => !!a?.trim() && !!b?.trim() && similarity(a, b) < 0.8;
+/** An entry in the list that is this name spelt a little differently, in the same state and town. */
+export function closeLocation<L extends { name: string; company_name?: string | null; aliases?: string[] | null; state?: string | null; territory?: string | null }>(
+  name: string, list: L[], state?: string | null, town?: string | null): L | undefined {
+  const st = normName(state || "");
+  return list.find(l => (!st || !l.state || normName(l.state) === st) && !otherTown(town, l.territory)
+    && [l.name, l.company_name || "", ...(l.aliases || [])].some(x => x && sameBusinessName(name, x)));
+}

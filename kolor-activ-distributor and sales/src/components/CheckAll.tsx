@@ -7,6 +7,7 @@ import { SURE } from "./DsrLinker";
 import { loadUnlinked, suggest, linkNames, suspectLinks, unlinkName } from "../lib/dsrLink";
 import { runTask, startTask, TaskHandle } from "../lib/tasks";
 import { dmy } from "../lib/dates";
+import SortTable from "./SortTable";
 
 /** A one-click fix: does the work and says what it did. */
 export interface Fix { label: string; hint?: string; run: (t: TaskHandle) => Promise<string> }
@@ -132,8 +133,8 @@ export default function CheckAll({ checks, officers, locations, canManage, onOpe
           {(i.fixes?.length || i.tab) && <div className="fixes">
             {i.fixes?.map(f => <div key={f.label} className="fixrow"><button disabled={!!busy} onClick={() => fix(f)}>{busy === f.label ? "Working…" : f.label}</button>{f.hint && <small className="muted">{f.hint}</small>}</div>)}
             {i.tab && <button className="secondary" onClick={() => onOpen(i.tab!)}>Open The Full Tab</button>}</div>}
-          {i.lines && (i.lines.length ? <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th />{i.head!.map((h, k) => <th key={k}>{h}</th>)}</tr></thead>
-            <tbody>{i.lines.slice(0, 500).map((l, k) => <tr key={k} className={l.ok || l.cant ? "" : "flagged"}><td>{l.ok ? "✓" : l.cant ? "•" : "⚠"}</td>{l.cells.map((c, j) => <td key={j} className="wrap">{c}</td>)}</tr>)}</tbody></table>
+          {i.lines && (i.lines.length ? <div className="tablewrap scrolltable short"><SortTable className="nice" rows={i.lines.map((l, k) => ({ ...l, k }))} limit={500} rowKey={l => String(l.k)} rowClass={l => (l.ok || l.cant ? undefined : "flagged")}
+              cols={[{ head: "", cell: l => (l.ok ? "✓" : l.cant ? "•" : "⚠") }, ...i.head!.map((h, j) => ({ head: h || "", cell: (l: Line) => l.cells[j], className: () => "wrap" }))]} />
             {i.lines.length > 500 && <p className="hint">First 500 of {fmt(i.lines.length)} lines. Download the full list from the tab.</p>}</div> : <p className="hint">Nothing to compare.</p>)}
         </div>
       </details>)}</div>

@@ -481,3 +481,84 @@ language sql stable set search_path=public as $$
 $$;
 revoke all on function public.dsr_product_totals(date, date, uuid[], text) from public, anon;
 grant execute on function public.dsr_product_totals(date, date, uuid[], text) to authenticated;
+
+-- ---------- One SKU entered under two names ----------
+-- "Strawberry Blast Tube" and "Strawberry Blast Tube 10 Gm" are one SKU: everything recorded for the
+-- second moves to the first, and its names are kept so files match it. A stock count is a count of the
+-- whole SKU, so each location's counts are worked through again in the order they were posted: a count
+-- sets the SKU's stock to what that file said (both names added up when one file had both), instead of
+-- the two names' stock being added together.
+create or replace function public.merge_products(p_keep uuid, p_drop uuid) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare r record; c record; moved int := 0; locs int := 0; bal numeric; diff numeric; first_id uuid; keep_name text; keep_sku text;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can merge SKUs.'; end if;
+  if p_keep = p_drop then raise exception 'Pick two different SKUs.'; end if;
+  select item_name, sku into keep_name, keep_sku from products where id = p_keep;
+  if keep_name is null then raise exception 'The SKU to keep no longer exists.'; end if;
+  if not exists (select 1 from products where id = p_drop) then raise exception 'That SKU no longer exists.'; end if;
+  -- What each stock count said, per name, before the two names are joined.
+  create temp table if not exists merge_counted(batch_id uuid, location_id uuid, at timestamptz, qty numeric) on commit drop;
+  delete from merge_counted;
+  insert into merge_counted
+    select t.batch_id, t.distributor_id, t.created_at,
+           (select coalesce(sum(case when x.mode = 'INPUT' then x.quantity else -x.quantity end), 0) from inventory_transactions x
+             where x.distributor_id = t.distributor_id and x.product_id = t.product_id and x.created_at <= t.created_at)
+      from inventory_transactions t
+     where t.product_id in (p_keep, p_drop) and t.source = 'COUNT' and t.batch_id is not null;
+  update inventory_transactions set product_id = p_keep where product_id = p_drop;
+  get diagnostics moved = row_count;
+  for r in select c2.conrelid::regclass::text tbl, a.attname col
+             from pg_constraint c2 join pg_attribute a on a.attrelid = c2.conrelid and a.attnum = c2.conkey[1]
+            where c2.contype = 'f' and c2.confrelid = 'public.products'::regclass and array_length(c2.conkey, 1) = 1
+              and c2.conrelid not in ('public.inventory_transactions'::regclass, 'public.product_aliases'::regclass) loop
+    begin
+      execute format('update %s set %I = $1 where %I = $2', r.tbl, r.col, r.col) using p_keep, p_drop;
+    exception when unique_violation then
+      execute format('delete from %s where %I = $1', r.tbl, r.col) using p_drop;
+    end;
+  end loop;
+  update product_aliases set product_id = p_keep where product_id = p_drop;
+  insert into product_aliases(product_id, alias)
+    select distinct p_keep, x from (select item_name x from products where id = p_drop union select sku from products where id = p_drop) s
+     where nullif(trim(x), '') is not null and norm_name(x) not in (norm_name(keep_name), norm_name(keep_sku))
+    on conflict do nothing;
+  -- Counts again, location by location, in the order they were posted.
+  for c in select distinct location_id from merge_counted loop
+    locs := locs + 1;
+    for r in select batch_id, max(at) at, sum(qty) q from merge_counted where location_id = c.location_id group by batch_id order by max(at) loop
+      select coalesce(sum(case when mode = 'INPUT' then quantity else -quantity end), 0) into bal from inventory_transactions
+       where distributor_id = c.location_id and product_id = p_keep and created_at <= r.at and not (source = 'COUNT' and batch_id is not distinct from r.batch_id);
+      diff := r.q - bal;
+      select id into first_id from inventory_transactions
+       where distributor_id = c.location_id and product_id = p_keep and batch_id = r.batch_id and source = 'COUNT' order by created_at, id limit 1;
+      delete from inventory_transactions
+       where distributor_id = c.location_id and product_id = p_keep and batch_id = r.batch_id and source = 'COUNT' and id <> first_id;
+      if diff = 0 then delete from inventory_transactions where id = first_id;
+      else update inventory_transactions set mode = case when diff > 0 then 'INPUT' else 'OUTPUT' end, quantity = abs(diff) where id = first_id;
+      end if;
+    end loop;
+  end loop;
+  update products k set category = coalesce(nullif(k.category, ''), d.category), box_pcs = coalesce(k.box_pcs, d.box_pcs),
+    ss_rate = coalesce(k.ss_rate, d.ss_rate), mrp = coalesce(k.mrp, d.mrp),
+    unit_price = case when coalesce(k.unit_price, 0) = 0 then d.unit_price else k.unit_price end
+    from products d where k.id = p_keep and d.id = p_drop;
+  delete from products where id = p_drop;
+  return jsonb_build_object('moved', moved, 'locations', locs);
+end $$;
+revoke all on function public.merge_products(uuid, uuid) from public, anon;
+grant execute on function public.merge_products(uuid, uuid) to authenticated;
+
+-- ---------- Distributors in the same market ----------
+-- For each distributor and SO: the first and last day the SO booked there, from the DSRs and SO reports.
+-- A new party opened next to an old one, with the same SO moving across, is a red flag.
+create or replace function public.distributor_booking_span() returns table(distributor_id uuid, so_id uuid, first_day date, last_day date, days int)
+language sql stable set search_path=public as $$
+  select distributor_id, so_id, min(d), max(d), count(distinct d)::int from (
+    select distributor_id, so_id, day d from dsr_days where distributor_id is not null
+    union all
+    select distributor_id, so_id, report_date from so_report_lines) x
+   group by 1, 2
+$$;
+revoke all on function public.distributor_booking_span() from public, anon;
+grant execute on function public.distributor_booking_span() to authenticated;

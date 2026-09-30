@@ -108,3 +108,22 @@ export function closeLocation<L extends { name: string; company_name?: string | 
   return list.find(l => (!st || !l.state || normName(l.state) === st) && !otherTown(town, l.territory)
     && [l.name, l.company_name || "", ...(l.aliases || [])].some(x => x && sameBusinessName(name, x)));
 }
+
+/** Words of a SKU name that tell it apart: brand, price and pack words dropped, sizes run together ("10 Gm" → "10gm"). */
+function skuWords(s: string) {
+  const t = s.toLowerCase().replace(/\bmrp\b|\d+\s*\/-|\(?\bpcs?\)?|\bkolor\b|\bactiv\b|^ka\b|\bbox\b|\bpack\b|\bnew\b/g, " ")
+    .replace(/(\d+)\s*(ml|gm|g|mg)\b/g, "$1$2").replace(/[^a-z0-9 ]/g, " ");
+  const all = t.split(/\s+/).filter(Boolean);
+  // Anything with a figure in it is a size or pack ("10gm", "9x1", "12 pc"): those must match.
+  return { size: all.filter(w => /\d/.test(w)).sort().join(","), words: all.filter(w => !/\d/.test(w)) };
+}
+/** One SKU written two ways: "Strawberry Blast Tube" / "Strawberry Blast Tube 10 Gm", "Glycerin-50ml Box Pack" / "Glycrine 50ml".
+ *  Different sizes are different SKUs. */
+export function sameProductName(a: string, b: string) {
+  const x = skuWords(a), y = skuWords(b);
+  if (x.size && y.size && x.size !== y.size) return false;
+  const [s, l] = x.words.length <= y.words.length ? [x.words, y.words] : [y.words, x.words];
+  if (!s.length || (s.length === 1 && s[0].length < 6)) return false;
+  const left = [...l];
+  return s.every(w => { const i = left.findIndex(v => wordAlike(w, v)); if (i < 0) return false; left.splice(i, 1); return true; });
+}

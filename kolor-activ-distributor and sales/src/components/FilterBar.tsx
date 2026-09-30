@@ -7,10 +7,12 @@ import { Distributor, Kind, KIND_LABEL, KIND_PLURAL } from "../lib/supabase";
 export interface Scope { kind: Kind | ""; state: string; region: string; ss: string; ids: string[] }
 export const emptyScope = (kind: Kind | "" = ""): Scope => ({ kind, state: "", region: "", ss: "", ids: [] });
 
-/** Locations that pass the state / region / super stockist filters. A super stockist filter keeps the SS itself too. */
+/** Locations that pass the state / region / super stockist filters. A super stockist filter keeps the SS itself too.
+ *  A super stockist without a state or region of its own is in the area its distributors are in (Arnav Traders: town Gaya, distributors in region Gaya). */
 export function scopePool(list: Distributor[], s: Scope): Distributor[] {
-  return list.filter(d => (!s.kind || d.kind === s.kind) && (!s.state || d.state === s.state)
-    && (!s.region || d.region === s.region) && (!s.ss || d.parent_id === s.ss || d.id === s.ss));
+  const kidsIn = (d: Distributor, f: "state" | "region", v: string) => d.kind === "SUPER_STOCKIST" && !d[f] && list.some(x => x.parent_id === d.id && x[f] === v);
+  return list.filter(d => (!s.kind || d.kind === s.kind) && (!s.state || d.state === s.state || kidsIn(d, "state", s.state))
+    && (!s.region || d.region === s.region || kidsIn(d, "region", s.region)) && (!s.ss || d.parent_id === s.ss || d.id === s.ss));
 }
 export function applyScope(list: Distributor[], s: Scope): Distributor[] {
   const pool = scopePool(list, s);

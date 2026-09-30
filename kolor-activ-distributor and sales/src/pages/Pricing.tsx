@@ -5,6 +5,7 @@ import { supabase, Distributor, Product, Margins, Scheme, schemesOn, marginsOn, 
 import { cellText, parseNum, today } from "../lib/parse";
 import { readAnyFile, ACCEPT } from "../lib/readers";
 import { dmy } from "../lib/dates";
+import MergeProducts from "../components/MergeProducts";
 
 interface Props {
   products: Product[]; locations: Distributor[]; margins: Margins; schemes: Scheme[];
@@ -286,6 +287,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       </div>}
       {msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}
     </section>
+    <MergeProducts products={products} canManage={canManage} onMerged={onChanged} notify={notify} />
   </>;
 }
 

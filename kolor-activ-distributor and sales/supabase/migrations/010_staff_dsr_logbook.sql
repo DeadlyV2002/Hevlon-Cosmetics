@@ -67,6 +67,8 @@ begin
       new_sos := new_sos + 1;
     end if;
     mg := trim(coalesce(d->>'manager', ''));
+    -- "Direct" / "Self" / "NA" in the manager column means no one above them, not a person called Direct.
+    if lower(mg) ~ '^(direct|self|na|n/a|none|nil|company|ho|head office|[-.]+)$' then mg := ''; end if;
     if mg <> '' then
       mid := find_so(mg);
       if mid is null then

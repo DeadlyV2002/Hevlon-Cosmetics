@@ -45,6 +45,26 @@ export function hasWord(words: string[], w: string) {
   return words.some(x => x === w || (w.length >= 5 && x.length >= 4 && editDistance(x, w) <= (w.length >= 8 ? 2 : 1)));
 }
 
+/** Letters apart, with two letters swapped counting as one ("Sharma" / "Shrama"). */
+export function typoDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i ? (j ? 0 : i) : j)));
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+  }
+  return d[a.length][b.length];
+}
+/** Two words of a name that are one word: "Chand" / "Chandra", "Sharma" / "Shrama", "Abhihsek" / "Abhishek". */
+const wordAlike = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 5 && (a.startsWith(b) || b.startsWith(a)))
+  || (Math.min(a.length, b.length) >= 5 && typoDistance(a, b) <= (Math.max(a.length, b.length) >= 8 ? 2 : 1));
+/** Full names whose words match one for one, allowing a spelling slip in each ("Suresh Chand Sharma" / "Suresh Chandra Shrama"). */
+function wordsAlike(a: string, b: string) {
+  const x = a.split(" ").filter(Boolean), y = b.split(" ").filter(Boolean);
+  const [s, l] = x.length <= y.length ? [x, y] : [y, x];
+  if (s.length < 2 || !wordAlike(s[0], l[0])) return false;
+  const left = l.slice(1);
+  return s.slice(1).every(w => { const i = left.findIndex(v => wordAlike(w, v)); if (i < 0) return false; left.splice(i, 1); return true; });
+}
 /** Same person when every word of the shorter name is in the longer one ("Amiya Kumar" and "Amiya Kumar Mohapatra"). */
 function sameWords(a: string, b: string) {
   const x = normName(a).split(" ").filter(Boolean), y = normName(b).split(" ").filter(Boolean);
@@ -58,7 +78,7 @@ export function looksAlike(a: string, b: string) {
   const bare = (x: string) => normName(x.replace(/^(md|mohd|mr|smt|shri)\.?\s+/i, ""));
   const x = bare(a), y = bare(b), fx = x.replace(/ /g, ""), fy = y.replace(/ /g, "");
   if (!fx || !fy) return false;
-  if (fx === fy || sameWords(x, y)) return true;
+  if (fx === fy || sameWords(x, y) || wordsAlike(x, y)) return true;
   const [short, long] = fx.length <= fy.length ? [fx, fy] : [fy, fx];
   if (short.length >= 6 && long.startsWith(short)) return true;
   // Two full names with clearly different first names are different people ("Ajay Kumar Singh" / "Aman Kumar Singh").
@@ -67,7 +87,7 @@ export function looksAlike(a: string, b: string) {
   if (similarity(x, y) >= 0.85) return true;
   // The first names nearly the same ("Upendar" / "Upendra") and one person has just the one name.
   const [w1, w2] = [x.split(" "), y.split(" ")];
-  return (w1.length === 1 || w2.length === 1) && w1[0].length >= 5 && similarity(w1[0], w2[0]) >= 0.7;
+  return (w1.length === 1 || w2.length === 1) && w1[0].length >= 5 && (similarity(w1[0], w2[0]) >= 0.7 || typoDistance(w1[0], w2[0]) <= 1);
 }
 
 /** The distinctive part of a business name, run together: "New Maa Kamakhya Enterprises" → "newmaakamakhya". */

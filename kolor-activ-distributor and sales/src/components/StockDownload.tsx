@@ -139,13 +139,13 @@ export default function StockDownload({ locations, products, stock, notify, chil
     const states = new Map<string, { ss: Map<string, Distributor[]>; godowns: Distributor[] }>();
     const add = (st: string) => { if (!states.has(st)) states.set(st, { ss: new Map(), godowns: [] }); return states.get(st)!; };
     locations.forEach(d => {
-      if (d.kind === "GODOWN") { add(d.state || "No state").godowns.push(d); return; }
+      if (d.kind === "GODOWN") { add("Company Godowns").godowns.push(d); return; }
       const ssId = d.kind === "SUPER_STOCKIST" ? d.id : d.parent_id || "";
       const st = add((d.kind === "SUPER_STOCKIST" ? d.state : byId.get(d.parent_id || "")?.state || d.state) || "No state");
       if (!st.ss.has(ssId)) st.ss.set(ssId, []);
       if (d.kind === "DISTRIBUTOR") st.ss.get(ssId)!.push(d);
     });
-    return [...states].sort((a, b) => a[0].localeCompare(b[0]));
+    return [...states].sort((a, b) => (a[0] === "Company Godowns" ? -1 : b[0] === "Company Godowns" ? 1 : a[0].localeCompare(b[0])));
   }, [locations, byId]);
   const sum = (ds: Distributor[]) => ds.reduce((a, d) => { const e = perLoc.get(d.id) || zero; return { units: a.units + e.units, value: a.value + e.value, products: a.products + e.products, last: e.last > a.last ? e.last : a.last }; }, { ...zero });
   const toggle = (ids: string[], on: boolean) => setSel(s => { const x = new Set(s); ids.forEach(id => (on ? x.add(id) : x.delete(id))); return x; });
@@ -163,7 +163,7 @@ export default function StockDownload({ locations, products, stock, notify, chil
   const row = (d: Distributor, cls = "") => { const e = perLoc.get(d.id) || zero; return <div key={d.id} className="sk-item"><label className={`sk-row ${cls}${e.units ? "" : " none"}`}>
     <input type="checkbox" checked={sel.has(d.id)} onChange={ev => toggle([d.id], ev.target.checked)} />
     <span className="sk-name">{d.name}<small>{d.code}{d.territory ? ` · ${d.territory}` : ""}{d.status === "DORMANT" ? " · dormant" : ""}</small></span>
-    <span className="sk-num">{e.units ? money(e.value) : "no stock"}<small>{e.units ? `${fmt(dz(e.units))} dz · ${fmt(pcs(e.units))} pcs · ${e.products} SKUs${e.last ? ` · ${dmy(e.last)}` : ""}` : e.last ? `last update ${dmy(e.last)}` : "never uploaded"}</small></span>
+    <span className="sk-num">{e.units ? money(e.value) : "no stock"}<small>{e.units ? `${fmt(dz(e.units))} dz · ${fmt(pcs(e.units))} pcs · ${e.products} SKUs${e.last ? ` · ${dmy(e.last)}` : ""}${d.kind === "GODOWN" && e.units < 0 ? " · below zero until the godown's stock count is uploaded" : ""}` : e.last ? `last update ${dmy(e.last)}` : "never uploaded"}</small></span>
     {e.units > 0 && <button className="secondary small" aria-expanded={openLoc === d.id} title="Their stock grouped by category, each opening to its SKUs" onClick={ev => { ev.preventDefault(); setOpenLoc(openLoc === d.id ? null : d.id); }}>{openLoc === d.id ? "Hide" : "Stock By Category"}</button>}
   </label>{openLoc === d.id && breakdown(d.id)}</div>; };
 

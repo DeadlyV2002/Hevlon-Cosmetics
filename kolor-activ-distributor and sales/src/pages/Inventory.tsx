@@ -92,7 +92,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [primary, setPrimary] = useState<{ read: PrimaryRead; name: string; file: File } | null>(null);
   /** Files put aside to deal with later, so one stuck distributor doesn't hold up the rest. */
   const [aside, setAside] = useState<{ file: File; reason: string }[]>([]);
-  const current = useRef<File | null>(null);
+  const current = useRef<File | null>(null), autoRef = useRef(false), queueRef = useRef<File[]>([]);
   const [onlyProblems, setOnlyProblems] = useState(false), [manual, setManual] = useState(false);
   /** A name for a stock sheet that doesn't name its distributor, from the file name ("DB DITYA COSMETCS JADIA 08-2026" → "Ditya Cosmetcs Jadia"). */
   const [newName, setNewName] = useState("");
@@ -174,7 +174,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
       if (l.headerRow < 0) say("info", `Couldn't find column headings in ${f.name}. Pick what each column is under "Columns"; the app remembers it for next time.`);
       else say("info", `${plural(res.rows.length, "row")} read from ${f.name}.${res.skipped.length ? ` ${plural(res.skipped.length, "line")} left out (totals, groups, blanks).` : ""} Check them, then save.`);
       if (t.note) notify(t.note);
-      setTimeout(() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      // Don't pull the page around during Save All or while files are queued; only bring a hand-opened file's review into view.
+      setTimeout(() => { const el = reviewRef.current; if (!el || autoRef.current || queueRef.current.length) return; const r = el.getBoundingClientRect(); if (r.top < 0 || r.top > window.innerHeight * 0.8) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50);
     } catch (e) { say("err", `Could not read the file: ${errText(e)}`); }
     finally { setBusy(""); }
   }
@@ -201,6 +202,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
   /** Which file of the batch is open (for the progress bar), and Save All mode. */
   const [fileNo, setFileNo] = useState(0), [fileTotal, setFileTotal] = useState(0);
   const [auto, setAuto] = useState(false), [autoLog, setAutoLog] = useState<{ file: string; ok: boolean; text: string }[]>([]);
+  autoRef.current = auto; queueRef.current = queue;
   function nextFile() { if (!queue.length) return; const [f, ...rest] = queue; setQueue(rest); setFileNo(n => n + 1); onFile(f); }
   /** Keeps the open file for later and moves on to the next one in the queue. */
   function setAsideNow(reason: string) {
@@ -210,7 +212,17 @@ export default function Inventory({ locations, products, aliases, stock, officer
     if (queue.length) setTimeout(nextFile, 200); else if (auto) { setAuto(false); setFileTotal(0); }
   }
   function openAside(f: File) { setAside(a => a.filter(x => x.file !== f)); onFile(f); }
-  function startFiles(list: File[]) { const [f, ...rest] = list; if (!f) return; setQueue(rest); setFileNo(1); setFileTotal(list.length); setAutoLog([]); setAuto(false); onFile(f); }
+  async function startFiles(chosen: File[]) {
+    if (!chosen.length) return;
+    setBusy(`Reading ${plural(chosen.length, "file")}…`);
+    const copies = await Promise.all(chosen.map(async f => { try { return new File([await f.arrayBuffer()], f.name, { type: f.type, lastModified: f.lastModified }); } catch { return null; } }));
+    const bad = chosen.filter((_, i) => !copies[i]);
+    if (bad.length) setAside(a => [...a, ...bad.map(file => ({ file, reason: "couldn't be read: it may be open in Excel or still downloading. Close it and choose it again." }))]);
+    const list = copies.filter((x): x is File => !!x);
+    setBusy("");
+    const [f, ...rest] = list; if (!f) return;
+    setQueue(rest); setFileNo(1); setFileTotal(list.length); setAutoLog([]); setAuto(false); onFile(f);
+  }
   // DSR products not yet in the product list (so stock files can match the DSR names and rates).
   const [dsrMissing, setDsrMissing] = useState(0);
   useEffect(() => {
@@ -487,7 +499,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
     clearAll(); say("ok", queue.length ? `${msg} Opening the next file…` : msg);
     if (queue.length) { setBusy("Opening the next file…"); setTimeout(nextFile, 300); }
     else if (auto) { setAuto(false); setFileTotal(0); }
-    await onPosted();
+    // While Save All works through a queue, the whole app isn't reloaded after each file; it's refreshed once when the queue ends.
+    if (!(auto && queue.length)) await onPosted(); else pendingRefresh.current = true;
   }
 
   // ---------- layout ----------
@@ -505,9 +518,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const working = manual || !!file || rows.length > 0;
   useEffect(() => { onBusy?.(busy || auto ? (fileTotal > 1 ? `${Math.min(fileNo, fileTotal)}/${fileTotal}` : "…") : ""); }, [busy, auto, fileNo, fileTotal]);
   // Save All shows in the progress panel too, so it can be followed from any page.
-  const autoTask = useRef<TaskHandle | null>(null);
+  const autoTask = useRef<TaskHandle | null>(null), pendingRefresh = useRef(false);
   useEffect(() => {
     if (auto && !autoTask.current) autoTask.current = startTask("Saving all stock files", fileTotal);
+    if (!auto && pendingRefresh.current) { pendingRefresh.current = false; onPosted(); }
     if (!auto && autoTask.current) {
       const ok = autoLog.filter(x => x.ok).length, bad = autoLog.filter(x => !x.ok).length;
       const note = `${plural(ok, "file")} saved${bad ? `, ${plural(bad, "file")} need a look on the Inventory page` : ""}.`;

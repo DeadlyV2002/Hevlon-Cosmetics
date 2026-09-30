@@ -336,3 +336,43 @@ begin
 end $$;
 revoke all on function public.mark_different_staff(uuid, uuid) from public, anon;
 grant execute on function public.mark_different_staff(uuid, uuid) to authenticated;
+
+-- ---------- Merging two entries for the same location ----------
+-- Everything that points at p_drop (stock, bills, payments, DSR days, retailers, distributors under it,
+-- comments, reminders, returns...) moves to p_keep; p_drop's names become p_keep's other names, and
+-- p_drop is removed. Every table with a link to a location is found from the database itself, so none is missed.
+create or replace function public.merge_locations(p_keep uuid, p_drop uuid) returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare r record; n int; total int := 0; keep_name text;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can merge locations.'; end if;
+  if p_keep = p_drop then raise exception 'Pick two different locations.'; end if;
+  if not exists (select 1 from distributors where id = p_drop) then raise exception 'That location no longer exists.'; end if;
+  select name into keep_name from distributors where id = p_keep;
+  if keep_name is null then raise exception 'The location to keep no longer exists.'; end if;
+  -- Details the kept entry is missing, and every spelling of the other one.
+  update distributors k set
+    aliases = array(select distinct x from unnest(coalesce(k.aliases, '{}') || d.name || coalesce(d.company_name, d.name) || coalesce(d.aliases, '{}')) x where norm_name(x) <> norm_name(k.name)),
+    company_name = coalesce(k.company_name, d.company_name), owner_name = coalesce(k.owner_name, d.owner_name), phone = coalesce(k.phone, d.phone),
+    email = coalesce(k.email, d.email), state = coalesce(k.state, d.state), region = coalesce(k.region, d.region), territory = coalesce(k.territory, d.territory),
+    so_id = coalesce(k.so_id, d.so_id)
+  from distributors d where k.id = p_keep and d.id = p_drop;
+  for r in select c.conrelid::regclass::text tbl, a.attname col
+             from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+            where c.contype = 'f' and c.confrelid = 'public.distributors'::regclass and array_length(c.conkey, 1) = 1 loop
+    begin
+      execute format('update %s set %I = $1 where %I = $2', r.tbl, r.col, r.col) using p_keep, p_drop;
+      get diagnostics n = row_count; total := total + n;
+    exception when unique_violation then
+      -- A one-per-location record both already have (a reminder for the same month, say): the kept one stays.
+      execute format('delete from %s where %I = $1', r.tbl, r.col) using p_drop;
+    end;
+  end loop;
+  update distributors set parent_id = null where id = p_keep and parent_id = p_keep;
+  update distributors set via_id = null where via_id = id;
+  update distributors set super_stockist = keep_name where parent_id = p_keep;
+  delete from distributors where id = p_drop;
+  return jsonb_build_object('moved', total);
+end $$;
+revoke all on function public.merge_locations(uuid, uuid) from public, anon;
+grant execute on function public.merge_locations(uuid, uuid) to authenticated;

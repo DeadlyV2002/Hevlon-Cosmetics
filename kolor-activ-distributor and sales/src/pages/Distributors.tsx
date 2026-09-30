@@ -17,6 +17,7 @@ import DeleteLocation from "../components/DeleteLocation";
 import Modal from "../components/Modal";
 import DistributorReport from "../components/DistributorReport";
 import Retailers from "./Retailers";
+import MergeLocations from "../components/MergeLocations";
 import { useColumnFilters, Col } from "../components/ColumnFilter";
 
 interface Props {
@@ -370,7 +371,7 @@ export default function Distributors({ locations, stock, retailers, officers, pr
     </section>
 
     {showTree ? <Retailers treeOnly retailers={retailers} locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />
-      : listFirst ? <>{listCard}{addCard}</> : <>{addCard}{listCard}</>}
+      : listFirst ? <>{listCard}{canManage && <MergeLocations locations={locations} stock={stock} onMerged={onChanged} notify={notify} />}{addCard}</> : <>{addCard}{listCard}</>}
     {commentsFor && <Modal title={`Comments — ${commentsFor.name}`} subtitle={`${commentsFor.code}${commentsFor.territory ? ` · ${commentsFor.territory}` : ""}`} onClose={() => setOpenComments(null)}>
       <Comments location={commentsFor} userId={userId} canManage={canManage} onCount={n => setCounts(c => ({ ...c, [commentsFor.id]: n }))} /></Modal>}
     {report && <DistributorReport location={report} locations={locations} stock={stock} officers={officers} products={products} onClose={() => setReport(null)} />}

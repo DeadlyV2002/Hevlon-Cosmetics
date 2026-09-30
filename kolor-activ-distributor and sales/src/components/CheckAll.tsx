@@ -1,7 +1,7 @@
 import { ReactNode, useState } from "react";
 import { supabase, Distributor, SalesOfficer, markedDifferent, fetchAll, fmt, money, plural, errText } from "../lib/supabase";
 import { localDate } from "../lib/parse";
-import { similarity } from "../lib/fuzzy";
+import { similarity, looksAlike } from "../lib/fuzzy";
 import { teamTotal } from "../lib/dsr";
 import { SURE } from "./DsrLinker";
 import { loadUnlinked, suggest, linkNames, suspectLinks, unlinkName } from "../lib/dsrLink";
@@ -70,7 +70,7 @@ export default function CheckAll({ checks, officers, locations, canManage, onOpe
       // People who look like the same person. The fuller name is kept; the other becomes an alias.
       const pairs: [SalesOfficer, SalesOfficer][] = [];
       const bare = officers.map(o => o.name.replace(/^(md|mohd|mr)\.?\s+/i, ""));
-      for (let i = 0; i < officers.length; i++) for (let j = i + 1; j < officers.length; j++) if (!markedDifferent(officers[i], officers[j]) && similarity(bare[i], bare[j]) >= 0.85) pairs.push(officers[i].name.length >= officers[j].name.length ? [officers[i], officers[j]] : [officers[j], officers[i]]);
+      for (let i = 0; i < officers.length; i++) for (let j = i + 1; j < officers.length; j++) if (!markedDifferent(officers[i], officers[j]) && looksAlike(officers[i].name, officers[j].name)) pairs.push(officers[i].name.length >= officers[j].name.length ? [officers[i], officers[j]] : [officers[j], officers[i]]);
       const merge = async (keep: SalesOfficer, drop: SalesOfficer) => { const { error } = await supabase!.rpc("merge_staff", { p_keep: keep.id, p_drop: drop.id }); if (error) throw new Error(errText(error)); };
       const dupLines: Line[] = pairs.map(([k, d]) => ({ cells: [`${k.name} / ${d.name}`, k.zone || k.state || "", d.zone || d.state || "", `${Math.round(similarity(k.name, d.name) * 100)}% alike`,
         canManage ? <span className="actions"><button className="secondary small" onClick={() => fix({ label: `Merge ${d.name} into ${k.name}`, run: async () => { await merge(k, d); return `${d.name} is now another name for ${k.name}.`; } })}>Same Person: Merge</button>

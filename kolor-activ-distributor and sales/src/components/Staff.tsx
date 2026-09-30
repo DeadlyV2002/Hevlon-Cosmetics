@@ -3,7 +3,7 @@ import { ask } from "../lib/ask";
 import { confirmWithPassword } from "../lib/confirm";
 import { supabase, SalesOfficer, validPhone, cleanPhones, proper, properOrNull, plural, errText, markedDifferent } from "../lib/supabase";
 import { cellText, normName } from "../lib/parse";
-import { similarity } from "../lib/fuzzy";
+import { similarity, looksAlike } from "../lib/fuzzy";
 import { normalizeState } from "../lib/india";
 import { readAnyFile } from "../lib/readers";
 import { findHeader } from "../lib/sheet";
@@ -106,13 +106,12 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
   }
 
   // Two entries that look like one person (spellings differ a little): offer to merge them.
+  const [mKeep, setMKeep] = useState(""), [mDrop, setMDrop] = useState("");
   const dupes = useMemo(() => {
     const out: [SalesOfficer, SalesOfficer][] = [];
     for (let i = 0; i < officers.length; i++) for (let j = i + 1; j < officers.length; j++) {
       const a = officers[i], b = officers[j];
-      if (markedDifferent(a, b) || !(sameName(a.name, b.name) || similarity(a.name, b.name) >= 0.88)) continue;
-      const za = a.zone || a.state, zb = b.zone || b.state;
-      if (za && zb && !normName(za).includes(normName(zb).split(" ").pop() || "") && !normName(zb).includes(normName(za).split(" ").pop() || "")) continue;
+      if (markedDifferent(a, b) || !looksAlike(a.name, b.name)) continue;
       out.push(a.name.length >= b.name.length ? [a, b] : [b, a]);
     }
     return out;
@@ -175,6 +174,14 @@ export default function Staff({ officers, canManage, onChanged, notify }: { offi
         <button disabled={busy} onClick={save}>{editing ? "Save Changes" : "Add Person"}</button></div>
     </div>}
     <div className="reserve">{msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}</div>
+    {canManage && <details className="mergebox"><summary>Merge Two People</summary>
+      <p className="hint">For one person entered twice under different names. Their daily reports, distributors and team move to the one you keep; the other name is kept so future sheets match.</p>
+      <div className="bulk">
+        <label>Keep<Select value={mKeep} onChange={e => setMKeep(e.target.value)}><option value="">Choose…</option>{officers.filter(o => o.id !== mDrop).map(o => <option key={o.id} value={o.id}>{o.name}{o.zone || o.state ? ` · ${o.zone || o.state}` : ""}</option>)}</Select></label>
+        <label>Merge this person into them<Select value={mDrop} onChange={e => setMDrop(e.target.value)}><option value="">Choose…</option>{officers.filter(o => o.id !== mKeep).map(o => <option key={o.id} value={o.id}>{o.name}{o.zone || o.state ? ` · ${o.zone || o.state}` : ""}</option>)}</Select></label>
+      </div>
+      <div className="actions"><button disabled={!mKeep || !mDrop} onClick={async () => { const k = officers.find(o => o.id === mKeep), d = officers.find(o => o.id === mDrop); if (k && d) { await merge(k, d); setMKeep(""); setMDrop(""); } }}>Merge</button></div>
+    </details>}
     {canManage && dupes.length > 0 && <div className="warn">{plural(dupes.length, "pair")} of entries look like the same person:
       <div className="duplist">{dupes.slice(0, 20).map(([a, b]) => <span key={a.id + b.id} className="chip">{b.name} / {a.name}<button className="secondary small" onClick={() => merge(a, b)}>Same Person: Merge</button><button className="secondary small" onClick={() => different(a, b)}>Different People</button></span>)}</div></div>}
     {t.sortBar}

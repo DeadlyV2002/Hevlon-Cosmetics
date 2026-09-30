@@ -44,3 +44,24 @@ export const keyWords = (s: string) => normName(s).split(" ").filter(w => w.leng
 export function hasWord(words: string[], w: string) {
   return words.some(x => x === w || (w.length >= 5 && x.length >= 4 && editDistance(x, w) <= (w.length >= 8 ? 2 : 1)));
 }
+
+/** Same person when every word of the shorter name is in the longer one ("Amiya Kumar" and "Amiya Kumar Mohapatra"). */
+function sameWords(a: string, b: string) {
+  const x = normName(a).split(" ").filter(Boolean), y = normName(b).split(" ").filter(Boolean);
+  if (!x.length || !y.length) return false;
+  const [s, l] = x.length <= y.length ? [x, y] : [y, x];
+  return s.length >= 2 ? s.every(w => l.includes(w)) : s[0] === l[0] && l.length === 1;
+}
+/** Names that are probably one person: MD / Mohd / Mr ignored, spelling a little different ("Upendar" / "Upendra Kumar"),
+ *  one name inside the other ("Ravi Ranjan" / "Raviranjan Kumar", "Pritam Kumar" / "Pritam Kumar Sandip"). */
+export function looksAlike(a: string, b: string) {
+  const bare = (x: string) => normName(x.replace(/^(md|mohd|mr|smt|shri)\.?\s+/i, ""));
+  const x = bare(a), y = bare(b), fx = x.replace(/ /g, ""), fy = y.replace(/ /g, "");
+  if (!fx || !fy) return false;
+  if (fx === fy || sameWords(x, y) || similarity(x, y) >= 0.85) return true;
+  const [short, long] = fx.length <= fy.length ? [fx, fy] : [fy, fx];
+  if (short.length >= 6 && long.startsWith(short)) return true;
+  // The first names nearly the same ("Upendar" / "Upendra") and one person has just the one name.
+  const [w1, w2] = [x.split(" "), y.split(" ")];
+  return (w1.length === 1 || w2.length === 1) && w1[0].length >= 5 && similarity(w1[0], w2[0]) >= 0.7;
+}

@@ -43,7 +43,7 @@ declare d jsonb; sid uuid; mid uuid; did uuid; n_new int := 0; n_kept int := 0; 
 begin
   if auth.uid() is null then raise exception 'Sign in first.'; end if;
   insert into dsr_products(name, category, rate, position)
-    select x->>'name', x->>'category', nullif(x->>'rate', '')::numeric, safe_int(x->>'position') from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x
+    select distinct on (x->>'name') x->>'name', x->>'category', safe_money(x->>'rate'), safe_int(x->>'position') from jsonb_array_elements(coalesce(p_products, '[]'::jsonb)) x where nullif(trim(x->>'name'), '') is not null
     on conflict (name) do update set category = coalesce(nullif(excluded.category, ''), dsr_products.category), rate = coalesce(excluded.rate, dsr_products.rate), position = excluded.position, updated_at = now();
   -- Products without a category take the DSR's (by name or another spelling), so stock is grouped the DSR way.
   update products p set category = d.category from dsr_products d
@@ -53,7 +53,7 @@ begin
   delete from dsr_state_days s using jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x
    where s.state = x->>'state' and s.day = (x->>'day')::date and s.team = '' and coalesce(x->>'team', '') <> '';
   insert into dsr_state_days(state, day, team, total_calls, productive_calls, sale_value, source_file)
-    select x->>'state', (x->>'day')::date, coalesce(x->>'team', ''), safe_int(x->>'total_calls'), safe_int(x->>'productive_calls'), safe_money(x->>'sale_value'), p_source
+    select distinct on (x->>'state', (x->>'day')::date, coalesce(x->>'team', '')) x->>'state', (x->>'day')::date, coalesce(x->>'team', ''), safe_int(x->>'total_calls'), safe_int(x->>'productive_calls'), safe_money(x->>'sale_value'), p_source
       from jsonb_array_elements(coalesce(p_state_days, '[]'::jsonb)) x
     on conflict (state, day, team) do update set total_calls = excluded.total_calls, productive_calls = excluded.productive_calls, sale_value = excluded.sale_value,
       source_file = excluded.source_file, updated_at = now();
@@ -91,11 +91,14 @@ begin
       source_file = excluded.source_file, updated_at = now()
     returning id into did;
     delete from dsr_lines where day_id = did;
+    -- The same product twice on one day (two columns with the same name in a sheet) is added up first:
+    -- one statement can't update the same line twice.
     insert into dsr_lines(day_id, product, category, qty, rate, value)
-      select did, l->>'product', l->>'category', (l->>'qty')::numeric, nullif(l->>'rate', '')::numeric,
-             round((l->>'qty')::numeric * coalesce(nullif(l->>'rate', '')::numeric, 0), 2)
+      select did, l->>'product', max(l->>'category'), sum(safe_money(l->>'qty')), max(safe_money(l->>'rate')),
+             round(sum(safe_money(l->>'qty') * coalesce(safe_money(l->>'rate'), 0)), 2)
         from jsonb_array_elements(coalesce(d->'lines', '[]'::jsonb)) l
-       where coalesce(nullif(l->>'qty', '')::numeric, 0) <> 0
+       where coalesce(safe_money(l->>'qty'), 0) <> 0 and nullif(trim(l->>'product'), '') is not null
+       group by l->>'product'
       on conflict (day_id, product) do update set qty = dsr_lines.qty + excluded.qty, value = dsr_lines.value + excluded.value;
     get diagnostics k = row_count;
     n_lines := n_lines + k;

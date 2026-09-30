@@ -499,7 +499,7 @@ begin
   if not exists (select 1 from products where id = p_drop) then raise exception 'That SKU no longer exists.'; end if;
   -- What each stock count said, per name, before the two names are joined.
   create temp table if not exists merge_counted(batch_id uuid, location_id uuid, at timestamptz, qty numeric) on commit drop;
-  delete from merge_counted;
+  delete from merge_counted where true; -- the API refuses a delete without a where
   insert into merge_counted
     select t.batch_id, t.distributor_id, t.created_at,
            (select coalesce(sum(case when x.mode = 'INPUT' then x.quantity else -x.quantity end), 0) from inventory_transactions x

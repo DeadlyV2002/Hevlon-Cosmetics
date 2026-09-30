@@ -35,7 +35,7 @@ export default function SsTally({ locations, products, refresh }: { locations: D
       const ss = supers.find(s => s.id === r.location_id); if (!ss) return;
       const p = prod.get(r.product_id);
       const e = m.get(ss.id) || { ss, lines: [] };
-      e.lines.push({ ...r, name: p?.item_name || "Deleted product", category: p?.category || "Other", rate: n(p?.unit_price), gap: n(r.in_count) - n(r.out_count) });
+      e.lines.push({ ...r, name: p?.item_name || "Deleted product", category: p?.category || "No category yet", rate: n(p?.unit_price), gap: n(r.in_count) - n(r.out_count) });
       m.set(ss.id, e);
     });
     return [...m.values()].map(e => {

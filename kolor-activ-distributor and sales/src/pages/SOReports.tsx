@@ -216,7 +216,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
     rows: [...sums].sort((a, b) => b.value - a.value).slice(0, 12).map(s => ({ key: s.soId, label: s.so?.name || "Unknown", sub: s.so?.hq || "", values: [s.value] })) };
   const topProducts: ChartData = { type: "bars", unit: "money", summary: "", more: Math.max(0, prods.length - 12), series: [{ key: "v", name: "Sold", slot: 2 }],
     rows: prods.slice(0, 12).map(p => ({ key: p.product, label: p.product, sub: p.category || "", values: [n(p.value)] })) };
-  const cats = new Map<string, number>(); prods.forEach(p => cats.set(p.category || "Other", (cats.get(p.category || "Other") || 0) + n(p.value)));
+  const cats = new Map<string, number>(); prods.forEach(p => cats.set(p.category || "No category yet", (cats.get(p.category || "No category yet") || 0) + n(p.value)));
   const byCategory: ChartData = { type: "bars", unit: "money", summary: "", more: 0, series: [{ key: "v", name: "Sold", slot: 3 }],
     rows: [...cats].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ key: k, label: k, values: [v] })) };
 

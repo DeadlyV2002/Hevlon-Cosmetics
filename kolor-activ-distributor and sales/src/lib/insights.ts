@@ -533,7 +533,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
     empty: "No product lines in the daily reports for this period.",
     async load(c) {
       const rows = await dsrProducts(c.days ?? 30);
-      const items = rows.map(p => ({ key: c.groupBy === "category" ? p.category || "Other" : p.product, label: c.groupBy === "category" ? p.category || "Other" : p.product, sub: c.groupBy === "category" ? undefined : p.category || undefined, values: [Number(p.value)] }));
+      const items = rows.map(p => ({ key: c.groupBy === "category" ? p.category || "No category yet" : p.product, label: c.groupBy === "category" ? p.category || "No category yet" : p.product, sub: c.groupBy === "category" ? undefined : p.category || undefined, values: [Number(p.value)] }));
       const r = rank(items, c.top ?? 10);
       return { type: "bars", unit: "money", series: [{ key: "v", name: "Sold", slot: 2 }], ...r, summary: r.rows[0] ? `${r.rows[0].label} leads with ${money(r.rows[0].values[0])}.` : "" };
     },

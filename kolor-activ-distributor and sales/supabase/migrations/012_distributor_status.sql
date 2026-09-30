@@ -402,3 +402,82 @@ begin
 end $$;
 revoke all on function public.split_staff_name(uuid, text) from public, anon;
 grant execute on function public.split_staff_name(uuid, text) to authenticated;
+
+-- ---------- Every SKU in a category ----------
+-- A SKU added without a category (from a stock file, a billing sheet or the DSR) gets one straight
+-- away, so nothing is listed under "Other": the category of the same SKU under another name, else
+-- words in its name ("Lipcolor", "Kajal", "Sindoor"), else the SKUs either side of it in the DSR.
+create or replace function public.guess_category(p_name text) returns text
+language plpgsql stable security definer set search_path=public as $$
+declare n text := lower(coalesce(p_name, '')); c text; pos int;
+begin
+  if trim(n) = '' then return null; end if;
+  select p.category into c from products p
+   where coalesce(p.category, '') <> '' and (norm_name(p.item_name) = norm_name(p_name) or norm_name(p.sku) = norm_name(p_name)
+      or exists (select 1 from product_aliases a where a.product_id = p.id and norm_name(a.alias) = norm_name(p_name)))
+   limit 1;
+  if c is not null then return c; end if;
+  c := case
+    when n ~ '(stand|display|tray|poster|banner|dangler)' then 'POP'
+    when n ~ 'makeup remover' then 'Makeup'
+    when n ~ '(nail paint|nail polish|waa+h|crystel|crystal)' then 'Nail Paint'
+    when n ~ '(npr|nail cleanser|remover|wipes)' then 'NPR'
+    when n ~ '(sindoor|sindur)' then 'Sindoor'
+    when n ~ '(lip bal|glycerin|glycrine|glycerine|strawberry blast)' then 'Lip Care'
+    when n ~ '(lip ?colou?r|lip gloss|lip oil|lip shine|liquid)' then 'Liquid Lipstick'
+    when n ~ '(lipstick|lip cra?yon|lip cryon)' then 'Stick Lipstick'
+    when n ~ '(kajal|eye ?shadow|blush|eyebrow)' then 'Eye Shadow'
+    when n ~ '(eye ?liner|mascara|maskara)' then 'Eye'
+    when n ~ '(foundation|compact|illuminator)' then 'Compact'
+    when n ~ '(primer|concea?ler|conceler|fixer|highlighter|makeup|sponge|puff)' then 'Makeup'
+    when n ~ 'rose water' then 'Rose Water'
+    when n ~ 'aloe' then 'Aloevera Gel'
+    when n ~ 'cotton' then 'Cotton Buds'
+    when n ~ '(lotion|moisturi)' then 'Lotion'
+    when n ~ 'cleansing milk' then 'Cleansing Milk'
+  end;
+  if c is not null then return c; end if;
+  -- The DSR lists SKUs group by group: the nearest neighbour with a category, the one above first.
+  select position into pos from dsr_products where norm_name(name) = norm_name(p_name) and position is not null limit 1;
+  if pos is not null then
+    select x.pc into c from (
+      select (select p.category from products p where coalesce(p.category, '') <> '' and (norm_name(p.item_name) = norm_name(d.name) or norm_name(p.sku) = norm_name(d.name)) limit 1) pc,
+             abs(d.position - pos) dist, d.position < pos above
+        from dsr_products d where d.position is not null and d.position <> pos and abs(d.position - pos) <= 3) x
+     where x.pc is not null order by x.dist, x.above desc limit 1;
+  end if;
+  return c;
+end $$;
+revoke all on function public.guess_category(text) from public, anon;
+grant execute on function public.guess_category(text) to authenticated;
+
+create or replace function public.fill_product_category() returns trigger
+language plpgsql set search_path=public as $$
+begin
+  if coalesce(trim(new.category), '') = '' then new.category := coalesce(guess_category(new.item_name), guess_category(new.sku)); end if;
+  return new;
+end $$;
+drop trigger if exists products_fill_category on public.products;
+create trigger products_fill_category before insert or update on public.products for each row execute function public.fill_product_category();
+
+-- The DSR's first group is nail paint, and some names say nothing about what the SKU is.
+update public.products set category = v.c
+  from (values ('waah', 'Nail Paint'), ('mystic', 'Nail Paint'), ('true wear', 'Nail Paint'), ('passion', 'Nail Paint'), ('power play', 'Nail Paint'),
+               ('color play', 'Nail Paint'), ('love affair', 'Nail Paint'), ('stunning', 'Nail Paint'), ('sweet sparkle', 'Liquid Lipstick'),
+               ('cosmics love', 'Liquid Lipstick'), ('velvet mat', 'Stick Lipstick'), ('ultra mat', 'Stick Lipstick'), ('touch me', 'Compact'),
+               ('pink magic', 'Lip Care'), ('flat pink 30ml', 'NPR')) v(n, c)
+ where coalesce(products.category, '') = '' and norm_name(products.item_name) = norm_name(v.n);
+update public.products set category = guess_category(item_name) where coalesce(category, '') = '';
+
+-- DSR product totals by category: DSR sheets carry no category, so each product takes its SKU's.
+create or replace function public.dsr_product_totals(p_from date, p_to date, p_sos uuid[] default null, p_state text default null)
+returns table(product text, category text, qty numeric, value numeric)
+language sql stable set search_path=public as $$
+  select t.product, coalesce(nullif(t.category, ''), guess_category(t.product)), t.qty, t.value from (
+    select l.product, max(l.category) category, sum(l.qty) qty, sum(l.value) value
+      from dsr_lines l join dsr_days d on d.id = l.day_id
+     where d.day between p_from and p_to and (p_sos is null or d.so_id = any(p_sos)) and (p_state is null or d.state = p_state)
+     group by l.product) t
+$$;
+revoke all on function public.dsr_product_totals(date, date, uuid[], text) from public, anon;
+grant execute on function public.dsr_product_totals(date, date, uuid[], text) to authenticated;

@@ -50,7 +50,7 @@ export default function DistributorReport({ location, locations, stock, officers
   const via = locations.find(l => l.id === location.via_id);
   const pct = collectionPct(bill);
   // Stock grouped by product category, biggest value first.
-  const catOf = (id: string) => products?.find(p => p.id === id)?.category || "Other";
+  const catOf = (id: string) => products?.find(p => p.id === id)?.category || "No category yet";
   const cats = [...held.reduce((m, x) => m.set(catOf(x.product_id), [...(m.get(catOf(x.product_id)) || []), x]), new Map<string, StockLine[]>())]
     .map(([c, l]) => [c, l.sort((a, b) => n(b.stock_value) - n(a.stock_value))] as [string, StockLine[]])
     .sort((a, b) => b[1].reduce((t, x) => t + n(x.stock_value), 0) - a[1].reduce((t, x) => t + n(x.stock_value), 0));

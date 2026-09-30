@@ -20,7 +20,7 @@ const n = (v: unknown) => Number(v || 0);
 /** Stock is kept in dozens; pieces are dozens × 12. */
 const dz = (v: unknown) => Math.round(n(v) * 100) / 100;
 const pcs = (v: unknown) => Math.round(n(v) * 12);
-const catOf = (p?: Product) => p?.category || "Other";
+const catOf = (p?: Product) => p?.category || "No category yet";
 /** A sheet where a location's details and each category are written once, in merged cells, over the rows they cover. */
 function grouped(rows: Record<string, unknown>[], locCols: string[], catCol: string): XLSX.WorkSheet {
   const head = Object.keys(rows[0]), aoa: unknown[][] = [head], merges: XLSX.Range[] = [];

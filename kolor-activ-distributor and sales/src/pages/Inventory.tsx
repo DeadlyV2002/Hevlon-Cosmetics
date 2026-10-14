@@ -13,7 +13,7 @@ import {
   detectLayout, extractRows, titleText, cellText, formatSignature, normName, headingDate,
 } from "../lib/parse";
 import { readAnyFile, fileHash, ACCEPT } from "../lib/readers";
-import { guessProduct } from "../lib/fuzzy";
+import { guessProduct, rateAgrees, rateMatched, skuRate } from "../lib/fuzzy";
 import { readSheetInfo, SheetInfo } from "../lib/detect";
 import { detectFile, Detection, FileType } from "../lib/detect";
 import {
@@ -79,7 +79,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
   const [busy, setBusy] = useState("");
   const [showSkipped, setShowSkipped] = useState(false);
   const [savedFormat, setSavedFormat] = useState(false);
-  const [aliasPlan, setAliasPlan] = useState<Record<string, { productId: string; name: string }>>({});
+  /** replace: the name was remembered (or named) as a SKU whose rate is far from the file's, and now points at the right one. */
+  const [aliasPlan, setAliasPlan] = useState<Record<string, { productId: string; name: string; replace?: boolean }>>({});
   const [reduceSender, setReduceSender] = useState(true);
   const [existing, setExisting] = useState<Existing[]>([]);
   const [status, setStatus] = useState<{ kind: "err" | "ok" | "info"; text: string } | null>(null);
@@ -292,16 +293,31 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const key = `${file?.hash || ""}|${rows.length}`;
     if (!rows.length || guessed.current === key) return;
     guessed.current = key;
-    const plan: Record<string, { productId: string; name: string }> = {}, sku = new Map<string, string>();
-    for (const r of rows) {
-      const k = normName(r.item_name);
-      if (!k || plan[k] || aliasPlan[k] || matchProduct(r.sku, r.item_name, products, aliases)) continue;
-      const g = guessProduct(r.item_name, r.unit_price, products);
-      if (g) { plan[k] = { productId: g.id, name: r.item_name }; sku.set(k, g.sku); }
-    }
-    if (!sku.size) return;
+    // Each line is matched on its own name and rate: one sheet can list "Velvet Matte" twice (₹530.64 lip colour, ₹289.44 lipstick).
+    const pick = (r: ERow): { p: Product; replace?: boolean } | null => {
+      if (!normName(r.item_name) || aliasPlan[normName(r.item_name)]) return null;
+      const cur = matchProduct(r.sku, r.item_name, products, aliases);
+      if (cur) {
+        // A SKU whose price-list rate is far from the file's rate is probably the wrong product ("Waaah" at ₹112.56 is not the ₹10.05 SKU).
+        if (rateAgrees(r.unit_price, skuRate(cur))) return null;
+        const alt = rateMatched(r.item_name, r.unit_price, products);
+        return alt && alt.id !== cur.id ? { p: alt, replace: true } : null;
+      }
+      // A similar name only counts when the rate fits too.
+      let g = guessProduct(r.item_name, r.unit_price, products);
+      if (g && !rateAgrees(r.unit_price, skuRate(g))) g = undefined;
+      g = g || rateMatched(r.item_name, r.unit_price, products);
+      return g ? { p: g } : null;
+    };
+    const picks = rows.map(pick);
+    if (!picks.some(Boolean)) return;
+    // Remember a name only when every line with it went to the same SKU.
+    const byName = new Map<string, Set<string>>();
+    rows.forEach((r, i) => { const k = normName(r.item_name); if (!k) return; if (!byName.has(k)) byName.set(k, new Set()); byName.get(k)!.add(picks[i]?.p.id || matchProduct(r.sku, r.item_name, products, aliases)?.id || ""); });
+    const plan: Record<string, { productId: string; name: string; replace?: boolean }> = {};
+    rows.forEach((r, i) => { const k = normName(r.item_name), x = picks[i]; if (x && byName.get(k)!.size === 1 && !plan[k]) plan[k] = { productId: x.p.id, name: r.item_name, replace: x.replace }; });
     setAliasPlan(a => ({ ...a, ...plan }));
-    setRows(rs => rs.map(r => (sku.has(normName(r.item_name)) ? { ...r, sku: sku.get(normName(r.item_name))! } : r)));
+    setRows(rs => rs.map((r, i) => (picks[i] && rs.length === picks.length ? { ...r, sku: picks[i]!.p.sku } : r)));
   }, [rows, file?.hash]);
 
   function matchTo(original: string, value: string) {
@@ -527,7 +543,11 @@ export default function Inventory({ locations, products, aliases, stock, officer
     // Learn from this upload: the column layout and any product matches.
     if (layout && table && layout.headerRow >= 0)
       await supabase.from("import_formats").upsert({ signature: `${mode}:${formatSignature(layout)}`, mapping: layout.mapping, labels: layout.labels, updated_at: new Date().toISOString() });
-    for (const a of Object.values(aliasPlan)) await supabase.from("product_aliases").insert({ product_id: a.productId, alias: a.name });
+    for (const a of Object.values(aliasPlan)) {
+      // A name remembered as the wrong SKU is moved to the right one.
+      if (a.replace) await supabase.from("product_aliases").delete().ilike("alias", a.name.replace(/[%_\\]/g, "\\$&"));
+      await supabase.from("product_aliases").insert({ product_id: a.productId, alias: a.name });
+    }
 
     const skippedNote = nExcluded && type !== "COUNT" ? ` ${plural(nExcluded, "row")} already recorded ${nExcluded === 1 ? "was" : "were"} skipped.` : "";
     const msg = type === "COUNT" ? `Stock count saved for ${holderLoc?.name}: ${data.increased} products up, ${data.decreased} down, ${data.unchanged} unchanged. Undo is on the History page.`

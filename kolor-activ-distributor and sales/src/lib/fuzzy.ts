@@ -127,3 +127,29 @@ export function sameProductName(a: string, b: string) {
   const left = [...l];
   return s.every(w => { const i = left.findIndex(v => wordAlike(w, v)); if (i < 0) return false; left.splice(i, 1); return true; });
 }
+
+/** The rate stock is valued at: the SS rate from the price list, or the last rate until that's set. */
+export const skuRate = (p: { ss_rate?: number | null; unit_price: number }) => Number(p.ss_rate) || Number(p.unit_price) || 0;
+/** Does a rate written in a stock file agree with a SKU's price-list rate? Files give it per dozen or per piece,
+ *  and an older rate list can be a few percent off; a different product is usually far off ("Waaah" ₹120.60 vs ₹10.05). */
+export function rateAgrees(fileRate: number, rate: number) {
+  if (!(fileRate > 0) || !(rate > 0)) return true;
+  const near = (x: number) => Math.abs(x - rate) <= rate * 0.15;
+  return near(fileRate) || near(fileRate * 12);
+}
+/** A file's product name and a SKU name for the same product: every distinctive word of the file's name appears in the SKU's ("Winkit Eyeliner" / "KA Eyeliner Wink It 65/- (Pcs)"). */
+function nameFits(file: string, sku: string) {
+  if (sameProductName(file, sku)) return true;
+  const f = skuWords(file), s = skuWords(sku), joined = s.words.join("");
+  if (!f.words.length || (f.size && s.size && f.size !== s.size)) return false;
+  // A SKU word can be the short form of the file word ("Mat" for "Matte"), or a letter off ("Waah" / "Waaah").
+  return f.words.every(w => w.length >= 3 && (joined.includes(w) || s.words.some(v => wordAlike(w, v) || (v.length >= 3 && w.startsWith(v)) || (Math.min(w.length, v.length) >= 4 && typoDistance(w, v) <= 1))));
+}
+/** The SKU this file line is, using the rate as well as the name: "Velvet Matte" at ₹289.44 is the lipstick, not the ₹530.64 lip colour. */
+export function rateMatched<P extends { id: string; sku: string; item_name: string; ss_rate?: number | null; unit_price: number }>(name: string, fileRate: number, products: P[]): P | undefined {
+  if (!(fileRate > 0) || !name.trim()) return undefined;
+  const fits = products.filter(p => rateAgrees(fileRate, skuRate(p)) && (nameFits(name, p.item_name) || nameFits(name, p.sku)));
+  const off = (p: P) => Math.min(Math.abs(fileRate - skuRate(p)), Math.abs(fileRate * 12 - skuRate(p))) / (skuRate(p) || 1);
+  // The closest rate wins; then a SKU with a price-list rate; then the shorter (cleaner) name.
+  return fits.sort((a, b) => off(a) - off(b) || Number(!b.ss_rate) - Number(!a.ss_rate) || a.item_name.length - b.item_name.length)[0];
+}

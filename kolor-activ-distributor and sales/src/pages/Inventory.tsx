@@ -22,6 +22,8 @@ import {
 import StockDownload from "../components/StockDownload";
 import MoveStock from "../components/MoveStock";
 import LocationForm from "../components/LocationForm";
+import BatchCheck, { BatchPlan } from "../components/BatchCheck";
+import { Scan, scanFile, fileKey, nameFromFile } from "../lib/batch";
 import { dmy } from "../lib/dates";
 
 const TYPES: { id: FileType; label: string; help: string }[] = [
@@ -61,13 +63,6 @@ const FIXES: [RegExp, string][] = [
   [/has only .* in the app/, "upload that location's stock first, or tick \"Don't reduce the sender's stock\" below if their stock isn't in the app yet."],
 ];
 const fixFor = (p: string) => FIXES.find(([re]) => re.test(p))?.[1] || "";
-/** A likely location name from a stock file's name: drops "DB", "closing stock", months and dates. */
-function nameFromFile(file: string) {
-  const words = file.replace(/\.[a-z0-9]+$/i, "").replace(/[_\-.()&]+/g, " ").split(/\s+/).filter(Boolean)
-    .filter(w => !/^(db|ss|closing|stocks?|stoks?|stoke|statement|format|report|month|of|and|the|\d+|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)$/i.test(w));
-  return proper(words.join(" "));
-}
-
 export default function Inventory({ locations, products, aliases, stock, officers, retailers, canManage, onPosted, onListsChanged, notify, onBusy }: Props) {
   const [type, setType] = useState<FileType>("COUNT");
   const [detection, setDetection] = useState<Detection | null>(null);
@@ -93,6 +88,11 @@ export default function Inventory({ locations, products, aliases, stock, officer
   /** Files put aside to deal with later, so one stuck distributor doesn't hold up the rest. */
   const [aside, setAside] = useState<{ file: File; reason: string }[]>([]);
   const current = useRef<File | null>(null), autoRef = useRef(false), queueRef = useRef<File[]>([]);
+  /** Several files read and waiting for the one-page check. */
+  const [batch, setBatch] = useState<Scan[] | null>(null);
+  /** Whose stock and the stock date of each file, as settled in the file check. */
+  const planRef = useRef(new Map<string, { code: string; date: string }>());
+  const onFileRef = useRef<(f: File) => void>(() => {});
   const [onlyProblems, setOnlyProblems] = useState(false), [manual, setManual] = useState(false);
   /** A name for a stock sheet that doesn't name its distributor, from the file name ("DB DITYA COSMETCS JADIA 08-2026" → "Ditya Cosmetcs Jadia"). */
   const [newName, setNewName] = useState("");
@@ -124,7 +124,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     return { l, saved: false };
   }
 
-  async function load(t: Table, sh: number, tp: FileType, f: { name: string; hash: string } | null, det: Detection | null) {
+  async function load(t: Table, sh: number, tp: FileType, f: { name: string; hash: string } | null, det: Detection | null, dateOverride = "") {
     const g = t.sheets[sh]?.grid || [];
     const { l, saved } = await layoutFor(g, MODE_OF[tp]);
     const heading = titleText(g, l);
@@ -133,7 +133,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     // Quantities in pieces when the quantity heading says so; the choice can be changed before saving.
     setPieces(l.labels.some((lab, i) => l.mapping[i] === "quantity" && /\b(pcs|pieces|piece|nos)\b/.test(lab)) || /\b(in pcs|in pieces|pcs wise)\b/i.test(heading));
     let h = holder, so = soDefault, d = date;
-    if (det) { h = det.holder; so = det.so; d = headingDate(`${heading} ${f?.name || ""}`) || today(); }
+    if (det) { h = det.holder; so = det.so; d = dateOverride || headingDate(`${heading} ${f?.name || ""}`) || today(); }
     setHolder(h); setSoDefault(so); setDate(d);
     if (f) setFile({ ...f, heading });
     else setFile(x => (x ? { ...x, heading } : x));
@@ -168,9 +168,12 @@ export default function Inventory({ locations, products, aliases, stock, officer
         if (byInfo) { det.holder = byInfo.code; det.reasons = [...det.reasons.filter(r => !/appears in the heading/.test(r)), `the sheet names ${info.name}${info.town ? ` of ${info.town}` : ""}, which is ${byInfo.name}${byInfo.territory ? ` (${byInfo.territory})` : ""}`]; }
         else if (guessed && nameScore(info.name, guessed) < 0.8) { det.holder = ""; det.reasons = [...det.reasons.filter(r => !/appears in the heading/.test(r)), `the sheet names "${info.name}"${info.town ? ` of ${info.town}` : ""}, which isn't in your list yet: choose it or add it below`]; }
       }
+      // Whose stock and the date were settled in the file check.
+      const planned = planRef.current.get(fileKey(f));
+      if (planned?.code) { det.holder = planned.code; det.reasons = [...det.reasons.filter(r => !/appears in the heading|isn't in your list/.test(r)), "you confirmed whose stock it is in the file check"]; }
       setDetection(det); setType(det.type); setTable(t); setSheet(0);
       setBusy("Reading the rows and matching products and rates…"); await new Promise(r => setTimeout(r, 0));
-      const { l, res } = await load(t, 0, det.type, { name: f.name, hash }, det);
+      const { l, res } = await load(t, 0, det.type, { name: f.name, hash }, det, planned?.date || "");
       if (l.headerRow < 0) say("info", `Couldn't find column headings in ${f.name}. Pick what each column is under "Columns"; the app remembers it for next time.`);
       else say("info", `${plural(res.rows.length, "row")} read from ${f.name}.${res.skipped.length ? ` ${plural(res.skipped.length, "line")} left out (totals, groups, blanks).` : ""} Check them, then save.`);
       if (t.note) notify(t.note);
@@ -180,6 +183,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     finally { setBusy(""); }
   }
 
+  onFileRef.current = f => { onFile(f); };
   function changeType(tp: FileType) { setType(tp); setStatus(null); if (table) load(table, sheet, tp, null, null); }
   function changeSheet(i: number) { setSheet(i); if (table) load(table, i, type, null, null); }
   function changeColumn(i: number, f: Field) {
@@ -220,9 +224,47 @@ export default function Inventory({ locations, products, aliases, stock, officer
     if (bad.length) setAside(a => [...a, ...bad.map(file => ({ file, reason: "couldn't be read: it may be open in Excel or still downloading. Close it and choose it again." }))]);
     const list = copies.filter((x): x is File => !!x);
     setBusy("");
+    if (!list.length) return;
+    if (list.length === 1) { openList(list); return; }
+    // Several files: read them all first and show one check, so new distributors and doubts are settled before anything is saved.
+    clearAll(); planRef.current = new Map();
+    const task = startTask(`Checking ${plural(list.length, "file")}`, list.length);
+    const out: Scan[] = [];
+    try {
+      for (let i = 0; i < list.length; i++) {
+        setBusy(`Checking file ${i + 1} of ${list.length}: ${list[i].name}`);
+        out.push(await scanFile(list[i], locations, officers));
+        task.step(i + 1, list.length);
+        await new Promise(r => setTimeout(r, 0));
+      }
+      task.ok(`${plural(list.length, "file")} read. Check them on the Inventory page.`);
+      setBatch(out);
+    } catch (e) { task.fail(errText(e)); say("err", `Couldn't check the files: ${errText(e)}`); }
+    finally { setBusy(""); }
+  }
+  function openList(list: File[]) {
     const [f, ...rest] = list; if (!f) return;
     setQueue(rest); setFileNo(1); setFileTotal(list.length); setAutoLog([]); setAuto(false); onFile(f);
   }
+  /** After the file check: new distributors are added; every file now knows whose stock it is and its date, so Save All runs without stopping. */
+  function runBatch(p: BatchPlan) {
+    setBatch(null);
+    if (p.aside.length) setAside(a => [...a.filter(x => !p.aside.some(y => y.file === x.file)), ...p.aside]);
+    planRef.current = p.plan;
+    if (p.order.length) setPending(p.order);
+  }
+  // Save All starts once every distributor the files were matched to (new ones included) is in the loaded list.
+  const [pending, setPending] = useState<File[] | null>(null);
+  useEffect(() => {
+    if (!pending) return;
+    const codes = new Set(locations.map(l => l.code));
+    const missing = [...planRef.current.values()].some(x => x.code && !codes.has(x.code));
+    if (missing) return;
+    const [f, ...rest] = pending;
+    setPending(null);
+    setQueue(rest); setFileNo(1); setFileTotal(pending.length); setAutoLog([]); setAuto(true);
+    onFileRef.current(f);
+  }, [pending, locations]);
   // DSR products not yet in the product list (so stock files can match the DSR names and rates).
   const [dsrMissing, setDsrMissing] = useState(0);
   useEffect(() => {
@@ -531,6 +573,12 @@ export default function Inventory({ locations, products, aliases, stock, officer
   }, [auto]);
   useEffect(() => { autoTask.current?.step(autoLog.length, fileTotal, autoLog.length ? `Last: ${autoLog[autoLog.length - 1].file}` : undefined); }, [autoLog.length, fileTotal]);
   function logAuto(ok: boolean, text: string) { setAutoLog(l => [...l, { file: file?.name || "file", ok, text }]); }
+  // A file with no rows (column headings not found, or an empty sheet) is set aside so Save All doesn't wait on it.
+  useEffect(() => {
+    if (!auto || busy || !file || rows.length) return;
+    const t = window.setTimeout(() => { logAuto(false, "set aside: no stock rows found; open it to set the columns"); setAsideNow("no stock rows found: open it and set what each column is"); }, 900);
+    return () => window.clearTimeout(t);
+  }, [auto, busy, file?.hash, rows.length]);
   useEffect(() => {
     if (!auto || busy || !file || !rows.length) return;
     if (blocker) {
@@ -564,8 +612,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
       </div>}
       {autoLog.length > 0 && <details className="rsec"><summary>Save All: {autoLog.filter(x => x.ok).length} saved{autoLog.some(x => !x.ok) ? `, ${autoLog.filter(x => !x.ok).length} need a look` : ""}</summary>
         <div className="rsecbody tablewrap"><table className="nice"><tbody>{autoLog.map((x, i) => <tr key={i}><td>{x.file}</td><td className={`wrap ${x.ok ? "ok" : "err"}`}>{x.text}</td></tr>)}</tbody></table></div></details>}
+      {batch && <BatchCheck scans={batch} locations={locations} officers={officers} canManage={canManage} defaultDate={localDate(new Date(new Date().getFullYear(), new Date().getMonth(), 0))}
+        onCancel={() => setBatch(null)} onOneByOne={() => { const files = batch.map(s => s.file); setBatch(null); openList(files); }} onStart={runBatch} onListsChanged={onListsChanged} />}
       <label className="drop">
-        <input type="file" multiple accept={ACCEPT} disabled={!!busy || auto || !locations.length} onChange={e => { startFiles([...(e.target.files || [])]); e.target.value = ""; }} />
+        <input type="file" multiple accept={ACCEPT} disabled={!!busy || auto || !!batch || !locations.length} onChange={e => { startFiles([...(e.target.files || [])]); e.target.value = ""; }} />
         <b>{busy || (!locations.length ? "Loading your lists…" : "Choose files")}</b>
         <small>Excel, CSV, Tally exports, PDFs or photos</small>
       </label>

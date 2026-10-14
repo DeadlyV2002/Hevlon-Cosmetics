@@ -144,6 +144,9 @@ const RULES: [Field, RegExp][] = [
   ["item_name", /^(particulars|item|items|item name|item description|product|product name|products|description|description of goods|stock item|stock item name|name of item|name of the item|material|goods|name|sku name|product description)$/],
 ];
 export function fieldFor(l: string): Field {
+  // A unit after the heading ("Closing Stock (Dz)", "Qty in Pcs", "MRP per Pcs") doesn't change what the column is.
+  const base = l.replace(/\s+(in\s+|per\s+)?(dz|dzn|doz|dozens?|pcs|pc|pieces?|nos|box|boxes|rs|inr)$/, "");
+  if (base && base !== l) for (const [f, re] of RULES) if (re.test(base)) return f;
   for (const [f, re] of RULES) if (re.test(l)) return f;
   return "ignore";
 }

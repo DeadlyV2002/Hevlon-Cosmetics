@@ -5,14 +5,15 @@ import * as XLSX from "xlsx";
 
 /** INPUT = stock received, OUTPUT = stock sent out, COUNT = closing stock, SO = sales officer's daily report. */
 export type Mode = "INPUT" | "OUTPUT" | "COUNT" | "SO";
-export type Field = "ignore" | "item_name" | "sku" | "quantity" | "unit_price" | "amount" | "date" | "reference" | "retailer" | "distributor" | "so";
+export type Field = "ignore" | "item_name" | "sku" | "shade" | "quantity" | "unit_price" | "amount" | "date" | "reference" | "retailer" | "distributor" | "so";
 export const FIELD_LABELS: Record<Field, string> = {
-  ignore: "— ignore —", item_name: "Product name", sku: "SKU / item code", quantity: "Quantity", unit_price: "Rate",
+  ignore: "— ignore —", item_name: "Product name", sku: "SKU / item code", shade: "Shade", quantity: "Quantity", unit_price: "Rate",
   amount: "Amount / value", date: "Date", reference: "Invoice / voucher no.", retailer: "Party (retailer / distributor / supplier)",
   distributor: "Location (whose stock)", so: "Sales officer (SO)",
 };
 /** retailer holds the party: who received the stock (OUT), who sent it (IN), or the SO's retailer. */
-export type Row = { date: string; reference: string; distributor: string; sku: string; item_name: string; quantity: number; unit_price: number; retailer: string; so: string };
+/** shade: the shade of the SKU on this line (Wild Rose 13, Bare Kiss Maroon); "" when it isn't known. */
+export type Row = { date: string; reference: string; distributor: string; sku: string; item_name: string; shade?: string; quantity: number; unit_price: number; retailer: string; so: string };
 export type Cell = string | number | boolean | Date | null | undefined;
 export type Grid = Cell[][];
 export interface Sheet { name: string; grid: Grid }
@@ -141,6 +142,7 @@ const RULES: [Field, RegExp][] = [
   ["so", /^(so|so name|s o|s o name|salesman|salesman name|sales man|sales officer|sales officer name|sales person|salesperson|sales executive|employee|employee name|emp name|dsr|dsr name|ase|ase name|tso|tso name|psr|psr name|isr|isr name|field officer)$/],
   ["retailer", /^(party|party name|party a c name|customer|customer name|retailer|retailer name|outlet|outlet name|shop|shop name|store|store name|buyer|consignee|consignee name|ledger|ledger name|dealer|supplier|supplier name|vendor|vendor name|received from|sold to|dispatched to|despatched to|sent to)$/],
   ["distributor", /^(distributor|distributor name|distributor code|stockist|stockist name|db name|godown|godown name|warehouse|warehouse name)$/],
+  ["shade", /^(shade|shades|shade name|shade no|shade code|colour|color)$/],
   ["item_name", /^(particulars|item|items|item name|item description|product|product name|products|description|description of goods|stock item|stock item name|name of item|name of the item|material|goods|name|sku name|product description)$/],
 ];
 export function fieldFor(l: string): Field {
@@ -255,7 +257,7 @@ const TOTAL = /^(grand\s*total|sub\s*-?\s*total|total|opening balance|closing ba
 /** Turns a grid + column mapping into rows; everything left out is reported with a reason. */
 export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { distributor?: string; date?: string; so?: string }, fillDown = true): { rows: Row[]; skipped: Skipped[] } {
   const col = (f: Field) => layout.mapping.indexOf(f);
-  const c = { item: col("item_name"), sku: col("sku"), qty: col("quantity"), rate: col("unit_price"), amt: col("amount"), date: col("date"), ref: col("reference"), ret: col("retailer"), dist: col("distributor"), so: col("so") };
+  const c = { item: col("item_name"), sku: col("sku"), shade: col("shade"), qty: col("quantity"), rate: col("unit_price"), amt: col("amount"), date: col("date"), ref: col("reference"), ret: col("retailer"), dist: col("distributor"), so: col("so") };
   const get = (r: Cell[], i: number) => (i >= 0 ? r[i] : undefined);
   const start = layout.headerRow + Math.max(layout.headerRows, 1);
   const rows: (Row & { _line: number; _noRate: boolean })[] = [];
@@ -285,7 +287,7 @@ export function extractRows(grid: Grid, layout: Layout, mode: Mode, defaults: { 
       date: toISODate(get(r, c.date)) || defaults.date || today(),
       reference: cellText(get(r, c.ref)),
       distributor: cellText(get(r, c.dist)) || defaults.distributor || "",
-      sku, item_name: item,
+      sku, item_name: item, shade: cellText(get(r, c.shade)),
       quantity: qty ?? 0,
       unit_price: rate === null ? 0 : Math.abs(rate),
       retailer: cellText(get(r, c.ret)),

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, StockLine, KIND_LABEL, fetchAll, fmt, money, errText } from "../lib/supabase";
 import { today } from "../lib/parse";
@@ -51,6 +51,21 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 export default function StockDownload({ locations, products, stock, notify, children }: { locations: Distributor[]; products: Product[]; stock: StockLine[]; notify: (m: string) => void; children?: React.ReactNode }) {
   const [sel, setSel] = useState<Set<string>>(new Set()), [search, setSearch] = useState(""), [onlyStock, setOnlyStock] = useState(false);
   const [openSS, setOpenSS] = useState<Set<string>>(new Set()), [openLoc, setOpenLoc] = useState<string | null>(null);
+  /** The open location's stock shade by shade, per SKU. */
+  const [shades, setShades] = useState<Map<string, { shade: string; qty: number }[]>>(new Map());
+  useEffect(() => {
+    if (!supabase || !openLoc) { setShades(new Map()); return; }
+    let live = true;
+    fetchAll<{ product_id: string; shade: string; current_stock: number }>((a, b) => supabase!.from("stock_by_shade").select("product_id,shade,current_stock").eq("distributor_id", openLoc).range(a, b))
+      .then(rows => {
+        if (!live) return;
+        const m = new Map<string, { shade: string; qty: number }[]>();
+        rows.filter(r => Math.abs(Number(r.current_stock)) > 0.0001).forEach(r => { const l = m.get(r.product_id) || []; l.push({ shade: r.shade, qty: Number(r.current_stock) }); m.set(r.product_id, l); });
+        m.forEach(l => l.sort((a, b) => (a.shade === "" ? 1 : b.shade === "" ? -1 : a.shade.localeCompare(b.shade, "en-IN", { numeric: true }))));
+        setShades(m);
+      }).catch(() => { if (live) setShades(new Map()); });
+    return () => { live = false; };
+  }, [openLoc, stock]);
   const [period, setPeriod] = useState<"latest" | "range">("latest");
   const [range, setRange] = useState<Range>(defaultRange("month"));
   const [busy, setBusy] = useState(false);
@@ -151,15 +166,19 @@ export default function StockDownload({ locations, products, stock, notify, chil
   const toggle = (ids: string[], on: boolean) => setSel(s => { const x = new Set(s); ids.forEach(id => (on ? x.add(id) : x.delete(id))); return x; });
   // One location's stock by category (dozens, pieces, value), each category opening to its SKUs.
   const cats = (id: string) => {
-    const m = new Map<string, { dz: number; value: number; items: { name: string; dz: number; value: number }[] }>();
+    const m = new Map<string, { dz: number; value: number; items: { id: string; name: string; dz: number; value: number }[] }>();
     stock.filter(s => s.distributor_id === id && n(s.current_stock)).forEach(s => {
       const c = catOf(productById.get(s.product_id)), e = m.get(c) || { dz: 0, value: 0, items: [] };
-      e.dz += n(s.current_stock); e.value += n(s.stock_value); e.items.push({ name: s.item_name, dz: n(s.current_stock), value: n(s.stock_value) }); m.set(c, e);
+      e.dz += n(s.current_stock); e.value += n(s.stock_value); e.items.push({ id: s.product_id, name: s.item_name, dz: n(s.current_stock), value: n(s.stock_value) }); m.set(c, e);
     });
     return [...m].sort((a, b) => b[1].value - a[1].value);
   };
   const breakdown = (id: string) => <div className="sk-cats">{cats(id).map(([c, e]) => <details key={c}><summary><b>{c}</b><span>{fmt(dz(e.dz))} dz · {fmt(pcs(e.dz))} pcs</span><span>{money(e.value)}</span></summary>
-    <table className="nice"><thead><tr><th>SKU</th><th>Dozens</th><th>Pieces</th><th>Value</th></tr></thead><tbody>{e.items.sort((a, b) => b.value - a.value).map(i => <tr key={i.name}><td>{i.name}</td><td>{fmt(dz(i.dz))}</td><td>{fmt(pcs(i.dz))}</td><td>{money(i.value)}</td></tr>)}</tbody></table></details>)}</div>;
+    <table className="nice"><thead><tr><th>SKU</th><th>Dozens</th><th>Pieces</th><th>Value</th><th>Shades</th></tr></thead><tbody>{e.items.sort((a, b) => b.value - a.value).map(i => {
+      const sh = (shades.get(i.id) || []).filter(x => x.shade !== "" || (shades.get(i.id) || []).length > 1);
+      return <tr key={i.name}><td>{i.name}</td><td>{fmt(dz(i.dz))}</td><td>{fmt(pcs(i.dz))}</td><td>{money(i.value)}</td>
+        <td className="wrap">{sh.length ? <span className="shadechips">{sh.map(x => <span key={x.shade} className="shadechip"><b>{x.shade || "shade not given"}</b> {fmt(pcs(x.qty))} pcs</span>)}</span> : <span className="muted">—</span>}</td></tr>;
+    })}</tbody></table></details>)}</div>;
   const row = (d: Distributor, cls = "") => { const e = perLoc.get(d.id) || zero; return <div key={d.id} className="sk-item"><label className={`sk-row ${cls}${e.units ? "" : " none"}`}>
     <input type="checkbox" checked={sel.has(d.id)} onChange={ev => toggle([d.id], ev.target.checked)} />
     <span className="sk-name">{d.name}<small>{d.code}{d.territory ? ` · ${d.territory}` : ""}{d.status === "DORMANT" ? " · dormant" : ""}</small></span>

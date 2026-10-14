@@ -691,3 +691,88 @@ select p.id, v.alias from (values
   ('True Fit Cotton Balls', 'Cotton Balls')
 ) v(alias, target) join public.products p on p.item_name = v.target
 on conflict do nothing;
+
+-- ---------- Shades ----------
+-- A SKU's stock can be kept shade by shade (Wild Rose 13, Wild Rose 105, Bare Kiss Maroon, Ultra Matte A box…).
+-- '' is stock whose shade isn't known. SKU totals and values are unchanged: they add up every shade.
+alter table public.inventory_transactions add column if not exists shade text not null default '';
+create index if not exists inv_tx_loc_prod_shade on public.inventory_transactions(distributor_id, product_id, shade);
+create or replace view public.stock_by_shade with (security_invoker=true) as
+select t.distributor_id, t.product_id, t.shade,
+       sum(case when t.mode = 'INPUT' then t.quantity else -t.quantity end) current_stock,
+       max(t.transaction_date) last_movement
+  from inventory_transactions t
+ group by t.distributor_id, t.product_id, t.shade;
+grant select on public.stock_by_shade to authenticated;
+
+-- A stock count, shade by shade. For every SKU in the file, each shade listed is set to the counted quantity and
+-- every other shade of that SKU (including stock with no shade) to 0, so the SKU's total is exactly what was counted.
+create or replace function public.post_stock_count(
+  p_distributor text, p_rows jsonb, p_date date default current_date,
+  p_source_file text default null, p_file_hash text default null, p_allow_duplicate boolean default false)
+returns jsonb language plpgsql security definer set search_path=public
+as $$
+declare r jsonb; bid uuid; did uuid; pid uuid; q numeric; x record; n_in int := 0; n_out int := 0; n_same int := 0; prev timestamptz;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  did := find_distributor(p_distributor);
+  if did is null then raise exception 'Location not found: "%"', p_distributor; end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) = 0 then raise exception 'No rows to post'; end if;
+  if p_file_hash is not null and not p_allow_duplicate then
+    select created_at into prev from inventory_batches where file_hash = p_file_hash order by created_at desc limit 1;
+    if prev is not null then raise exception 'DUPLICATE_FILE: this file was already posted on %', to_char(prev at time zone 'Asia/Kolkata','DD Mon YYYY HH24:MI'); end if;
+  end if;
+  insert into inventory_batches(mode, created_by, source_file, file_hash, distributor_id, as_of)
+  values ('COUNT', auth.uid(), p_source_file, p_file_hash, did, coalesce(p_date, current_date)) returning id into bid;
+
+  create temp table if not exists count_lines(prod_id uuid, shade text, qty numeric, rate numeric) on commit drop;
+  delete from count_lines where true;
+  for r in select value from jsonb_array_elements(p_rows) loop
+    q := coalesce(nullif(r->>'quantity', '')::numeric, 0);
+    if q < 0 then raise exception 'Negative stock for "%" — fix it in Tally or remove the row', r->>'item_name'; end if;
+    pid := find_product(r->>'sku', r->>'item_name');
+    if pid is null then
+      insert into products(sku, item_name, unit_price)
+      values (coalesce(nullif(trim(r->>'sku'), ''), trim(r->>'item_name')), coalesce(nullif(trim(r->>'item_name'), ''), trim(r->>'sku')), 0)
+      returning id into pid;
+    end if;
+    insert into count_lines values (pid, coalesce(trim(r->>'shade'), ''), q, nullif(r->>'unit_price', '')::numeric);
+  end loop;
+
+  for x in
+    with want as (select c.prod_id, c.shade, sum(c.qty) qty, max(c.rate) rate from count_lines c group by c.prod_id, c.shade),
+    have as (select t.product_id prod_id, t.shade, sum(case when t.mode = 'INPUT' then t.quantity else -t.quantity end) qty
+               from inventory_transactions t
+              where t.distributor_id = did and t.product_id in (select c.prod_id from count_lines c)
+              group by t.product_id, t.shade)
+    select coalesce(w.prod_id, h.prod_id) prod_id, coalesce(w.shade, h.shade) shade, coalesce(w.qty, 0) - coalesce(h.qty, 0) diff, w.rate
+      from want w full join have h on h.prod_id = w.prod_id and h.shade = w.shade
+  loop
+    perform pg_advisory_xact_lock(hashtext(did::text || x.prod_id::text));
+    if x.diff > 0 then
+      insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source, shade)
+      values (bid, did, x.prod_id, 'INPUT', coalesce(p_date, current_date), 'Stock count', x.diff, coalesce(x.rate, 0), auth.uid(), 'COUNT', x.shade);
+      n_in := n_in + 1;
+    elsif x.diff < 0 then
+      insert into inventory_transactions(batch_id, distributor_id, product_id, mode, transaction_date, reference, quantity, unit_price, created_by, source, shade)
+      values (bid, did, x.prod_id, 'OUTPUT', coalesce(p_date, current_date), 'Stock count', -x.diff, coalesce(x.rate, 0), auth.uid(), 'COUNT', x.shade);
+      n_out := n_out + 1;
+    else
+      n_same := n_same + 1;
+    end if;
+  end loop;
+  return jsonb_build_object('batch_id', bid, 'increased', n_in, 'decreased', n_out, 'unchanged', n_same);
+end $$;
+revoke all on function public.post_stock_count(text,jsonb,date,text,text,boolean) from public, anon;
+grant execute on function public.post_stock_count(text,jsonb,date,text,text,boolean) to authenticated;
+
+-- A shade copy of a SKU ("KA Nail Paint Waaah 6ml Mrn") merged into the SKU: its stock keeps the shade it stood for.
+create or replace function public.merge_products_as_shade(p_keep uuid, p_drop uuid, p_shade text) returns jsonb
+language plpgsql security definer set search_path=public as $$
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can merge SKUs.'; end if;
+  update inventory_transactions set shade = coalesce(trim(p_shade), '') where product_id = p_drop and shade = '';
+  return merge_products(p_keep, p_drop);
+end $$;
+revoke all on function public.merge_products_as_shade(uuid, uuid, text) from public, anon;
+grant execute on function public.merge_products_as_shade(uuid, uuid, text) to authenticated;

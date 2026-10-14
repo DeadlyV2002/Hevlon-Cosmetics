@@ -24,6 +24,7 @@ import MoveStock from "../components/MoveStock";
 import LocationForm from "../components/LocationForm";
 import BatchCheck, { BatchPlan } from "../components/BatchCheck";
 import { Scan, scanFile, fileKey, nameFromFile } from "../lib/batch";
+import { matchTallyLine } from "../lib/tally";
 import { dmy } from "../lib/dates";
 
 const TYPES: { id: FileType; label: string; help: string }[] = [
@@ -36,7 +37,8 @@ const MODE_OF: Record<FileType, Mode> = { COUNT: "COUNT", IN: "INPUT", OUT: "OUT
 const shiftDate = (d: string, days: number) => { const x = new Date(`${d}T00:00:00`); x.setDate(x.getDate() + days); return localDate(x); };
 const daysApart = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
 
-type ERow = Row & { include?: boolean };
+/** check: how a Tally name was read (SKU and shade) when it is worth a look before saving. */
+type ERow = Row & { include?: boolean; check?: string };
 interface Existing { distributor_id: string; counterparty_id: string | null; product_id: string; transaction_date: string; quantity: number; reference: string | null }
 interface Checked { p?: Product; h?: Distributor; partyLoc?: Distributor; cur: number; problems: string[]; notes: string[]; excluded: boolean; senderShort: boolean }
 
@@ -134,12 +136,21 @@ export default function Inventory({ locations, products, aliases, stock, officer
     // Quantities in pieces when the quantity heading says so; the choice can be changed before saving.
     setPieces(l.labels.some((lab, i) => l.mapping[i] === "quantity" && /\b(pcs|pieces|piece|nos)\b/.test(lab)) || /\b(in pcs|in pieces|pcs wise)\b/i.test(heading));
     let h = holder, so = soDefault, d = date;
-    if (det) { h = det.holder; so = det.so; d = dateOverride || headingDate(`${heading} ${f?.name || ""}`) || today(); }
+    const fromHeading = det ? headingDate(`${heading} ${f?.name || ""}`) : "";
+    if (det) { h = det.holder; so = det.so; d = dateOverride || fromHeading || today(); }
     setHolder(h); setSoDefault(so); setDate(d);
     if (f) setFile({ ...f, heading });
     else setFile(x => (x ? { ...x, heading } : x));
     setLayout(l); setSavedFormat(saved); setAliasPlan({}); setReduceSender(true); setAdding(null);
-    return { l, res: extract(t, sh, l, tp, h, d, so) };
+    const res = extract(t, sh, l, tp, h, d, so);
+    // Tally item names say "(Pcs)" when the quantities are pieces.
+    if (MODE_OF[tp] === "COUNT" && res.rows.length && res.rows.filter(r => /\bpcs?\b/i.test(r.item_name)).length > res.rows.length / 2) setPieces(true);
+    // A count with a date on every line (Tally): the latest one is the stock date.
+    if (det && MODE_OF[tp] === "COUNT" && !dateOverride && !fromHeading && l.mapping.includes("date")) {
+      const latest = res.rows.map(r => r.date).filter(isValidDate).sort().pop();
+      if (latest) setDate(latest);
+    }
+    return { l, res };
   }
 
   async function onFile(f: File, notBilling = false) {
@@ -168,6 +179,10 @@ export default function Inventory({ locations, products, aliases, stock, officer
         const guessed = locations.find(l => l.code === det.holder);
         if (byInfo) { det.holder = byInfo.code; det.reasons = [...det.reasons.filter(r => !/appears in the heading/.test(r)), `the sheet names ${info.name}${info.town ? ` of ${info.town}` : ""}, which is ${byInfo.name}${byInfo.territory ? ` (${byInfo.territory})` : ""}`]; }
         else if (guessed && nameScore(info.name, guessed) < 0.8) { det.holder = ""; det.reasons = [...det.reasons.filter(r => !/appears in the heading/.test(r)), `the sheet names "${info.name}"${info.town ? ` of ${info.town}` : ""}, which isn't in your list yet: choose it or add it below`]; }
+      }
+      const godowns = locations.filter(x => x.kind === "GODOWN");
+      if (!det.holder && det.type === "COUNT" && godowns.length === 1 && /finished goods|godown|warehouse|factory|company stock/i.test(`${f.name} ${titleText(g, l0)}`)) {
+        det.holder = godowns[0].code; det.reasons = [...det.reasons, `it reads as the company's own stock, so it's ${godowns[0].name}`];
       }
       // Whose stock and the date were settled in the file check.
       const planned = planRef.current.get(fileKey(f));
@@ -294,7 +309,12 @@ export default function Inventory({ locations, products, aliases, stock, officer
     if (!rows.length || guessed.current === key) return;
     guessed.current = key;
     // Each line is matched on its own name and rate: one sheet can list "Velvet Matte" twice (₹530.64 lip colour, ₹289.44 lipstick).
-    const pick = (r: ERow): { p: Product; replace?: boolean } | null => {
+    // A Tally line ("Kolor Activ Lipcolor Wild Rose 13 , 219/-Pcs") is a SKU and a shade.
+    const exactName = (r: ERow) => products.some(p => normName(p.item_name) === normName(r.item_name) || (!!r.sku.trim() && p.sku.toLowerCase() === r.sku.trim().toLowerCase()));
+    const tally = rows.map(r => (type === "COUNT" && r.item_name.trim() && !(r.shade || "").trim() && !exactName(r) ? matchTallyLine(r.item_name, products, aliases) : null));
+    const pick = (r: ERow, i: number): { p: Product; replace?: boolean } | null => {
+      const t = tally[i];
+      if (t && (!r.unit_price || rateAgrees(r.unit_price, skuRate(t.product)))) return { p: t.product };
       if (!normName(r.item_name) || aliasPlan[normName(r.item_name)]) return null;
       const cur = matchProduct(r.sku, r.item_name, products, aliases);
       if (cur) {
@@ -311,13 +331,16 @@ export default function Inventory({ locations, products, aliases, stock, officer
     };
     const picks = rows.map(pick);
     if (!picks.some(Boolean)) return;
+    const shadeOf = (i: number) => { const t = tally[i]; return t && picks[i]?.p.id === t.product.id ? `${t.shade}${t.old ? `${t.shade ? " " : ""}(old)` : ""}` : undefined; };
+    const checkOf = (i: number) => { const t = tally[i]; return t && !t.sure && picks[i]?.p.id === t.product.id ? `read as ${t.product.item_name}${t.shade ? `, shade ${t.shade}` : ""} (${t.why}): check` : undefined; };
     // Remember a name only when every line with it went to the same SKU.
     const byName = new Map<string, Set<string>>();
     rows.forEach((r, i) => { const k = normName(r.item_name); if (!k) return; if (!byName.has(k)) byName.set(k, new Set()); byName.get(k)!.add(picks[i]?.p.id || matchProduct(r.sku, r.item_name, products, aliases)?.id || ""); });
     const plan: Record<string, { productId: string; name: string; replace?: boolean }> = {};
-    rows.forEach((r, i) => { const k = normName(r.item_name), x = picks[i]; if (x && byName.get(k)!.size === 1 && !plan[k]) plan[k] = { productId: x.p.id, name: r.item_name, replace: x.replace }; });
+    // Tally lines aren't remembered as other names: the shade is read from the name every time.
+    rows.forEach((r, i) => { const k = normName(r.item_name), x = picks[i]; if (x && !tally[i] && byName.get(k)!.size === 1 && !plan[k]) plan[k] = { productId: x.p.id, name: r.item_name, replace: x.replace }; });
     setAliasPlan(a => ({ ...a, ...plan }));
-    setRows(rs => rs.map((r, i) => (picks[i] && rs.length === picks.length ? { ...r, sku: picks[i]!.p.sku } : r)));
+    setRows(rs => rs.map((r, i) => (picks[i] && rs.length === picks.length ? { ...r, sku: picks[i]!.p.sku, ...(shadeOf(i) !== undefined ? { shade: shadeOf(i) } : {}), ...(checkOf(i) ? { check: checkOf(i) } : {}) } : r)));
   }, [rows, file?.hash]);
 
   function matchTo(original: string, value: string) {
@@ -372,6 +395,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
       const problems: string[] = [], notes: string[] = [];
       let excluded = false, senderShort = false;
       const p = matchProduct(r.sku, r.item_name, products, aliases);
+      if (r.check) notes.push(r.check);
       if (!r.sku.trim() && !r.item_name.trim()) problems.push("product missing");
       if (!isValidDate(r.date)) problems.push("date must be a valid date");
       // The file's rate against the product's SS rate (both per dozen when they come from the DSR price list).
@@ -567,13 +591,13 @@ export default function Inventory({ locations, products, aliases, stock, officer
 
   // ---------- layout ----------
   const showLocCol = type !== "COUNT" && type !== "SO" && (layout?.mapping.includes("distributor") || new Set(rows.map(r => r.distributor)).size > 1);
-  const cols: (keyof Row)[] = type === "COUNT" ? ["sku", "item_name", "quantity", "unit_price"]
+  const cols: (keyof Row)[] = type === "COUNT" ? ["sku", "item_name", "shade", "quantity", "unit_price"]
     : type === "SO" ? ["date", "so", "distributor", "retailer", "sku", "item_name", "quantity", "unit_price"]
     : ["date", "reference", ...(showLocCol ? ["distributor" as const] : []), "retailer", "sku", "item_name", "quantity", "unit_price"];
   const COL_LABEL: Record<keyof Row, string> = {
     date: "Date", reference: "Invoice / ref", distributor: type === "SO" ? "Distributor" : "Location", so: "SO",
     retailer: type === "IN" ? "Received from" : type === "OUT" ? "Sent to" : "Retailer",
-    sku: "SKU", item_name: "Product (as in file)", quantity: type === "COUNT" ? "Counted qty" : "Qty", unit_price: "Rate",
+    sku: "SKU", item_name: "Product (as in file)", shade: "Shade", quantity: type === "COUNT" ? "Counted qty" : "Qty", unit_price: "Rate",
   };
   const posting = useRef(false);
   /** The type, whose-stock and date settings only show once there's a file or rows to work on. */
@@ -791,7 +815,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
           const planned = plan && products.find(p => p.id === plan.productId);
           return <tr key={i} className={ck.excluded ? "skip" : ck.problems.length ? "bad" : ""}>
             <td className="rownum">{i + 1}</td>
-            {cols.map(k => <td key={k}><input className={k} type={k === "quantity" || k === "unit_price" ? "number" : k === "date" ? "date" : "text"} value={r[k]} onChange={e => updateRow(i, k, e.target.value)} /></td>)}
+            {cols.map(k => <td key={k}><input className={k} type={k === "quantity" || k === "unit_price" ? "number" : k === "date" ? "date" : "text"} value={r[k] ?? ""} onChange={e => updateRow(i, k, e.target.value)} /></td>)}
             {type === "COUNT" && <><td>{fmt(ck.cur)}</td><td className={diff > 0 ? "in" : diff < 0 ? "out" : ""}>{diff > 0 ? "+" : ""}{fmt(diff)}</td></>}
             <td>{ck.p && !plan ? <small>{ck.p.item_name}</small>
               : <Combo className="match" options={productOptions} placeholder={type === "OUT" || type === "SO" ? "pick your product…" : "new product, or pick…"}

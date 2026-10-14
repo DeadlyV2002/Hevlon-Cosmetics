@@ -161,7 +161,7 @@ export default function App() {
         {page === "SO reports" && <SOReports officers={officers} locations={locations} stock={stock} products={products} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "SO checks" && <SOChecks locations={locations} products={products} officers={officers} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Reports" && <Reports stock={stock} locations={locations} />}
-        {page === "Pricing" && canPrice && <Pricing products={products} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
+        {page === "Pricing" && canPrice && <Pricing products={products} aliases={aliases} locations={locations} margins={margins} schemes={schemes} canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "History" && <History canManage={canManage} onChanged={refreshAll} notify={setMessage} />}
         {page === "Settings" && <Settings role={role} locations={locations} testingMode={testingMode} onTestingMode={setTestingMode} onChanged={refreshAll} notify={setMessage} />}
       </main>

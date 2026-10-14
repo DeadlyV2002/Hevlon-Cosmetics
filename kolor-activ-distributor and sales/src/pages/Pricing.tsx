@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
 import { ask } from "../lib/ask";
 import * as XLSX from "xlsx";
-import { supabase, Distributor, Product, Margins, Scheme, schemesOn, marginsOn, matchProduct, fmt, plural, errText } from "../lib/supabase";
-import { cellText, parseNum, today } from "../lib/parse";
+import { readPriceList, matchPriceRow } from "../lib/pricelist";
+import { supabase, Distributor, Product, ProductAlias, Margins, Scheme, schemesOn, marginsOn, matchProduct, fmt, plural, errText } from "../lib/supabase";
+import { cellText, parseNum, today, normName } from "../lib/parse";
 import { readAnyFile, ACCEPT } from "../lib/readers";
 import { dmy } from "../lib/dates";
 import MergeProducts from "../components/MergeProducts";
 
 interface Props {
-  products: Product[]; locations: Distributor[]; margins: Margins; schemes: Scheme[];
+  products: Product[]; aliases: ProductAlias[]; locations: Distributor[]; margins: Margins; schemes: Scheme[];
   canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void;
 }
 type Draft = { ss_rate: string; mrp: string };
@@ -21,7 +22,7 @@ const pct = (n: number) => `${fmt(n, 2).replace(/\.?0+$/, "")}%`;
 const up = (n: number, p: number) => Math.round(n * (1 + p / 100) * 100) / 100;
 const shortDate = (d: string) => dmy(d);
 
-export default function Pricing({ products, locations, margins, schemes, canManage, onChanged, notify }: Props) {
+export default function Pricing({ products, aliases, locations, margins, schemes, canManage, onChanged, notify }: Props) {
   const day = today();
   const ssList = locations.filter(l => l.kind === "SUPER_STOCKIST");
   const ssName = (id: string) => ssList.find(s => s.id === id)?.name || "Deleted super stockist";
@@ -88,6 +89,8 @@ export default function Pricing({ products, locations, margins, schemes, canMana
 
   // ---------- product prices ----------
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
+  /** Price-list names matched to a SKU by a close name: saved as its other name with the prices, so next year's list matches exactly. */
+  const [learn, setLearn] = useState<Map<string, string>>(new Map());
   const [q, setQ] = useState(""), [onlyMissing, setOnlyMissing] = useState(false);
   const val = (p: Product, f: keyof Draft) => drafts.get(p.id)?.[f] ?? (p[f] === null ? "" : String(Number(p[f])));
   const setVal = (p: Product, f: keyof Draft, v: string) => setDrafts(prev => {
@@ -120,6 +123,8 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       const { error } = await supabase.from("products").update({ ss_rate: d.ss_rate.trim() === "" ? null : Number(d.ss_rate), mrp: d.mrp.trim() === "" ? null : Number(d.mrp) }).eq("id", id);
       if (error) failed.push(`${products.find(p => p.id === id)?.item_name}: ${error.message}`);
     }
+    for (const [alias, productId] of learn) await supabase.from("product_aliases").insert({ product_id: productId, alias });
+    setLearn(new Map());
     setBusy("");
     const done = drafts.size - failed.length;
     if (failed.length) say("err", `Saved ${plural(done, "product")}; ${plural(failed.length, "product")} failed. ${failed.slice(0, 3).join("; ")}`);
@@ -138,15 +143,8 @@ export default function Pricing({ products, locations, margins, schemes, canMana
     say("ok", r.added || r.rated ? `Added ${plural(r.added, "product")} from the DSR price list${r.rated ? ` and set the SS rate of ${plural(r.rated, "listed product")}` : ""}. Quantities for these are in dozens.` : "Every DSR product is already in the product list.");
     await onChanged();
   }
-  function fillFromPurchase() {
-    setDrafts(prev => {
-      const n = new Map(prev);
-      for (const p of missing) if (p.purchase_rate > 0 && !n.get(p.id)?.ss_rate) n.set(p.id, { ss_rate: String(p.purchase_rate), mrp: val(p, "mrp") });
-      return n;
-    });
-  }
   function download() {
-    const rows = products.map(p => ({ SKU: p.sku, Product: p.item_name, "SS rate": Number(p.ss_rate) || "", MRP: Number(p.mrp) || "", "Last purchase rate": p.purchase_rate || "" }));
+    const rows = products.map(p => ({ SKU: p.sku, Product: p.item_name, Category: p.category || "", "SS rate per dozen": Number(p.ss_rate) || "" }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Prices");
     XLSX.writeFile(wb, `price-list-${day}.xlsx`);
@@ -154,12 +152,24 @@ export default function Pricing({ products, locations, margins, schemes, canMana
   /** Reads every sheet of every chosen file (Excel, CSV, PDF, Word…) that has an SS rate or MRP column. */
   async function upload(files: File[]) {
     let n = 0; const unknown: string[] = [], unused: string[] = [];
-    const next = new Map(drafts);
+    const next = new Map(drafts), learned = new Map(learn);
     for (const file of files) {
       try {
         for (const sh of (await readAnyFile(file)).sheets) {
           const grid = sh.grid;
-          const hi = grid.findIndex(r => r.some(c => /\bss\b|mrp/i.test(cellText(c))));
+          const listed = readPriceList(grid);
+          if (listed.length) {
+            for (const r of listed) {
+              const p = matchPriceRow(r, products, aliases);
+              if (!p) { unknown.push(r.name); continue; }
+              const cur = next.get(p.id) || { ss_rate: val(p, "ss_rate"), mrp: val(p, "mrp") };
+              next.set(p.id, { ss_rate: String(r.ss), mrp: r.mrp !== null ? String(r.mrp) : cur.mrp });
+              if (normName(p.item_name) !== normName(r.name) && normName(p.sku) !== normName(r.name) && !aliases.some(a => normName(a.alias) === normName(r.name))) learned.set(r.name, p.id);
+              n++;
+            }
+            continue;
+          }
+          const hi = grid.findIndex(r => r.some(c => /\bss\b|s\.\s*s\.|cost price|mrp/i.test(cellText(c))));
           if (hi < 0) { unused.push(`${file.name} › ${sh.name}`); continue; }
           const head = grid[hi].map(c => cellText(c).toLowerCase());
           const col = (re: RegExp) => head.findIndex(h => re.test(h));
@@ -178,7 +188,7 @@ export default function Pricing({ products, locations, margins, schemes, canMana
         }
       } catch (e) { unused.push(`${file.name} (${errText(e)})`); }
     }
-    setDrafts(next);
+    setDrafts(next); setLearn(learned);
     say(n ? "ok" : "err", `${n ? `Read prices for ${plural(n, "product")}. Check them below, then press Save prices.` : "No prices were read."}${unknown.length ? ` ${plural(unknown.length, "row")} didn't match a product: ${unknown.slice(0, 5).join(", ")}${unknown.length > 5 ? "…" : ""}.` : ""}${unused.length ? ` Not used (no SS rate or MRP column): ${unused.join(", ")}.` : ""}`);
   }
 
@@ -254,28 +264,24 @@ export default function Pricing({ products, locations, margins, schemes, canMana
       <div className="rowhead"><h2>Product prices</h2>
         <div className="actions wrap">{canManage && <button className="secondary" disabled={busy === "dsr"} onClick={fromDsr}>{busy === "dsr" ? "Adding…" : "Add DSR Products"}</button>}<button className="secondary" onClick={download}>Download price list</button>
           {canManage && <label className="filebtn">Upload price list<input type="file" multiple accept={ACCEPT} hidden onChange={e => { const f = [...(e.target.files || [])]; if (f.length) upload(f); e.target.value = ""; }} /></label>}</div></div>
-      <p>The SS rate is set automatically the first time a godown dispatch to a super stockist carries a rate. Change it here when your price list changes. Distributor and retailer prices use today's margins; schemes for particular super stockists aren't included.</p>
-      {missing.length > 0 && <p className="warn">{plural(missing.length, "product")} {missing.length === 1 ? "has" : "have"} no SS rate and {missing.length === 1 ? "is" : "are"} valued at the last purchase rate for now.
-        {canManage && <> <button className="secondary" onClick={fillFromPurchase}>Use purchase rate as SS rate</button></>}</p>}
+      <p>Stock is valued only at these rates, which come from your price list: upload the KA Price List here when it changes, or type a rate in. Rates written in stock files are never used. Distributor and retailer prices use today's margins; schemes for particular super stockists aren't included.</p>
+      {missing.length > 0 && <p className="warn">{plural(missing.length, "product")} {missing.length === 1 ? "isn't" : "aren't"} on the price list yet, so {missing.length === 1 ? "its" : "their"} stock is valued at ₹0. Tick "Only products without an SS rate" to see {missing.length === 1 ? "it" : "them"}, then type the rate or upload the price list.</p>}
       <div className="actions wrap">
         <input placeholder="Search products" value={q} onChange={e => setQ(e.target.value)} className="pricing-search" />
         <label className="inline"><input type="checkbox" checked={onlyMissing} onChange={e => setOnlyMissing(e.target.checked)} /> Only products without an SS rate</label>
         <div className="seg" role="group" aria-label="Show">{(["ALL", "ACTIVE", "DORMANT"] as const).map(k => <button key={k} className={pstatus === k ? "on" : ""} onClick={() => setPstatus(k)}>
           {k === "ALL" ? `All (${products.length})` : k === "ACTIVE" ? `Active (${products.filter(p => p.status !== "DORMANT").length})` : `Dormant (${products.filter(p => p.status === "DORMANT").length})`}</button>)}</div>
       </div>
-      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>Last purchase rate</th><th>SS rate / dozen</th><th>To distributor / dozen</th><th>To retailer / dozen</th><th>MRP / piece</th><th>MRP ÷ SS rate</th></tr></thead>
+      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>SS rate / dozen</th><th>To distributor / dozen</th><th>To retailer / dozen</th></tr></thead>
         <tbody>{shown.map(p => {
-          const ss = Number(val(p, "ss_rate")) || 0, mrp = Number(val(p, "mrp")) || 0;
+          const ss = Number(val(p, "ss_rate")) || 0;
           const d = up(ss, now.ss), r = up(d, now.distributor);
           return <tr key={p.id} className={drafts.has(p.id) ? "changed" : undefined}>
             <td>{p.sku}</td><td>{p.item_name}</td>
             <td><button className={`statuspill ${p.status === "DORMANT" ? "dormant" : "active"}`} disabled={!canManage} onClick={() => setStatus(p)} title={canManage ? "Click to change" : undefined}>{p.status === "DORMANT" ? "Dormant" : "Active"}</button></td>
-            <td>{p.purchase_rate ? rs(p.purchase_rate) : <span className="muted">none</span>}</td>
             <td><input inputMode="decimal" aria-label={`SS rate for ${p.item_name}`} value={val(p, "ss_rate")} disabled={!canManage} placeholder="not set" onChange={e => setVal(p, "ss_rate", e.target.value)} /></td>
             <td>{ss ? rs(d) : ""}</td>
-            <td>{ss ? rs(r) : ""}{ss && mrp && r > mrp * 12 ? <div className="err">above MRP ({rs(mrp * 12)} a dozen)</div> : null}</td>
-            <td><input inputMode="decimal" aria-label={`MRP for ${p.item_name}`} value={val(p, "mrp")} disabled={!canManage} placeholder="not set" onChange={e => setVal(p, "mrp", e.target.value)} /></td>
-            <td>{ss && mrp ? `${fmt((mrp * 12) / ss, 1)}×` : ""}</td>
+            <td>{ss ? rs(r) : ""}</td>
           </tr>;
         })}</tbody></table></div>
         : <p className="muted">No products yet. They're added when stock is uploaded.</p>}

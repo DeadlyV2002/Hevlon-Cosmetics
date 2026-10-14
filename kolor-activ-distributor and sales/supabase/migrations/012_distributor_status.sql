@@ -562,3 +562,132 @@ language sql stable set search_path=public as $$
 $$;
 revoke all on function public.distributor_booking_span() from public, anon;
 grant execute on function public.distributor_booking_span() to authenticated;
+
+-- ---------- Rates only from the price list ----------
+-- Stock is valued at the SS rate from the company price list (KA Price List, per dozen). Rates written in
+-- stock files, billing sheets, purchase registers or the DSR never set or change it: unit_price simply
+-- follows the price-list rate, and a SKU not on the price list is valued at 0 until its rate is entered.
+drop trigger if exists fill_ss_rate on public.inventory_transactions;
+create or replace function public.price_list_rate() returns trigger
+language plpgsql set search_path=public as $$
+begin
+  new.unit_price := coalesce(nullif(new.ss_rate, 0), 0);
+  return new;
+end $$;
+drop trigger if exists products_price_list_rate on public.products;
+create trigger products_price_list_rate before insert or update on public.products for each row execute function public.price_list_rate();
+update public.products set unit_price = coalesce(nullif(ss_rate, 0), 0) where unit_price is distinct from coalesce(nullif(ss_rate, 0), 0);
+-- DSR products are still added to the product list, but without a rate: the price list gives it.
+create or replace function public.products_from_dsr() returns jsonb
+language plpgsql security definer set search_path=public as $$
+declare added int := 0; r record; pid uuid;
+begin
+  if not is_manager() then raise exception 'Only HO admins and state managers can change the product list.'; end if;
+  for r in select * from dsr_products order by position loop
+    pid := coalesce(find_product(null, r.name), (select id from products where lower(sku) = lower(r.name) limit 1));
+    if pid is null then
+      insert into products(sku, item_name, unit_price, category) values (r.name, r.name, 0, nullif(r.category, ''));
+      added := added + 1;
+    else
+      update products set category = coalesce(nullif(category, ''), nullif(r.category, '')) where id = pid;
+    end if;
+  end loop;
+  return jsonb_build_object('added', added, 'rated', 0);
+end $$;
+-- The price list's own names, so the next price list upload matches every line exactly.
+insert into public.product_aliases(product_id, alias)
+select p.id, v.alias from (values
+  ('Crystel', 'Kolor Activ Crystel Nail Paint 10ml  RED 125/-'),
+  ('Waaah', 'Waah'),
+  ('Bare Kiss', 'Bare Kiss Lipcolor'),
+  ('Ultra Smooth', 'Kolor Activ Lipcolor Ultra Smooth Mix 205/- (Pcs)'),
+  ('2x1 Lipcolor & Lipstick', '2 In 1 Lip Color'),
+  ('Cosmic Love', 'Cosmics Love'),
+  ('Color Brust', 'Color Burst'),
+  ('Kiss & Coat (2x1)', 'Kiss & Coat Lipcolor'),
+  ('Sig.Mini Matte', 'Mini Matte Signature'),
+  ('Smoochy', 'Kolor Activ Lipcolor Smoochy 3.6ml Red 210/- Pcs'),
+  ('Sheer Micro Lip Color', 'Sheer Micro'),
+  ('Sheer Lip color (12pcs box)', 'Sheer Lips Big'),
+  ('Sweet Heart sparkle lip color 4ml', 'Sweet Heart Sparkle'),
+  ('lip shine lip oil 2.5ml', 'Lip Oil'),
+  ('Dramamatic sparkle lip gloss', 'Drama Matte Lip Gloss'),
+  ('Fusion Lip Color', 'Fusion'),
+  ('My charm Lip Color 2ml jar', 'My Charm Lipcolor 2ml'),
+  ('Color Belle', 'Colour Belle'),
+  ('Just Juicy', 'Just Juicy Lip Gloss'),
+  ('Ultra Matte', 'Ultra Mat'),
+  ('Lip Crayon Sizzle (Non Transfer)', 'Lip Cryon Sizzle'),
+  ('Lip n Love', 'Beauty Bank'),
+  ('Shades of love gel 4gm', 'Gel Lipstick'),
+  ('Selfie Queen 4gm', 'Kolor Activ Lipstick Selfie Queen Mix 115/- Pcs'),
+  ('Plum Petal', 'Plum Petel'),
+  ('Cherry Cola', 'Kolor Activ Lipstick Cherry Cola Mix 120/- Pcs'),
+  ('Stole my Heart', 'Kolor Activ Lipstick Stole My Heart R+M 130/- (Pcs)'),
+  ('Wink It', 'Kolor Activ Eyeliner Wink It 65/- (Pcs)'),
+  ('Line Up', 'Lineup'),
+  ('Easy Skestch Eyeliner', 'Easy Sketch Eyeliner'),
+  ('Blink It', 'Blink It Maskara'),
+  ('Lash Up', 'Lashup'),
+  ('2x1 Silk & Shine', 'Shilk & Shine 2x1'),
+  ('Natural Look', 'Natural Looks'),
+  ('2 X 1 Touch Me', 'Touch Me 2x1'),
+  ('Full Coverage 30ml', 'Foundation 30 Ml'),
+  ('Prism Perfect Tube 25ml', 'Prism Foundation Tube 25 Ml'),
+  ('Liquid Foundation 12ml', 'Foundation 12 Ml'),
+  ('Infusible Foundation (Pump) 30ml', 'Infusible Foundation 30ml'),
+  ('Intense Glow Foundation 30ml', 'Intense Glow Foundation 30 Ml'),
+  ('Flawless Primer Tube 25ml', 'Primer Tube'),
+  ('Makeup Fixer 100ml', 'Makeup Fixer 100 ML'),
+  ('Makeup Fixer 50ML Stayzy', 'Stayzy Fixer 50 Ml'),
+  ('Smooth Silk Makeup Remover 50ml', 'Makeup Remover'),
+  ('Concealer 9ml New Pack', 'Concealer 9ml'),
+  ('Beauty Blender Puff', 'Blender Sponge Puff'),
+  ('Magic Pan stick Concealer', 'Magic Pan Stick Conceler'),
+  ('Concealer & Puff (Combo)', 'Conceler & Puff Combo'),
+  ('3D Highlighter', '3d Skin Highlighter'),
+  ('One Love', 'One Love Highlighter'),
+  ('Kajal Stick 0%', 'Kajal Stick 2gm (12 Pc)'),
+  ('Tint Eyebrow Pencil 1.5gm', 'Tint Eyebrow Pencil'),
+  ('Diva Kajal Pencil 2.5gm', 'Diva Kajal Pencil'),
+  ('Nayandeep Kajal 0.28gm', 'Nayandeep Kajal'),
+  ('Herbal Kajal 2gm (0%)', 'Herbal Kajal 2gm'),
+  ('Diva kajal pencil 2.5 gm (sharpner)', 'Diva Kajal Pencil (Sharpner)'),
+  ('Soft Kajal', 'Soft Kajal New Pack'),
+  ('Wipes (24pcs) Round', 'Round Wipes'),
+  ('Wipes (24pcs) Mushroom', 'Wipes Mushroom'),
+  ('Round  White 30ml', 'Round White'),
+  ('Flat Pink 28ml', 'Flat Pink 30ml'),
+  ('3x1 100ml', 'Nail Cleanser 3 In 1-100ml'),
+  ('Flat White 28ml Instant', 'Instant Nail 28ml'),
+  ('Rose Water 125 ml with Pump', 'Rose Water 125 Ml'),
+  ('Rose water Gel Spray 125ml', 'Rose Water Gel 125 Ml'),
+  ('Cleansing Milk 125ml', 'Cleansing Milk'),
+  ('Lip Balm 4gm', 'Lip Balm 4 Gm'),
+  ('Melody Lip Balm', 'Kolor Activ Lip Balm Melody 1.4gm 30/- (Pcs)'),
+  ('Femina Lip Balm 3.4gm', 'Femina Lip Bal'),
+  ('Strawberry blast 10 gm', 'Strawberry Blast Tube 10 Gm'),
+  ('Asha', 'Asha Sindoor'),
+  ('Ashirwaad', 'Ashirwad Sindoor'),
+  ('Blemish Glam', 'Blemish Sindoor'),
+  ('Pearl', 'Pearl Sindoor'),
+  ('Sneha', 'Sneha Sindoor'),
+  ('Stick Sindoor', 'Sindoor Stick 2gm.'),
+  ('Riti Riwaz Herbal', 'Riti Riwaz'),
+  ('Jewel', 'Jewel Sindoor'),
+  ('Sweet Heart Sparkle', 'Sweet Sparkle Sindoor'),
+  ('My charm 2ml', 'My Charm Sindoor'),
+  ('4 x 1 Blush on', 'Blush 4x1'),
+  ('10x1 Blush on', 'Blush 10x1'),
+  ('9 x 1 Eye shadow', 'Eye Shadow 9x1'),
+  ('10 x 1 Eye shadow', 'Eye Shadow 10x1'),
+  ('12 x 1 Eye shadow', 'Eye Shadow 12x1'),
+  ('16 x 1 Eye shadow', 'Eye Shadow 16x1'),
+  ('50 gm Box Pack', 'Glycerin-50ml Box'),
+  ('100 gm Box Pack', 'Glycerin-100 Ml Box'),
+  ('True Fit Cotton Buds Pouch 100 Stems', 'Cotton Buds Pouch'),
+  ('True Fit Cotton Buds Box 100 Stems', 'Cotton Buds Jar'),
+  ('True Fit Cotton Pad 50''s', 'Cotton Pads'),
+  ('True Fit Cotton Balls', 'Cotton Balls')
+) v(alias, target) join public.products p on p.item_name = v.target
+on conflict do nothing;

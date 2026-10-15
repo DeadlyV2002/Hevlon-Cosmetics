@@ -105,13 +105,22 @@ export default function Pricing({ products, aliases, locations, margins, schemes
     const t = q.trim().toLowerCase();
     return products.filter(p => (!onlyMissing || !Number(p.ss_rate)) && (pstatus === "ALL" || (p.status || "ACTIVE") === pstatus) && (!t || p.item_name.toLowerCase().includes(t) || p.sku.toLowerCase().includes(t)));
   }, [products, q, onlyMissing, pstatus]);
-  /** Dormant products stay listed: distributors still return old stock of them. */
+  /** Dormant products stay listed: distributors and the godown can still hold old stock of them. */
   async function setStatus(p: Product) {
     if (!supabase) return;
     const next = p.status === "DORMANT" ? "ACTIVE" : "DORMANT";
     const { error } = await supabase.rpc("set_product_status", { p_ids: [p.id], p_status: next });
     if (error) return say("err", `Not changed: ${errText(error)}. Run database step 012.`);
-    say("ok", `${p.item_name} is now ${next === "DORMANT" ? "dormant (kept in the list for returns and old stock)" : "active"}.`);
+    say("ok", `${p.item_name} is now ${next === "DORMANT" ? "dormant. Stock still held of it stays in the app and is still counted." : "active"}.`);
+    await onChanged();
+  }
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  async function setStatusMany(next: "ACTIVE" | "DORMANT") {
+    if (!supabase || !picked.size) return;
+    const { error } = await supabase.rpc("set_product_status", { p_ids: [...picked], p_status: next });
+    if (error) return say("err", `Not changed: ${errText(error)}. Run database step 012.`);
+    say("ok", `${plural(picked.size, "product")} marked ${next === "DORMANT" ? "dormant. Their stock stays in the app and is still counted." : "active"}.`);
+    setPicked(new Set());
     await onChanged();
   }
   const badDraft = [...drafts.values()].some(d => [d.ss_rate, d.mrp].some(v => v.trim() !== "" && (isNaN(Number(v)) || Number(v) < 0)));
@@ -272,13 +281,19 @@ export default function Pricing({ products, aliases, locations, margins, schemes
         <div className="seg" role="group" aria-label="Show">{(["ALL", "ACTIVE", "DORMANT"] as const).map(k => <button key={k} className={pstatus === k ? "on" : ""} onClick={() => setPstatus(k)}>
           {k === "ALL" ? `All (${products.length})` : k === "ACTIVE" ? `Active (${products.filter(p => p.status !== "DORMANT").length})` : `Dormant (${products.filter(p => p.status === "DORMANT").length})`}</button>)}</div>
       </div>
-      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>SS rate / dozen</th><th>To distributor / dozen</th><th>To retailer / dozen</th></tr></thead>
+      {canManage && <div className="actions wrap"><span className="hint">Tick SKUs to change several at once{picked.size ? ` (${picked.size} ticked)` : ""}:</span>
+        <button className="secondary small" disabled={!picked.size} onClick={() => setStatusMany("DORMANT")}>Mark Dormant</button>
+        <button className="secondary small" disabled={!picked.size} onClick={() => setStatusMany("ACTIVE")}>Mark Active</button>
+        {picked.size > 0 && <button className="link" onClick={() => setPicked(new Set())}>Clear ticks</button>}</div>}
+      <p className="hint">A dormant SKU is no longer sold, but any stock of it still held (in the godown or with distributors) stays in the app and is counted and valued as usual.</p>
+      {products.length ? <div className="tablewrap scrolltable"><table className="edit nice"><thead><tr>{canManage && <th><input type="checkbox" aria-label="Tick all shown" checked={shown.length > 0 && shown.every(p => picked.has(p.id))} onChange={e => setPicked(x => { const n = new Set(x); shown.forEach(p => (e.target.checked ? n.add(p.id) : n.delete(p.id))); return n; })} /></th>}<th>SKU</th><th>Product</th><th>Status</th><th>SS rate / dozen</th><th>To distributor / dozen</th><th>To retailer / dozen</th></tr></thead>
         <tbody>{shown.map(p => {
           const ss = Number(val(p, "ss_rate")) || 0;
           const d = up(ss, now.ss), r = up(d, now.distributor);
           return <tr key={p.id} className={drafts.has(p.id) ? "changed" : undefined}>
+            {canManage && <td><input type="checkbox" aria-label={`Tick ${p.item_name}`} checked={picked.has(p.id)} onChange={e => setPicked(x => { const n = new Set(x); if (e.target.checked) n.add(p.id); else n.delete(p.id); return n; })} /></td>}
             <td>{p.sku}</td><td>{p.item_name}</td>
-            <td><button className={`statuspill ${p.status === "DORMANT" ? "dormant" : "active"}`} disabled={!canManage} onClick={() => setStatus(p)} title={canManage ? "Click to change" : undefined}>{p.status === "DORMANT" ? "Dormant" : "Active"}</button></td>
+            <td><button className={`switch${p.status === "DORMANT" ? "" : " on"}`} disabled={!canManage} onClick={() => setStatus(p)} aria-pressed={p.status !== "DORMANT"} title={canManage ? "Switch between active and dormant" : undefined}><i />{p.status === "DORMANT" ? "Dormant" : "Active"}</button></td>
             <td><input inputMode="decimal" aria-label={`SS rate for ${p.item_name}`} value={val(p, "ss_rate")} disabled={!canManage} placeholder="not set" onChange={e => setVal(p, "ss_rate", e.target.value)} /></td>
             <td>{ss ? rs(d) : ""}</td>
             <td>{ss ? rs(r) : ""}</td>

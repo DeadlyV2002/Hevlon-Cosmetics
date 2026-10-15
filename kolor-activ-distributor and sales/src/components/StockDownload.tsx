@@ -176,7 +176,7 @@ export default function StockDownload({ locations, products, stock, notify, chil
   const breakdown = (id: string) => <div className="sk-cats">{cats(id).map(([c, e]) => <details key={c}><summary><b>{c}</b><span>{fmt(dz(e.dz))} dz · {fmt(pcs(e.dz))} pcs</span><span>{money(e.value)}</span></summary>
     <table className="nice"><thead><tr><th>SKU</th><th>Dozens</th><th>Pieces</th><th>Value</th><th>Shades</th></tr></thead><tbody>{e.items.sort((a, b) => b.value - a.value).map(i => {
       const sh = (shades.get(i.id) || []).filter(x => x.shade !== "" || (shades.get(i.id) || []).length > 1);
-      return <tr key={i.name}><td>{i.name}</td><td>{fmt(dz(i.dz))}</td><td>{fmt(pcs(i.dz))}</td><td>{money(i.value)}</td>
+      return <tr key={i.name}><td>{i.name}{productById.get(i.id)?.status === "DORMANT" && <small className="muted"> dormant</small>}</td><td>{fmt(dz(i.dz))}</td><td>{fmt(pcs(i.dz))}</td><td>{money(i.value)}</td>
         <td className="wrap">{sh.length ? <span className="shadechips">{sh.map(x => <span key={x.shade} className="shadechip"><b>{x.shade || "shade not given"}</b> {fmt(pcs(x.qty))} pcs</span>)}</span> : <span className="muted">—</span>}</td></tr>;
     })}</tbody></table></details>)}</div>;
   const row = (d: Distributor, cls = "") => { const e = perLoc.get(d.id) || zero; return <div key={d.id} className="sk-item"><label className={`sk-row ${cls}${e.units ? "" : " none"}`}>

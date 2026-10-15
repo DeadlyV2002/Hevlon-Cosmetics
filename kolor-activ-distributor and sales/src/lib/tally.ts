@@ -2,6 +2,7 @@
 // "Kolor Activ Lipcolor Bare Kiss 3.6ml Mrn 189/-Pcs" is Bare Kiss, shade Maroon. Brand, product type, size, MRP and
 // "(Pcs)" are dropped; what is left after the SKU's own words is the shade (A and B are shade-set boxes).
 import { typoDistance } from "./fuzzy";
+import { normName } from "./parse";
 
 export interface SkuLike { id: string; item_name: string; sku: string; category?: string | null; mrp?: number | null }
 export interface TallyMatch<P> { product: P; shade: string; old: boolean; sure: boolean; why: string }
@@ -75,6 +76,8 @@ export function matchTallyLine<P extends SkuLike>(line: string, products: P[], a
         + (np.sizes.length && lp.sizes.length ? 3 : 0);
       // The clean SKU over a Tally-style copy of it.
       if (/^kolor activ/i.test(p.item_name)) score -= 6;
+      // This very line saved as the SKU's other name: it's that SKU.
+      if (normName(n) === normName(line)) score += 100;
       if (!best || score > best.score) { if (best && best.p.id !== p.id) second = Math.max(second, best.score); best = { p, used, score }; }
       else if (p.id !== best.p.id) second = Math.max(second, score);
     }

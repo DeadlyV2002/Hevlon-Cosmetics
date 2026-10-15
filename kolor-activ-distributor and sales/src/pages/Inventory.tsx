@@ -103,6 +103,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
   /** Details printed above a closing stock table: DB name, town, SO/ASE, HQ, month, stock date. */
   const [sheetInfo, setSheetInfo] = useState<SheetInfo | null>(null);
   const [pieces, setPieces] = useState(false);
+  /** The sheet lists all of the location's stock: SKUs it holds that aren't in the sheet go to 0. Ticked for the godown. */
+  const [fullCount, setFullCount] = useState<boolean | null>(null);
   const [fix, setFix] = useState<Record<string, string>>({});
   const reviewRef = useRef<HTMLDivElement>(null);
 
@@ -300,7 +302,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     guessed.current = "";
     await onListsChanged();
   }
-  function clearAll() { setManual(false); setSheetInfo(null); setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
+  function clearAll() { setFullCount(null); setManual(false); setSheetInfo(null); setTable(null); setLayout(null); setRows([]); setSkipped([]); setFile(null); setDetection(null); setAliasPlan({}); setStatus(null); setAdding(null); setExisting([]); }
 
   /** "This name in the file = that existing product": applied to every row with the same name and remembered on save. */
   const guessed = useRef("");
@@ -527,6 +529,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     say("ok", `Added ${name.trim()} to your SO list. Add their phone and area on the SO checks page.`);
   }
 
+  const isFull = fullCount ?? holderLoc?.kind === "GODOWN";
   // ---------- save ----------
   const blocker = !rows.length ? "Nothing to save yet."
     : !live.length ? "Every row is already recorded, so there's nothing new to save."
@@ -550,7 +553,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     const clean = send.map(({ include: _, ...r }) => ({ ...r, quantity: pieces ? Math.round((r.quantity / 12) * 1000) / 1000 : r.quantity, distributor: r.distributor.trim(), sku: r.sku.trim(), item_name: r.item_name.trim(), retailer: r.retailer.trim(), so: r.so.trim() }));
     const common = { p_source_file: file?.name ?? "manual entry", p_file_hash: file?.hash ?? null, p_allow_duplicate: allowDuplicate || type === "COUNT" };
     const { data, error } = type === "COUNT"
-      ? await supabase.rpc("post_stock_count", { p_distributor: holderLoc!.code, p_rows: clean, p_date: date, ...common })
+      ? await supabase.rpc("post_stock_count", { p_distributor: holderLoc!.code, p_rows: clean, p_date: date, ...common, p_full: isFull })
       : type === "SO"
         ? await supabase.rpc("post_so_report", { p_rows: clean, ...common })
         : await supabase.rpc("post_movements", { p_type: type, p_rows: clean, p_holder: holderLoc?.code ?? null, p_reduce_sender: reduceSender, ...common });
@@ -574,7 +577,7 @@ export default function Inventory({ locations, products, aliases, stock, officer
     }
 
     const skippedNote = nExcluded && type !== "COUNT" ? ` ${plural(nExcluded, "row")} already recorded ${nExcluded === 1 ? "was" : "were"} skipped.` : "";
-    const msg = type === "COUNT" ? `Stock count saved for ${holderLoc?.name}: ${data.increased} products up, ${data.decreased} down, ${data.unchanged} unchanged. Undo is on the History page.`
+    const msg = type === "COUNT" ? `Stock count saved for ${holderLoc?.name}: ${data.increased} up, ${data.decreased} down, ${data.unchanged} unchanged${data.zeroed ? `, ${data.zeroed} not in the sheet set to 0` : ""}. Undo is on the History page.`
       : type === "SO" ? `Saved ${plural(data.posted_rows, "SO report line")}. The SO checks page compares them with distributor stock.`
       : `Saved ${plural(data.posted_rows, "row")}${data.transfers ? `, including ${plural(data.transfers, "transfer")}` : ""}.${skippedNote} Undo is on the History page.`;
     if (type === "COUNT" && holderLoc && !holderLoc.so_id && sheetInfo?.person) {
@@ -691,6 +694,8 @@ export default function Inventory({ locations, products, aliases, stock, officer
           {officers.map(o => <option key={o.id} value={o.code}>{o.name} ({o.code})</option>)}</Select></label>}
         <label>{type === "COUNT" ? "Stock count date" : "Date for rows with no date in the file"}<input type="date" value={date} onChange={e => setAll("date", e.target.value)} /></label>
       </div>
+      {type === "COUNT" && holderLoc && <label className="inline fullcount"><input type="checkbox" checked={isFull} onChange={e => setFullCount(e.target.checked)} />
+        {" "}This sheet is all of {holderLoc.name}'s stock: any SKU they hold that isn't in it is set to 0{holderLoc.kind === "GODOWN" ? " (usual for the godown's full stock sheet)" : ""}</label>}
       {!locations.length && <p className="warn">No locations yet. Add your godown, super stockists and distributors on the Distributors page first.</p>}
       <button className="secondary" onClick={() => setRows(rs => [...rs, { ...emptyRow(), distributor: holder, date, so: soDefault }])}>+ Add Row By Hand</button>
       </>}

@@ -51,6 +51,9 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 export default function StockDownload({ locations, products, stock, notify, children }: { locations: Distributor[]; products: Product[]; stock: StockLine[]; notify: (m: string) => void; children?: React.ReactNode }) {
   const [sel, setSel] = useState<Set<string>>(new Set()), [search, setSearch] = useState(""), [onlyStock, setOnlyStock] = useState(false);
   const [openSS, setOpenSS] = useState<Set<string>>(new Set()), [openLoc, setOpenLoc] = useState<string | null>(null);
+  /** Categories shown for the open location ("" = all), and a search over its SKUs and shades. */
+  const [catPick, setCatPick] = useState(""), [skuSearch, setSkuSearch] = useState("");
+  useEffect(() => { setCatPick(""); setSkuSearch(""); }, [openLoc]);
   /** The open location's stock shade by shade, per SKU. */
   const [shades, setShades] = useState<Map<string, { shade: string; qty: number }[]>>(new Map());
   useEffect(() => {
@@ -173,12 +176,22 @@ export default function StockDownload({ locations, products, stock, notify, chil
     });
     return [...m].sort((a, b) => b[1].value - a[1].value);
   };
-  const breakdown = (id: string) => <div className="sk-cats">{cats(id).map(([c, e]) => <details key={c}><summary><b>{c}</b><span>{fmt(dz(e.dz))} dz · {fmt(pcs(e.dz))} pcs</span><span>{money(e.value)}</span></summary>
+  const breakdown = (id: string) => { const all = cats(id), t = skuSearch.trim().toLowerCase();
+    const hit = (i: { id: string; name: string }) => !t || i.name.toLowerCase().includes(t) || (shades.get(i.id) || []).some(x => x.shade.toLowerCase().includes(t));
+    const shown = all.filter(([c]) => !catPick || c === catPick).map(([c, e]) => [c, { ...e, items: e.items.filter(hit) }] as [string, typeof e]).filter(([, e]) => e.items.length);
+    return <div className="sk-cats">
+    <div className="catfilter">
+      <div className="seg" role="group" aria-label="Category"><button className={catPick ? "" : "on"} onClick={ev => { ev.preventDefault(); setCatPick(""); }}>All ({all.length})</button>
+        {all.map(([c]) => <button key={c} className={catPick === c ? "on" : ""} onClick={ev => { ev.preventDefault(); setCatPick(catPick === c ? "" : c); }}>{c}</button>)}</div>
+      <input className="search" placeholder="Search a SKU or shade…" value={skuSearch} onChange={ev => setSkuSearch(ev.target.value)} />
+    </div>
+    {!shown.length && <p className="muted">Nothing matches.</p>}
+    {shown.map(([c, e]) => <details key={c} open={!!catPick || !!t}><summary><b>{c}</b><span>{fmt(dz(e.dz))} dz · {fmt(pcs(e.dz))} pcs</span><span>{money(e.value)}</span></summary>
     <table className="nice"><thead><tr><th>SKU</th><th>Dozens</th><th>Pieces</th><th>Value</th><th>Shades</th></tr></thead><tbody>{e.items.sort((a, b) => b.value - a.value).map(i => {
       const sh = (shades.get(i.id) || []).filter(x => x.shade !== "" || (shades.get(i.id) || []).length > 1);
       return <tr key={i.name}><td>{i.name}{productById.get(i.id)?.status === "DORMANT" && <small className="muted"> dormant</small>}</td><td>{fmt(dz(i.dz))}</td><td>{fmt(pcs(i.dz))}</td><td>{money(i.value)}</td>
         <td className="wrap">{sh.length ? <span className="shadechips">{sh.map(x => <span key={x.shade} className="shadechip"><b>{x.shade || "shade not given"}</b> {fmt(pcs(x.qty))} pcs</span>)}</span> : <span className="muted">—</span>}</td></tr>;
-    })}</tbody></table></details>)}</div>;
+    })}</tbody></table></details>)}</div>; };
   const row = (d: Distributor, cls = "") => { const e = perLoc.get(d.id) || zero; return <div key={d.id} className="sk-item"><label className={`sk-row ${cls}${e.units ? "" : " none"}`}>
     <input type="checkbox" checked={sel.has(d.id)} onChange={ev => toggle([d.id], ev.target.checked)} />
     <span className="sk-name">{d.name}<small>{d.code}{d.territory ? ` · ${d.territory}` : ""}{d.status === "DORMANT" ? " · dormant" : ""}</small></span>

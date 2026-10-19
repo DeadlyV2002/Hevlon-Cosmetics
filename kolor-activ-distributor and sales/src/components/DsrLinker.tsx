@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Modal from "./Modal";
 import { Distributor, SalesOfficer, StockLine, money, plural, errText, fmt } from "../lib/supabase";
 import { normName } from "../lib/parse";
 import { similarity } from "../lib/fuzzy";
@@ -13,7 +14,7 @@ export const SURE = 0.95;
 
 /** DSR "DB Name" spellings that don't match a distributor: suggests the closest one to link. */
 export default function DsrLinker({ locations, officers = [], stock = [], canManage, onLinked, notify }: { locations: Distributor[]; officers?: SalesOfficer[]; stock?: StockLine[]; canManage: boolean; onLinked: () => void; notify: (m: string) => void }) {
-  const [open, setOpen] = useState(""), wrap = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState("");
   const [names, setNames] = useState<DbName[] | null>(null), [pick, setPick] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [reload, setReload] = useState(0), [shown, setShown] = useState(PAGE), [q, setQ] = useState("");
   useEffect(() => {
@@ -36,14 +37,14 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
     };
   }, [dists]);
 
-  async function link() {
-    const map = Object.entries(pick).filter(([, id]) => id).map(([db_name, distributor_id]) => ({ db_name, distributor_id }));
+  async function link(only?: string) {
+    const map = Object.entries(pick).filter(([name, id]) => id && (!only || name === only)).map(([db_name, distributor_id]) => ({ db_name, distributor_id }));
     if (!map.length) return;
     setBusy(true);
     try {
       const r = await runTask("Linking DSR DB names", t => linkNames(map, t), map.length, r => `Linked ${plural(r.names, "name")} (${plural(r.days, "SO day")}).`);
       notify(`Linked ${plural(r.names, "DB name")} (${plural(r.days, "SO day")}). Their spellings are saved, so future DSRs match by themselves.`);
-      onLinked();
+      setOpen(""); onLinked();
     } catch (e) { notify(`Not linked: ${errText(e)}`); }
     finally { setBusy(false); }
   }
@@ -89,7 +90,7 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   const details = (n: DbName) => {
     const people = [...n.sos].sort((a, b) => b[1] - a[1]).map(([id, days]) => { const o = soById.get(id); return `${o?.name || "Unknown"}${o?.designation ? ` (${o.designation})` : ""}: ${plural(days, "day")}`; });
     const cands = candidates(n);
-    return <div className="linkinfo" style={{ width: wrap.current ? wrap.current.clientWidth - 24 : undefined }}>
+    return <div className="linkinfo">
       <div className="linkfacts"><h4>What the DSRs say about "{n.name}"</h4>
         <dl className="facts">
           <dt>Booked by</dt><dd>{people.join("; ") || "—"}</dd>
@@ -111,18 +112,31 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   const t = q.trim().toLowerCase(), list = t ? names.filter(n => `${n.name} ${n.state} ${[...n.towns].join(" ")}`.toLowerCase().includes(t)) : names;
   return <section className="card">
     <div className="rowhead"><h2>Link DSR DB Names To Distributors</h2>
-      {canManage && <button disabled={busy || !chosen} onClick={link}>{busy ? "Linking…" : `Link ${plural(chosen, "Name")}`}</button>}</div>
-    <p className="hint">{plural(names.length, "DB name")} in the SO reports {names.length === 1 ? "isn't" : "aren't"} linked to your distributor list, so {names.length === 1 ? "its" : "their"} bookings can't be checked against stock. Close matches in the same state are already chosen ({names.filter(n => n.guess && n.score >= SURE).length}); {names.filter(n => n.guess && n.score < SURE).length} weaker suggestions are offered for you to accept. Click a name to see who booked there, its towns and beats, and the distributors it could be with their SO and super stockist. Check each choice, then link.</p>
+      {canManage && <button disabled={busy || !chosen} onClick={() => link()}>{busy ? "Linking…" : `Link ${plural(chosen, "Name")}`}</button>}</div>
+    <p className="hint">{plural(names.length, "DB name")} in the SO reports {names.length === 1 ? "isn't" : "aren't"} linked to your distributor list, so {names.length === 1 ? "its" : "their"} bookings can't be checked against stock. Close matches in the same state are already chosen ({names.filter(n => n.guess && n.score >= SURE).length}); {names.filter(n => n.guess && n.score < SURE).length} weaker suggestions are offered for you to accept. Click a name to open who booked there, its towns and beats, and the distributors it could be with their SO and super stockist. Check each choice, then link.</p>
     <input className="search" placeholder="Search a DB name, state or town…" value={q} onChange={e => { setQ(e.target.value); setShown(PAGE); }} />
-    <div className="tablewrap scrolltable" ref={wrap}><table className="nice"><thead><tr><th>Name In DSR</th><th>State</th><th>Towns</th><th>Days</th><th>Booked</th><th>Link To</th><th>Suggestion</th></tr></thead>
-      <tbody>{list.slice(0, shown).map(n => <Fragment key={n.name}><tr className={`${pick[n.name] ? "" : "muted"}${open === n.name ? " openrow" : ""}`}>
-        <td><button className="link strong" aria-expanded={open === n.name} onClick={() => setOpen(open === n.name ? "" : n.name)}>{open === n.name ? "▾" : "▸"} {n.name}</button><br /><small className="muted">{[...n.sos.keys()].map(id => soById.get(id)?.name).filter(Boolean).slice(0, 2).join(", ")}</small></td><td>{n.state}</td><td className="wrap">{[...n.towns].slice(0, 3).join(", ")}</td><td>{n.days}</td><td>{money(n.value)}</td>
+    <div className="tablewrap scrolltable"><table className="nice"><thead><tr><th>Name In DSR</th><th>State</th><th>Towns</th><th>Days</th><th>Booked</th><th>Link To</th><th>Suggestion</th></tr></thead>
+      <tbody>{list.slice(0, shown).map(n => <tr key={n.name} className={pick[n.name] ? "" : "muted"}>
+        <td><button className="link strong" aria-haspopup="dialog" onClick={() => setOpen(n.name)}>{n.name}</button><br /><small className="muted">{[...n.sos.keys()].map(id => soById.get(id)?.name).filter(Boolean).slice(0, 2).join(", ")}</small></td><td>{n.state}</td><td className="wrap">{[...n.towns].slice(0, 3).join(", ")}</td><td>{n.days}</td><td>{money(n.value)}</td>
         <td><Select value={pick[n.name] || ""} disabled={!canManage} onChange={e => setPick(p => ({ ...p, [n.name]: e.target.value }))}>
           <option value="">Don't link</option>{optionsFor(n.state)}
         </Select></td>
-        <td>{n.guess && pick[n.name] !== n.guess.id ? <button className="link" disabled={!canManage} onClick={() => setPick(p => ({ ...p, [n.name]: n.guess!.id }))}>Use {n.guess.name}?</button> : n.guess ? <span className="muted">{n.score >= SURE ? "close match" : "your pick"}</span> : <span className="muted">none</span>}</td></tr>
-        {open === n.name && <tr className="inforow"><td colSpan={7}>{details(n)}</td></tr>}</Fragment>)}</tbody></table></div>
+        <td>{n.guess && pick[n.name] !== n.guess.id ? <button className="link" disabled={!canManage} onClick={() => setPick(p => ({ ...p, [n.name]: n.guess!.id }))}>Use {n.guess.name}?</button> : n.guess ? <span className="muted">{n.score >= SURE ? "close match" : "your pick"}</span> : <span className="muted">none</span>}</td></tr>)}</tbody></table></div>
     {list.length > shown && <div className="actions"><span className="muted">Showing {shown} of {list.length}.</span><button className="secondary" onClick={() => setShown(s => s + PAGE)}>Show {Math.min(PAGE, list.length - shown)} More</button></div>}
+    {(() => {
+      const n = open ? names.find(x => x.name === open) : undefined;
+      if (!n) return null;
+      const chosenD = pick[n.name] ? byId.get(pick[n.name]) : undefined;
+      return <Modal wide onClose={() => setOpen("")} className="linkpop"
+        title={<>{n.name} <small className="muted">name in the DSRs</small></>}
+        subtitle={[n.state, plural(n.days, "day"), `${money(n.value)} booked`].filter(Boolean).join(" · ")}
+        actions={canManage && <span className="actions">
+          {chosenD && <button disabled={busy} onClick={() => link(n.name)}>{busy ? "Linking…" : `Link To ${chosenD.name}`}</button>}
+          {pick[n.name] && <button className="secondary" onClick={() => setPick(p => ({ ...p, [n.name]: "" }))}>Don't Link</button>}
+        </span>}>
+        {details(n)}
+      </Modal>;
+    })()}
   </section>;
 }
 

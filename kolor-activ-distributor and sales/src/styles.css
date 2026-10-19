@@ -720,3 +720,4 @@ tr.inforow>td{background:#f8fafc}tr.openrow>td{background:#eff6ff}
 .rsecbody .headline{margin:4px 0 10px;font-size:16px;font-weight:700;color:#0f172a}
 .linkinfo{position:sticky;left:8px;box-sizing:border-box}
 .linkinfo,.linkinfo *{white-space:normal}.linkinfo>div{min-width:0}.linkinfo dd{overflow-wrap:anywhere}
+.linkpop .linkinfo{position:static}

@@ -543,7 +543,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
     </section>}
 
     {tab === "checks" && <>
-      <DsrLinker locations={locations} officers={officers} stock={stock} canManage={canManage} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
+      <DsrLinker locations={locations} officers={officers} stock={stock} canManage={canManage} onListsChanged={onChanged} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
       <SuspectLinks locations={locations} canManage={canManage} notify={notify} onChanged={() => setCheckReload(x => x + 1)} key={`s${checkReload}`} />
       <section className="card">
         <div className="rowhead"><h2>SO Bookings Against Distributor Stock</h2><DateRange value={checkRange} onChange={setCheckRange} /></div>

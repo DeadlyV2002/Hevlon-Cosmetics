@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "./Modal";
-import { Distributor, SalesOfficer, StockLine, money, plural, errText, fmt } from "../lib/supabase";
+import LocationForm from "./LocationForm";
+import { guessDetails } from "../lib/batch";
+import { Distributor, SalesOfficer, StockLine, money, plural, errText, fmt, proper } from "../lib/supabase";
 import { normName } from "../lib/parse";
 import { similarity } from "../lib/fuzzy";
 import { dmy } from "../lib/dates";
@@ -13,8 +15,18 @@ const PAGE = 40;
 export const SURE = 0.95;
 
 /** DSR "DB Name" spellings that don't match a distributor: suggests the closest one to link. */
-export default function DsrLinker({ locations, officers = [], stock = [], canManage, onLinked, notify }: { locations: Distributor[]; officers?: SalesOfficer[]; stock?: StockLine[]; canManage: boolean; onLinked: () => void; notify: (m: string) => void }) {
-  const [open, setOpen] = useState("");
+export default function DsrLinker({ locations, officers = [], stock = [], canManage, onLinked, onListsChanged, notify }: { locations: Distributor[]; officers?: SalesOfficer[]; stock?: StockLine[]; canManage: boolean; onLinked: () => void; onListsChanged?: () => void | Promise<void>; notify: (m: string) => void }) {
+  const [open, setOpen] = useState(""), [adding, setAdding] = useState(false);
+  useEffect(() => setAdding(false), [open]);
+  /** A new distributor made from a DSR name: saved, then the name is linked to it at once. */
+  async function addedNew(name: string, d: Distributor) {
+    try {
+      const r = await runTask("Linking DSR name to the new distributor", t => linkNames([{ db_name: name, distributor_id: d.id }], t), 1, r => `Linked ${plural(r.days, "SO day")}.`);
+      notify(`Added ${d.name} (${d.code}) and linked "${name}" to it (${plural(r.days, "SO day")}).`);
+    } catch (e) { notify(`${d.name} was added, but the DSR name wasn't linked: ${errText(e)}. Link it from the list.`); }
+    setAdding(false); setOpen("");
+    await onListsChanged?.(); onLinked();
+  }
   const [names, setNames] = useState<DbName[] | null>(null), [pick, setPick] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [reload, setReload] = useState(0), [shown, setShown] = useState(PAGE), [q, setQ] = useState("");
   useEffect(() => {
@@ -108,11 +120,24 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
             <dt>HQ</dt><dd>{hqs.join(", ") || "—"}</dd>
           </dl>
         </section>
-        <section className="contact matches">
+        {adding && canManage ? (() => {
+          const g = guessDetails(towns[0] || "", top?.o?.name || "", hqs[0] || "", locations, officers);
+          return <section className="contact matches addnew">
+            <h3>Add As A New Distributor</h3>
+            <p className="hint">Filled in from the DSRs{g.parent_id && g.why ? ` (super stockist and region ${g.why})` : ""}. Check the details, add the owner and phone, and save: "{n.name}" is linked to it straight away.</p>
+            <LocationForm key={n.name} kind="DISTRIBUTOR" prefillName={proper(n.name)} locations={locations} officers={officers}
+              prefill={{ company_name: proper(n.name), state: g.state || n.state, region: g.region || hqs[0] || "", territory: proper(towns[0] || ""), so_id: top?.o?.id || g.so_id, parent_id: g.parent_id, aliases: n.name }}
+              onCancel={() => setAdding(false)} onSaved={d => addedNew(n.name, d)} />
+          </section>;
+        })() : <section className="contact matches">
           <h3>Could Be</h3>
           {cands.length ? cands.map(c => card(c.d, c.why, n))
-            : <p className="empty quiet">No distributor in {n.state || "this state"} has a similar name, is in the same town, or is served by the same SO. It may be a new distributor: add it on the Distributors page, then link it here.</p>}
-        </section>
+            : <p className="empty quiet">No distributor in {n.state || "this state"} has a similar name, is in the same town, or is served by the same SO.</p>}
+          {canManage && <div className={`addnewbar${cands.length ? "" : " lone"}`}>
+            <span>{cands.length ? "None of these?" : "It may be a new distributor."}</span>
+            <button className={cands.length ? "secondary" : ""} onClick={() => setAdding(true)}>+ Add As New Distributor</button>
+          </div>}
+        </section>}
       </div>
     </>;
   };

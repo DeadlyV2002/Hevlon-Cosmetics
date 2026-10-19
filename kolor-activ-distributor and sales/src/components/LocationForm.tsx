@@ -38,7 +38,11 @@ export default function LocationForm({ kind, editing, prefillName, prefill, loca
 
   /** A super stockist fits the chosen state and region if it sits there or already supplies a distributor there. */
   const fitsArea = (x?: Distributor) => !!x && (!form.state || x.state === form.state) && (!form.region.trim() || (x.region || "").toLowerCase() === form.region.trim().toLowerCase());
-  const servesArea = (s: Distributor) => (!form.state && !form.region.trim()) || fitsArea(s) || locations.some(x => x.parent_id === s.id && fitsArea(x)) || s.id === form.parent_id;
+  const servesRegion = (s: Distributor) => fitsArea(s) || locations.some(x => x.parent_id === s.id && fitsArea(x));
+  // A region no super stockist covers yet (a new area): any super stockist in the state can be picked.
+  const newRegion = !!form.region.trim() && !supers.some(servesRegion);
+  const inState = (s: Distributor) => !form.state || s.state === form.state || locations.some(x => x.parent_id === s.id && x.state === form.state);
+  const servesArea = (s: Distributor) => (!form.state && !form.region.trim()) || servesRegion(s) || (newRegion && inState(s)) || s.id === form.parent_id;
   function pickSuper(id: string) {
     const ss = supers.find(s => s.id === id);
     // A new distributor usually sits in its super stockist's state and region.

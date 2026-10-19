@@ -735,3 +735,6 @@ tr.inforow>td{background:#f8fafc}tr.openrow>td{background:#eff6ff}
 .matchrow.on .why{background:#fff}
 .chosen{font-size:13px;font-weight:700;color:#15803d;white-space:nowrap}
 .contact dd.good{color:#15803d;font-weight:600}
+.addnewbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:14px;color:#475569}
+.addnewbar.lone{border-top:none;padding-top:0}
+.linkpop .addnew .hint{margin:0 0 10px}

@@ -52,21 +52,21 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   const soById = useMemo(() => new Map(officers.map(o => [o.id, o])), [officers]);
   const stockOf = useMemo(() => { const m = new Map<string, number>(); stock.forEach(x => m.set(x.distributor_id, (m.get(x.distributor_id) || 0) + Number(x.stock_value || 0))); return m; }, [stock]);
   /** A distributor's details: town, its super stockist (who sends it stock), its SO, stock now. */
-  const card = (d: Distributor, why: string, n: DbName) => {
+  const card = (d: Distributor, why: string[], n: DbName) => {
     const ss = d.parent_id ? byId.get(d.parent_id) : undefined, via = d.via_id ? byId.get(d.via_id) : undefined, so = d.so_id ? soById.get(d.so_id) : undefined;
-    const sameSo = !!so && n.sos.has(so.id), sameTown = !!d.territory && [...n.towns].some(t => similarity(t, d.territory!) >= 0.8);
-    return <div key={d.id} className={`linkcand${pick[n.name] === d.id ? " on" : ""}`}>
-      <div className="rowhead"><b>{d.name} <small className="muted">{d.code}</small></b>
-        {canManage && (pick[n.name] === d.id ? <span className="ok">Chosen</span> : <button className="secondary small" onClick={() => setPick(p => ({ ...p, [n.name]: d.id }))}>Link To This</button>)}</div>
-      <small className="muted">{why}</small>
-      <dl className="facts">
-        <dt>Kind</dt><dd>{d.kind === "SUPER_STOCKIST" ? "Super stockist" : "Distributor"}{d.status === "DORMANT" ? " (dormant)" : ""}</dd>
-        <dt>Town</dt><dd className={sameTown ? "ok" : ""}>{[d.territory, d.region, d.state].filter(Boolean).join(", ") || "—"}{sameTown ? " ✓ same town" : ""}</dd>
+    const sameSo = !!so && n.sos.has(so.id), sameTown = !!d.territory && [...n.towns].some(t => similarity(t, d.territory!) >= 0.8), on = pick[n.name] === d.id;
+    return <div key={d.id} className={`matchrow${on ? " on" : ""}`}>
+      <div className="matchhead">
+        <div><b>{d.name}</b> <small className="muted">{d.code} · {d.kind === "SUPER_STOCKIST" ? "Super stockist" : "Distributor"}{d.status === "DORMANT" ? " · dormant" : ""}</small>
+          <div className="whys">{why.map(w => <span key={w} className="why">{w}</span>)}</div></div>
+        {canManage && (on ? <span className="chosen">✓ Chosen</span> : <button className="secondary" onClick={() => setPick(p => ({ ...p, [n.name]: d.id }))}>Choose</button>)}
+      </div>
+      <dl>
+        <dt>Town</dt><dd className={sameTown ? "good" : ""}>{[d.territory, d.region, d.state].filter(Boolean).join(", ") || "—"}{sameTown ? " ✓" : ""}</dd>
         <dt>Stock from</dt><dd>{d.direct ? "The company directly" : ss ? `${ss.name}${ss.territory ? `, ${ss.territory}` : ""}` : "—"}{via ? ` (goods via ${via.name})` : ""}</dd>
-        <dt>SO</dt><dd className={sameSo ? "ok" : ""}>{so ? `${so.name}${so.designation ? ` (${so.designation})` : ""}` : "Not set"}{sameSo ? " ✓ books this DSR name" : ""}</dd>
+        <dt>SO</dt><dd className={sameSo ? "good" : ""}>{so ? `${so.name}${so.designation ? ` (${so.designation})` : ""}` : "Not set"}{sameSo ? " ✓ books this name" : ""}</dd>
         <dt>Owner</dt><dd>{[d.owner_name, d.phone].filter(Boolean).join(" · ") || "—"}</dd>
-        <dt>Stock now</dt><dd>{stockOf.has(d.id) ? money(stockOf.get(d.id)) : "No stock recorded"}</dd>
-        {(d.aliases || []).length > 0 && <><dt>Other names</dt><dd>{d.aliases.slice(0, 6).join(", ")}{d.aliases.length > 6 ? "…" : ""}</dd></>}
+        <dt>Stock now</dt><dd>{stockOf.has(d.id) ? money(stockOf.get(d.id)) : "None recorded"}</dd>
       </dl>
     </div>;
   };
@@ -88,23 +88,33 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   };
   const once = (list: Iterable<string>) => { const seen = new Map<string, string>(); for (const x of list) { const k = normName(x); if (k && !seen.has(k)) seen.set(k, x.trim()); } return [...seen.values()]; };
   const details = (n: DbName) => {
-    const people = [...n.sos].sort((a, b) => b[1] - a[1]).map(([id, days]) => { const o = soById.get(id); return `${o?.name || "Unknown"}${o?.designation ? ` (${o.designation})` : ""}: ${plural(days, "day")}`; });
-    const cands = candidates(n);
-    return <div className="linkinfo">
-      <div className="linkfacts"><h4>What the DSRs say about "{n.name}"</h4>
-        <dl className="facts">
-          <dt>Booked by</dt><dd>{people.join("; ") || "—"}</dd>
-          <dt>State</dt><dd>{n.state || "—"}</dd>
-          <dt>Towns</dt><dd>{once(n.towns).join(", ") || "—"}</dd>
-          <dt>Beats</dt><dd>{once(n.beats).slice(0, 12).join(", ") || "—"}{once(n.beats).length > 12 ? "…" : ""}</dd>
-          <dt>HQ</dt><dd>{once(n.hqs).join(", ") || "—"}</dd>
-          <dt>Days</dt><dd>{fmt(n.days)}, {dmy(n.first)} to {dmy(n.last)}</dd>
-          <dt>Booked</dt><dd>{money(n.value)}</dd>
-        </dl></div>
-      <div className="linkcands"><h4>{cands.length ? "Could be" : "No likely distributor in this state"}</h4>
-        {cands.map(c => card(c.d, c.why.join(" · "), n))}
-        {!cands.length && <p className="muted">Nobody with a similar name, in the same town, or served by the same SO. It may be a new distributor: add it on the Distributors page, then link it here.</p>}</div>
-    </div>;
+    const people = [...n.sos].sort((a, b) => b[1] - a[1]).map(([id, days]) => ({ o: soById.get(id), days }));
+    const cands = candidates(n), towns = once(n.towns), beats = once(n.beats), hqs = once(n.hqs), top = people[0];
+    const chosenD = pick[n.name] ? byId.get(pick[n.name]) : undefined;
+    return <>
+      <div className="kpis">
+        <div className="kpi"><small>Booked</small><b>{money(n.value)}</b><span>{plural(n.days, "day")}, {dmy(n.first)} to {dmy(n.last)}</span></div>
+        <div className="kpi"><small>Booked by</small><b className="kpitext">{top?.o?.name || "Unknown"}</b><span>{top ? `${top.o?.designation || "SO"} · ${plural(top.days, "day")}` : ""}{people.length > 1 ? ` · ${people.length - 1} more` : ""}</span></div>
+        <div className="kpi"><small>Where</small><b className="kpitext">{towns[0] || n.state || "—"}</b><span>{[n.state, hqs.length ? `HQ ${hqs.join(", ")}` : "", towns.length > 1 ? plural(towns.length, "town") : ""].filter(Boolean).join(" · ")}</span></div>
+        <div className={`kpi${chosenD ? "" : " bad"}`}><small>Link</small><b className="kpitext">{chosenD ? chosenD.name : "Not chosen"}</b><span>{plural(cands.length, "possible distributor")}</span></div>
+      </div>
+      <div className="reportgrid">
+        <section className="contact">
+          <h3>From The DSRs</h3>
+          <dl>
+            <dt>Booked by</dt><dd className="lines">{people.map(p => <span key={p.o?.id || "x"}>{p.o?.name || "Unknown"}{p.o?.designation ? ` (${p.o.designation})` : ""}: {plural(p.days, "day")}</span>)}</dd>
+            <dt>Towns</dt><dd>{towns.join(", ") || "—"}</dd>
+            <dt>Beats</dt><dd>{beats.slice(0, 15).join(", ") || "—"}{beats.length > 15 ? ` and ${beats.length - 15} more` : ""}</dd>
+            <dt>HQ</dt><dd>{hqs.join(", ") || "—"}</dd>
+          </dl>
+        </section>
+        <section className="contact matches">
+          <h3>Could Be</h3>
+          {cands.length ? cands.map(c => card(c.d, c.why, n))
+            : <p className="empty quiet">No distributor in {n.state || "this state"} has a similar name, is in the same town, or is served by the same SO. It may be a new distributor: add it on the Distributors page, then link it here.</p>}
+        </section>
+      </div>
+    </>;
   };
   if (!names) return <section className="card"><p className="empty">Matching DSR DB names to your distributors…</p></section>;
   if (!names.length) return <p className="hint">Every DB name in the DSRs is linked to a distributor.</p>;
@@ -127,9 +137,9 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
       const n = open ? names.find(x => x.name === open) : undefined;
       if (!n) return null;
       const chosenD = pick[n.name] ? byId.get(pick[n.name]) : undefined;
-      return <Modal wide onClose={() => setOpen("")} className="linkpop"
-        title={<>{n.name} <small className="muted">name in the DSRs</small></>}
-        subtitle={[n.state, plural(n.days, "day"), `${money(n.value)} booked`].filter(Boolean).join(" · ")}
+      return <Modal wide onClose={() => setOpen("")} className="report linkpop"
+        title={n.name}
+        subtitle={`DB name in the SO reports, not yet linked to your distributor list${n.state ? ` · ${n.state}` : ""}`}
         actions={canManage && <span className="actions">
           {chosenD && <button disabled={busy} onClick={() => link(n.name)}>{busy ? "Linking…" : `Link To ${chosenD.name}`}</button>}
           {pick[n.name] && <button className="secondary" onClick={() => setPick(p => ({ ...p, [n.name]: "" }))}>Don't Link</button>}

@@ -1,5 +1,18 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { ChartData, SeriesDef, formatValue } from "../lib/insights";
+import { ChartData, SeriesDef, formatValue, valueTitle } from "../lib/insights";
+import { money, fmt } from "../lib/supabase";
+
+/** Short tick labels for the value axis: ₹1.2 L, 45,000, 30%. */
+function tickText(unit: ChartData["unit"], v: number) {
+  if (unit === "money") return money(v);
+  if (unit === "pct" || unit === "percent") return `${fmt(v)}%`;
+  return v >= 1e5 ? `${fmt(v / 1e5, 1)} L` : fmt(v);
+}
+/** A round step so the axis reads 0, 50k, 100k… rather than odd numbers. */
+function niceStep(max: number, ticks = 4) {
+  const raw = max / ticks, p = Math.pow(10, Math.floor(Math.log10(raw || 1))), m = raw / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+}
 
 export type ChartSize = "card" | "focus" | "large";
 
@@ -52,6 +65,7 @@ function Bars({ data, size, labels }: { data: Extract<ChartData, { type: "bars" 
   };
   return <div className={`hbars sz-${size}`} ref={box} onPointerLeave={() => setTip(null)}>
     <Legend series={data.series} />
+    <div className="haxis" aria-hidden="true"><span>{data.yTitle || ""}</span><span>{valueTitle(data)} →</span></div>
     {data.rows.map(r => <div className="hbar" key={r.key} tabIndex={0} aria-label={`${r.label}: ${f(total(r.values))}`}
       onPointerMove={e => show(e, r)} onFocus={e => show(e, r)} onBlur={() => setTip(null)}>
       <span className="hlabel" title={r.label}>{r.label}{r.sub && <small>{r.sub}</small>}</span>
@@ -85,10 +99,12 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
   const lines = data.type === "lines";
   const W = dim.w, H = size === "large" ? Math.max(240, dim.h) : HEIGHT[size];
   const n = data.x.length;
-  const pad = { top: 26, bottom: 26, left: 10, right: lines ? 86 : 10 };
+  const xTitle = data.xTitle || "", yTitle = valueTitle(data);
+  const pad = { top: 26, bottom: xTitle ? 42 : 26, left: 66, right: lines ? 86 : 10 };
   const iw = Math.max(1, W - pad.left - pad.right), ih = Math.max(1, H - pad.top - pad.bottom);
   const stackTotals = data.x.map((_, i) => data.values.reduce((a, s) => a + Math.max(s[i] || 0, 0), 0));
-  const max = Math.max(1, ...(lines ? data.values.flat() : stackTotals)) * 1.08;
+  const raw = Math.max(1, ...(lines ? data.values.flat() : stackTotals)) * 1.08, step = niceStep(raw), max = Math.ceil(raw / step) * step;
+  const ticks = Array.from({ length: Math.round(max / step) + 1 }, (_, i) => i * step);
   const band = iw / Math.max(n, 1);
   const cx = (i: number) => pad.left + band * i + band / 2;
   const y = (v: number) => pad.top + ih - (Math.max(v, 0) / max) * ih;
@@ -117,6 +133,12 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
     <Legend series={data.series} line={lines} />
     <div className="plot" ref={ref} style={size === "large" ? undefined : { height: H }}>
     {W > 0 && <svg width={W} height={H} role="img" aria-label={data.summary} onPointerMove={onMove} onPointerLeave={() => { setTip(null); setHover(-1); }}>
+      {ticks.map(t => <g key={t}>
+        {t > 0 && <line className="gridline" x1={pad.left} x2={pad.left + iw} y1={y(t)} y2={y(t)} />}
+        <text className="ytick" x={pad.left - 6} y={y(t) + 4} textAnchor="end">{tickText(data.unit, t)}</text>
+      </g>)}
+      {yTitle && <text className="axtitle" transform={`translate(11,${pad.top + ih / 2}) rotate(-90)`} textAnchor="middle">{yTitle}</text>}
+      {xTitle && <text className="axtitle" x={pad.left + iw / 2} y={H - 4} textAnchor="middle">{xTitle}</text>}
       <line className="baseline" x1={pad.left} x2={pad.left + iw} y1={pad.top + ih} y2={pad.top + ih} />
       {hover >= 0 && <rect className="hoverband" x={pad.left + band * hover} y={pad.top - 6} width={band} height={ih + 6} />}
       {!lines && data.x.map((_, i) => {
@@ -141,16 +163,20 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
         </g>;
       })}
       {lines && data.series.map((s, k) => {
-        const vals = data.values[k], pk = vals.reduce((b, v, i) => (v > vals[b] ? i : b), 0);
-        if (!vals[pk] || (labels && pk === n - 1)) return null;
-        return <g key={`pk-${s.key}`}><circle className={`f${s.slot} ring`} cx={cx(pk)} cy={y(vals[pk])} r={4} />
-          <text className="dlabel peak" x={cx(pk)} y={y(vals[pk]) - 9} textAnchor="middle">{f(vals[pk])}</text></g>;
+        const vals = data.values[k], pk = vals.reduce((b, v, i) => (v > vals[b] ? i : b), 0), lo = vals.reduce((b, v, i) => (v < vals[b] ? i : b), 0);
+        // One series with room for each value: label every point. Otherwise the highest and lowest points only.
+        const all = labels && data.series.length === 1 && band >= 46;
+        const pts = all ? vals.map((_, i) => i).filter(i => i !== n - 1) : [pk, ...(labels && lo !== pk && data.series.length === 1 ? [lo] : [])].filter(i => vals[i] !== undefined && !(labels && i === n - 1));
+        return <g key={`pk-${s.key}`}>{pts.map(i => <g key={i}>
+          <circle className={`f${s.slot} ring`} cx={cx(i)} cy={y(vals[i])} r={i === pk ? 4 : 3} />
+          {(vals[i] || i === lo) && <text className={`dlabel${i === pk ? " peak" : ""}`} x={cx(i)} y={y(vals[i]) - 9} textAnchor="middle">{f(vals[i])}</text>}
+        </g>)}</g>;
       })}
       {lines && labels && ends.map(e => <g key={e.s.key}>
         {Math.abs(e.y1 - e.y0) > 2 && <line className="leader" x1={cx(n - 1) + 6} x2={cx(n - 1) + 12} y1={e.y0} y2={e.y1} />}
         <text className="dlabel" x={cx(n - 1) + 14} y={e.y1 + 4}>{f(e.v)}</text>
       </g>)}
-      {data.x.map((lab, i) => i % xEvery === (n - 1) % xEvery && <text key={i} className="xlabel" x={cx(i)} y={H - 8} textAnchor="middle">{lab}</text>)}
+      {data.x.map((lab, i) => i % xEvery === (n - 1) % xEvery && <text key={i} className="xlabel" x={cx(i)} y={pad.top + ih + 16} textAnchor="middle">{lab}</text>)}
       {empty && <text className="xlabel" x={pad.left + iw / 2} y={pad.top + ih / 2} textAnchor="middle">Nothing recorded in these weeks</text>}
     </svg>}
     <Tooltip tip={tip} />

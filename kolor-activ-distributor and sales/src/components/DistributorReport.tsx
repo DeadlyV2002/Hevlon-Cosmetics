@@ -61,9 +61,22 @@ export default function DistributorReport({ location, locations, stock, officers
   const recent = m.slice(-13);
   const flow: ChartData | null = recent.length ? { type: "lines", unit: "money", summary: "", x: recent.map(x => mon(x.month)),
     series: [{ key: "bought", name: "Billed to them", slot: 1 }, { key: "sold", name: "Sold on", slot: 2 }, { key: "so", name: "SO secondary", slot: 3 }],
-    values: [recent.map(x => n(x.bought_value)), recent.map(x => n(x.sold_value)), recent.map(x => n(x.so_value))] } : null;
+    values: [recent.map(x => n(x.bought_value)), recent.map(x => n(x.sold_value)), recent.map(x => n(x.so_value))], xTitle: "Month", yTitle: "Value (₹)" } : null;
   const closing: ChartData | null = recent.length ? { type: "columns", unit: "money", summary: "", x: recent.map(x => mon(x.month)),
-    series: [{ key: "stock", name: "Stock at month end", slot: 1 }], values: [recent.map(x => n(x.closing_value))] } : null;
+    series: [{ key: "stock", name: "Stock at month end", slot: 1 }], values: [recent.map(x => n(x.closing_value))], xTitle: "Month", yTitle: "Stock value (₹)" } : null;
+  // What each chart shows, in one line.
+  const sum = (k: "bought_value" | "sold_value" | "so_value") => recent.reduce((a, x) => a + n(x[k]), 0);
+  const flowHead = (() => {
+    const b = sum("bought_value"), so = sum("so_value"), sold = sum("sold_value");
+    if (!b && !so && !sold) return "";
+    if (b && so) return so > b * 1.1 ? `SOs booked ${money(so)} here in 13 months, ${money(so - b)} more than was billed to them (${money(b)})` : `${money(b)} billed to them in 13 months; SOs booked ${money(so)} (${fmt((so / b) * 100)}% of billing)`;
+    return b ? `${money(b)} billed to them in 13 months${sold ? `, ${money(sold)} sold on` : ""}` : `SOs booked ${money(so)} here in 13 months, with no billing recorded`;
+  })();
+  const closingHead = (() => {
+    const v = recent.map(x => n(x.closing_value)), lastV = [...v].reverse().find(x => x) || 0, hi = Math.max(...v), i = v.indexOf(hi);
+    if (!hi) return "";
+    return `Stock at the last count: ${money(lastV)}${hi > lastV ? `; highest was ${money(hi)} in ${mon(recent[i].month)}` : ", the highest in 13 months"}`;
+  })();
   const hasFlow = recent.some(x => n(x.bought_value) || n(x.sold_value) || n(x.so_value));
 
   async function exportCharts() { try { if (charts.current) await exportPng(charts.current, `${location.name} report`, `${location.name} (${location.code})`); } catch (e) { setErr(errText(e)); } }
@@ -115,8 +128,8 @@ export default function DistributorReport({ location, locations, stock, officers
 
     <div ref={charts} className="reportcharts">
       {!months ? <p className="empty">Loading…</p> : <>
-        <section><h3>Billed, sold on and SO secondary, by month</h3>{hasFlow && flow ? <ChartView data={flow} size="focus" /> : <p className="empty">No bills, sales or SO reports in the last 13 months.</p>}</section>
-        <section><h3>Stock at month end</h3>{closing && recent.some(x => n(x.closing_value)) ? <ChartView data={closing} size="card" /> : <p className="empty">No stock recorded.</p>}</section>
+        <section><h3>Billed, sold on and SO secondary, by month</h3>{hasFlow && flow ? <><p className="headline">{flowHead}</p><ChartView data={flow} size="focus" /></> : <p className="empty">No bills, sales or SO reports in the last 13 months.</p>}</section>
+        <section><h3>Stock at month end</h3>{closing && recent.some(x => n(x.closing_value)) ? <><p className="headline">{closingHead}</p><ChartView data={closing} size="card" /></> : <p className="empty">No stock recorded.</p>}</section>
       </>}
     </div>
 

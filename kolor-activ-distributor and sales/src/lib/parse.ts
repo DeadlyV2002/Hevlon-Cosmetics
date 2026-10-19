@@ -92,6 +92,9 @@ export function headingDate(raw: string): string {
   const labelled = text.match(/stock\s*taking\s*date\W*([^|]{6,24})/i);
   if (labelled) { const d = headingDate(labelled[1]); if (d) return d; }
   const now = today();
+  // A period ("1-Apr-26 to 30-Sep-26"): the stock is as on its last day.
+  const period = text.match(/\b\d{1,2}[-/.](?:\d{1,2}|[A-Za-z]{3,9})[-/.]\d{2,4}\s+(?:to|till|upto|up to|–|-)\s+(\d{1,2}[-/.](?:\d{1,2}|[A-Za-z]{3,9})[-/.]\d{2,4})\b/i);
+  if (period) { const d = toISODate(period[1]); if (isValidDate(d) && d <= now) return d; }
   const found = [
     ...(text.match(/\b\d{1,2}[-\s/.](?:\d{1,2}|[A-Za-z]{3,9})[-\s/.,]*\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/g) || []).map(toISODate),
     // "Sunday, August 30, 2026"
@@ -154,6 +157,8 @@ export function fieldFor(l: string): Field {
 }
 
 const SUB = /^(quantity|qty|rate|value|amount)$/;
+/** A line of headings: some text and no figures. */
+const headingLine = (r?: Cell[]) => !!r && r.some(c => label(c)) && !r.some(c => typeof c === "number" || c instanceof Date);
 function labelsAt(grid: Grid, r: number): { labels: string[]; rows: number } {
   const top = grid[r] || [], next = grid[r + 1] || [];
   const width = Math.max(top.length, next.length);
@@ -167,6 +172,27 @@ function labelsAt(grid: Grid, r: number): { labels: string[]; rows: number } {
       out.push(s ? (group && group !== s ? `${group} ${s}` : s) : t);
     }
     return { labels: out, rows: 2 };
+  }
+  // Tally "Stock Group Summary": "Particulars | 1-Apr-26 to 30-Sep-26" over "Closing Balance" over "Quantity".
+  // Heading lines (text only, no figures) are stacked until the line that names Quantity / Rate / Value.
+  let k = 1;
+  while (k < 4 && headingLine(grid[r + k]) && !(grid[r + k - 1] || []).some(c => SUB.test(label(c)))) k++;
+  const stack = grid.slice(r, r + k);
+  if (k >= 2 && (stack[k - 1] || []).some(c => SUB.test(label(c)))) {
+    const w = Math.max(...stack.map(x => x.length)), carry: string[] = Array(k).fill("");
+    const out: string[] = [];
+    for (let c = 0; c < w; c++) {
+      const parts: string[] = [];
+      stack.forEach((line, j) => {
+        const t = label(line[c]);
+        // A heading over several columns is written once, in the first of them.
+        if (j > 0) { if (t) carry[j] = t; else if (c > 0 && j < k - 1) { parts.push(carry[j]); return; } }
+        // The period ("1 apr 26 to 30 sep 26") and the company's year name aren't column names.
+        if (t && !/\d{1,2} \w{3,9} \d{2,4} to |^\d{1,2} \w{3,9} \d{2,4}$|\b20\d\d \d\d$/.test(t)) parts.push(t);
+      });
+      out.push(parts.filter(Boolean).join(" "));
+    }
+    return { labels: out, rows: k };
   }
   const out: string[] = [];
   for (let c = 0; c < width; c++) out.push(label(top[c]));

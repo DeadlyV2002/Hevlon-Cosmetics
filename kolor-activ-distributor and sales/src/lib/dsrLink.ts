@@ -12,8 +12,10 @@ const SHOP = new Set([...GENERIC, "trading", "trades", "trd", "trdrs", "tradrs",
 /** Distinctive words of a DB name: "Ashish Cosmetic Store" → ["ashish"]. */
 const keyWords = (s: string) => normName(s).split(" ").filter(w => w.length > 2 && !SHOP.has(w));
 
-interface Row { db_name: string; state: string | null; town: string | null; sale_value: number; attendance: string | null }
-export interface DbName { name: string; state: string; towns: Set<string>; days: number; value: number; guess?: Distributor; score: number }
+interface Row { db_name: string; state: string | null; town: string | null; beat: string | null; sale_value: number; attendance: string | null; so_id: string; day: string; hq: string | null }
+export interface DbName { name: string; state: string; towns: Set<string>; days: number; value: number; guess?: Distributor; score: number;
+  /** Who booked there (SO id → days), their beats and HQs, and the first and last day it appears. */
+  sos: Map<string, number>; beats: Set<string>; hqs: Set<string>; first: string; last: string }
 
 /** Words SOs put in the DB column on days they didn't visit a distributor. */
 export const NOT_A_DB = /^(leave|sunday|holiday|weekly off|week off|review meeting|meeting|absent|off|na|n a|nil|office|training|self|travel)$/;
@@ -40,13 +42,15 @@ export const sameState = (a?: string | null, b?: string | null) => { const x = n
 /** Unlinked DSR DB names, one line per spelling, biggest bookings first. */
 export async function loadUnlinked(): Promise<DbName[]> {
   if (!supabase) return [];
-  const rows = await fetchAll<Row>((a, b) => supabase!.from("dsr_days").select("db_name,state,town,sale_value,attendance").is("distributor_id", null).not("db_name", "is", null).order("id").range(a, b));
+  const rows = await fetchAll<Row>((a, b) => supabase!.from("dsr_days").select("db_name,state,town,beat,sale_value,attendance,so_id,day,hq").is("distributor_id", null).not("db_name", "is", null).order("id").range(a, b));
   const m = new Map<string, DbName>();
   rows.forEach(r => {
     const k = normName(r.db_name);
     if (!k || NOT_A_DB.test(k)) return;
-    const e = m.get(k) || { name: r.db_name.trim(), state: r.state || "", towns: new Set<string>(), days: 0, value: 0, score: 0 };
+    const e = m.get(k) || { name: r.db_name.trim(), state: r.state || "", towns: new Set<string>(), days: 0, value: 0, score: 0, sos: new Map<string, number>(), beats: new Set<string>(), hqs: new Set<string>(), first: r.day, last: r.day };
     e.days++; e.value += Number(r.sale_value) || 0; if (r.town) e.towns.add(r.town.trim());
+    if (r.beat) e.beats.add(r.beat.trim()); if (r.hq) e.hqs.add(r.hq.trim()); e.sos.set(r.so_id, (e.sos.get(r.so_id) || 0) + 1);
+    if (r.day < e.first) e.first = r.day; if (r.day > e.last) e.last = r.day;
     m.set(k, e);
   });
   return [...m.values()].sort((a, b) => b.value - a.value);
@@ -113,6 +117,6 @@ export async function unlinkName(distributorId: string, dbName: string) {
 /** The location a stock sheet's "DB name" line (and town) points to, when it's close enough to be sure. */
 export async function matchHolder(name: string, town: string, locations: Distributor[]): Promise<Distributor | undefined> {
   if (!name.trim()) return undefined;
-  const [r] = await suggest([{ name, state: "", towns: new Set(town ? [town] : []), days: 0, value: 0, score: 0 }], locations);
+  const [r] = await suggest([{ name, state: "", towns: new Set(town ? [town] : []), days: 0, value: 0, score: 0, sos: new Map(), beats: new Set(), hqs: new Set(), first: "", last: "" }], locations);
   return r?.guess;
 }

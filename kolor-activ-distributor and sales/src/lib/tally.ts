@@ -9,33 +9,38 @@ export interface TallyMatch<P> { product: P; shade: string; old: boolean; sure: 
 
 /** Product-type words: they say which category, but aren't part of the SKU's own name. */
 const TYPES: [RegExp, string[]][] = [
-  [/\b(lip ?colou?r|lipcolor|lip gloss|lip shine|lip oil)\b/, ["Liquid Lipstick"]],
+  [/\b(lip ?colou?r|lipcolor|lip ?gloss|lip ?shine|lip oil)\b/, ["Liquid Lipstick"]],
   [/\blipstick\b/, ["Stick Lipstick"]],
-  [/\bnail paint\b|\bnail polish\b/, ["Nail Paint"]],
-  [/\bnail cleanser\b|\bnpr\b|\bwipes\b/, ["NPR"]],
+  [/\bnail ?paint\b|\bnail ?polish\b/, ["Nail Paint"]],
+  [/\bnail ?cleanser\b|\bnail ?remover\b|\bnpr\b|\bwipes\b/, ["NPR"]],
   [/\bcompact\b|\bfoundation\b|\billuminator\b/, ["Compact"]],
   [/\beye ?shadow\b|\bblush on\b|\bkajal\b|\beyebrow\b/, ["Eye Shadow"]],
   [/\beye ?liner\b|\bmascara\b|\bmaskara\b/, ["Eye"]],
-  [/\bsindoor\b/, ["Sindoor"]],
-  [/\blip balm\b|\bglycerine?\b/, ["Lip Care"]],
+  [/\bsindoor\b|\bsindur\b|\bsindhoor\b/, ["Sindoor"]],
+  [/\blip ?balm\b|\bglycerine?\b/, ["Lip Care"]],
   [/\brose water\b/, ["Rose Water"]],
   [/\baloe ?vera\b/, ["Aloevera Gel"]],
   [/\bcleansing milk\b/, ["Cleansing Milk"]],
   [/\bmoisturi[sz]ing\b/, ["Lotion"]],
-  [/\bprimer\b|\bfixer\b|\bconcealer\b|\bremover\b|\bhighlighter\b|\bpuff\b/, ["Makeup"]],
-  [/\bcotton\b/, ["Cotton Buds"]],
+  [/\bprimer\b|\bfixer\b|\bconcealer\b|\bmakeup remover\b|\bhighlighter\b|\bpuff\b/, ["Makeup"]],
+  [/\bcotton\b|\bear ?buds\b/, ["Cotton Buds"]],
 ];
 /** Never part of a SKU's identity: brand, packing, price notes. */
-const BRAND = new Set("kolor activ ka pcs pc mrp new the with no rs rate box old trufit paper".split(" "));
+const BRAND = new Set("kolor activ ka pcs pc mrp new the with no rs rate box old trufit paper scheme nr".split(" "));
 /** Product-type words: part of a SKU's name only when the name has nothing else ("Eye Shadow 9x1", "Primer 30ml"). */
-const FILLER = new Set("lip colour color lipcolor lipcolour lipstick nail paint polish compact foundation eyeshadow eye shadow eyeliner mascara kajal sindoor liquid powder stick balm gloss shine oil cleanser primer base face pack".split(" "));
+const FILLER = new Set("lip colour color lipcolor lipcolour lipstick nail paint polish compact foundation eyeshadow eye shadow eyeliner mascara kajal sindoor liquid powder stick balm gloss shine oil cleanser primer base face pack makeup".split(" "));
 const SHADE_WORDS: Record<string, string> = { mrn: "Maroon", maroon: "Maroon", red: "Red", nat: "Natural", natural: "Natural", fair: "Fair", blush: "Blush", skin: "Skin", nude: "Nude", pink: "Pink", mix: "Mix", rm: "Red + Maroon" };
 
 /** Words of a name with prices, MRP, "(Pcs)" and dozens-per-box notes taken out; sizes ("3.6ml", "9x1", "14gm") kept apart. */
 function pieces(raw: string) {
   const s = raw.toLowerCase()
     .replace(/eye\s*shadow/g, "eyeshadow").replace(/lip\s*colou?r/g, "lipcolor").replace(/eye\s*liner/g, "eyeliner").replace(/maskara/g, "mascara")
+    .replace(/nail\s*polish/g, "nail paint").replace(/nail\s*remover/g, "nail cleanser").replace(/lip\s*balm/g, "lip balm").replace(/lip\s*gloss/g, "lip gloss")
+    .replace(/lip\s*shine/g, "lip shine").replace(/\bsind(h?oo|u)r\b/g, "sindoor").replace(/glam\s*stroke/g, "glam stroke").replace(/\bear\s*buds\b/g, "cotton buds")
+    .replace(/\(\s*\d+\s*\+\s*\d+\s*\)/g, " ")
     .replace(/glycerine/g, "glycerin").replace(/(\d)\s*in\s*(\d)/g, "$1x$2").replace(/r\s*\+\s*m\b/g, " rm ")
+    // "(Mrp-99)", "MRP: 120": a labelled price, never a shade. "(Scheme with Buds)" is packing, not the SKU; a "Pot" is a jar.
+    .replace(/\bmrp\b\.?\s*[-:=]?\s*(rs\.?)?\s*\d+(\.\d+)?/g, " ").replace(/\(\s*scheme[^)]*\)/g, " scheme ").replace(/\bpot\b/g, "jar")
     .replace(/\bmrp\b\.?/g, " ").replace(/\brs\.?\s*\d*/g, " ").replace(/\d+\s*\/-?|\/-/g, " ").replace(/\b\d{2,4}\s*-\s*pcs\b/g, " ")
     .replace(/\(?\b\d*\s*pcs?\b\)?/g, " ").replace(/\(?\b\d+\s*dz\b\)?/g, " ")
     .replace(/(\d+(\.\d+)?)\s*(ml|gm|g|mg)\b/g, (_, n) => ` ${Number(n)}sz `).replace(/(\d+)\s*x\s*(\d+)/g, " $1x$2 ");
@@ -60,7 +65,7 @@ export function matchTallyLine<P extends SkuLike>(line: string, products: P[], a
   const lineAll = lp.words.filter(w => !BRAND.has(w));
   const matchable = lineAll.filter(w => w.length > 1 || /^\d+$/.test(w));
   const names = (p: P) => [p.item_name, p.sku, ...aliases.filter(a => a.product_id === p.id).map(a => a.alias)];
-  let best: { p: P; used: Set<string>; score: number } | null = null, second = 0;
+  let best: { p: P; used: Set<string>; score: number; generic: boolean } | null = null, second = 0;
   for (const p of products) {
     if (p.category === "POP") continue;
     for (const n of names(p)) {
@@ -73,12 +78,13 @@ export function matchTallyLine<P extends SkuLike>(line: string, products: P[], a
       const used = new Set<string>();
       if (!sw.every(w => { const hit = matchable.find(v => !used.has(v) && alike(w, v)); if (hit) used.add(hit); return !!hit; })) continue;
       let score = sw.join("").length * (generic ? 0.5 : 1) + (generic ? 0 : 2) + (cats.length ? (cats.includes(p.category || "") ? 5 : -8) : 0)
-        + (np.sizes.length && lp.sizes.length ? 3 : 0);
+        + (np.sizes.length && lp.sizes.length ? 3 : 0)
+        + (/^(kolor activ|ka)/i.test(n) ? 0 : core.filter(w => FILLER.has(w) && matchable.some(v => alike(w, v))).length * 0.5);
       // The clean SKU over a Tally-style copy of it.
       if (/^kolor activ/i.test(p.item_name)) score -= 6;
       // This very line saved as the SKU's other name: it's that SKU.
       if (normName(n) === normName(line)) score += 100;
-      if (!best || score > best.score) { if (best && best.p.id !== p.id) second = Math.max(second, best.score); best = { p, used, score }; }
+      if (!best || score > best.score) { if (best && best.p.id !== p.id) second = Math.max(second, best.score); best = { p, used, score, generic }; }
       else if (p.id !== best.p.id) second = Math.max(second, score);
     }
   }
@@ -88,6 +94,11 @@ export function matchTallyLine<P extends SkuLike>(line: string, products: P[], a
   const mrp = Number(best.p.mrp) || 0;
   const rest = lineAll.filter((w, i) => !best!.used.has(w) && !FILLER.has(w) && !(mrp && i === lineAll.length - 1 && Number(w) === mrp));
   const shade = rest.map(w => SHADE_WORDS[w] || (/^\d+$/.test(w) ? w : w.length === 1 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/\s+/g, " ").trim();
-  const sure = best.score - second >= 3 && best.score >= 6;
-  return { product: best.p, shade, old, sure, why: sure ? "" : second && best.score - second < 3 ? "two SKUs fit" : "only a general name fits" };
+  // A guess from another category, or a general name ("Eyeliner") with a name left over ("Sketch"), is only a suggestion.
+  const otherCat = cats.length > 0 && !cats.includes(best.p.category || "");
+  const own = (q: P) => pieces(q.item_name).words.filter(w => w.length > 2 && !BRAND.has(w) && !FILLER.has(w) && !COLOUR.has(w));
+  const leftName = best.generic && rest.some(w => /^[a-z]{3,}$/.test(w) && !SHADE_WORDS[w]
+    && products.some(q => q.id !== best!.p.id && q.category === best!.p.category && own(q).some(x => alike(x, w))));
+  const sure = best.score - second >= 3 && best.score >= 6 && !otherCat && !leftName;
+  return { product: best.p, shade, old, sure, why: sure ? "" : otherCat ? "the SKU is in another category" : second && best.score - second < 3 ? "two SKUs fit" : "only a general name fits" };
 }

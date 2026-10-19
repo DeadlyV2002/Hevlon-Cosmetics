@@ -692,3 +692,31 @@ button.switch:disabled{opacity:1;cursor:default}
 .shadechips{display:flex;flex-wrap:wrap;gap:4px}.shadechip{background:#f1f5f9;color:#334155;border-radius:999px;padding:2px 9px;font-size:12px;white-space:nowrap}.shadechip b{color:#0f172a}
 .catfilter{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 6px}.catfilter .seg{flex-wrap:wrap}.catfilter .search{max-width:240px}.fullcount{display:block;margin:6px 0 10px;font-size:14px}
 .newnames{margin:6px 0 0 18px;padding:0}.newnames li{margin:3px 0}.problems p{margin:4px 0 8px}.upload .progress{position:static}
+.linkinfo{display:grid;grid-template-columns:minmax(220px,1fr) 2fr;gap:14px;padding:8px 4px}.linkinfo h4{margin:0 0 6px;font-size:14px}
+.linkcands{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;align-content:start}.linkcands h4{grid-column:1/-1}
+.linkcand{border:1px solid #e2e8f0;border-radius:10px;padding:10px;background:#fff}.linkcand.on{border-color:#2563eb;box-shadow:0 0 0 2px #bfdbfe}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:6px 0 0;font-size:13px}.facts dt{color:#64748b}.facts dd{margin:0}.facts dd.ok{color:#15803d;font-weight:600}
+tr.inforow>td{background:#f8fafc}tr.openrow>td{background:#eff6ff}
+@media (max-width:760px){.linkinfo{grid-template-columns:1fr}}
+.xchart .gridline{stroke:var(--grid,#eef2f7);stroke-width:1}
+.xchart .ytick{font-size:10.5px;fill:var(--ink-3);font-variant-numeric:tabular-nums}
+.xchart .axtitle,.haxis{font-size:11px;font-weight:600;fill:var(--ink-3);color:var(--ink-3);letter-spacing:.01em}
+.haxis{display:grid;grid-template-columns:minmax(90px,38%) 1fr;gap:10px;margin:0 0 4px}.haxis span:first-child{text-align:right}
+/* The finding is the headline; the chart's name sits above it as a small label. */
+.chartcard h3,.chartcard.sz-focus h3{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#64748b}
+.chartcard .summary{font-size:17px;font-weight:700;line-height:1.35;margin:4px 0 10px}
+.reportcharts h3{margin:0;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#64748b}
+.reportcharts .headline{margin:4px 0 10px;font-size:16px;font-weight:700;line-height:1.35;color:#0f172a}
+.sotabs .uploadtab{background:#2563eb;color:#fff;border-radius:8px;margin:0 10px 6px 0;padding:8px 16px;border-bottom:none;box-shadow:0 2px 8px #2563eb40}
+.sotabs .uploadtab:hover{background:#1d4ed8;color:#fff}
+.sotabs .uploadtab.on{background:#1e40af;color:#fff;box-shadow:0 0 0 3px #bfdbfe}
+.metric .delta{display:block;margin-top:2px;font-size:12px;font-weight:600;color:#64748b}
+.metric .delta.up{color:#15803d}.metric .delta.down{color:#b91c1c}
+.keypoints ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:8px}
+.keypoints li{display:grid;grid-template-columns:104px 1fr;gap:10px;align-items:baseline;padding:8px 10px;border-radius:10px;background:#f8fafc;border-left:4px solid #94a3b8;line-height:1.45}
+.keypoints li.good{border-left-color:#16a34a}.keypoints li.bad{border-left-color:#dc2626;background:#fef2f2}
+.kptag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#475569}
+@media (max-width:600px){.keypoints li{grid-template-columns:1fr;gap:2px}}
+.rsecbody .headline{margin:4px 0 10px;font-size:16px;font-weight:700;color:#0f172a}
+.linkinfo{position:sticky;left:8px;box-sizing:border-box}
+.linkinfo,.linkinfo *{white-space:normal}.linkinfo>div{min-width:0}.linkinfo dd{overflow-wrap:anywhere}

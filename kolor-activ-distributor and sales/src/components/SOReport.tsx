@@ -47,7 +47,9 @@ export default function SOReport({ so, officers, locations, stock, onClose, onTe
   const yearAgo = localDate(new Date(now.getFullYear() - 1, now.getMonth(), 1)).slice(0, 7);
   const cur = byMonth.get(thisM), prev = byMonth.get(lastM), ya = byMonth.get(yearAgo);
   const months = [...Array(13)].map((_, i) => localDate(new Date(now.getFullYear(), now.getMonth() - 12 + i, 1)).slice(0, 7));
-  const chart: ChartData = { type: "columns", unit: "money", summary: "", x: months.map(mon), series: [{ key: "v", name: "Secondary", slot: 1 }], values: [months.map(m => byMonth.get(m)?.value || 0)] };
+  const chart: ChartData = { type: "columns", unit: "money", summary: "", x: months.map(mon), series: [{ key: "v", name: "Secondary", slot: 1 }], values: [months.map(m => byMonth.get(m)?.value || 0)], xTitle: "Month", yTitle: "Secondary sales (₹)" };
+  const best = months.reduce((b, m) => ((byMonth.get(m)?.value || 0) > (byMonth.get(b)?.value || 0) ? m : b), months[0]);
+  const chartHead = byMonth.get(best)?.value ? `Best month: ${mon(best)} with ${money(byMonth.get(best)!.value)}${prev ? `; last month ${money(prev.value)}` : ""}` : "";
   const dbs = useMemo(() => {
     const cut = localDate(new Date(Date.now() - 89 * 864e5)), m = new Map<string, { name: string; id: string | null; days: number; value: number; last: string }>();
     (days || []).filter(d => d.day >= cut && (d.distributor_id || d.db_name)).forEach(d => {
@@ -81,7 +83,7 @@ export default function SOReport({ so, officers, locations, stock, onClose, onTe
       </div>
 
       <details className="rsec"><summary>Month By Month</summary>
-        <div ref={charts} className="rsecbody"><ChartView data={chart} size="card" />
+        <div ref={charts} className="rsecbody">{chartHead && <p className="headline">{chartHead}</p>}<ChartView data={chart} size="card" />
           <div className="tablewrap"><table className="nice"><thead><tr><th>Month</th><th>Days Worked</th><th>Calls</th><th>Productive</th><th>PC %</th><th>Secondary</th><th>DBs</th></tr></thead>
             <tbody>{[...months].reverse().filter(m => byMonth.has(m)).map(m => { const e = byMonth.get(m)!; return <tr key={m}><td>{mon(m)}</td><td>{fmt(e.worked)}</td><td>{fmt(e.calls)}</td><td>{fmt(e.pc)}</td><td>{strike(e)}</td><td>{money(e.value)}</td><td>{e.dbs.size}</td></tr>; })}</tbody></table></div></div>
       </details>

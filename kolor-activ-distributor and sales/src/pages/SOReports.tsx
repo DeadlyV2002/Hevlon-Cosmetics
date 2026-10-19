@@ -44,6 +44,31 @@ function closestPerson(name: string, state: string, officers: SalesOfficer[]): S
   return score >= 0.75 ? best : null;
 }
 
+const iso = (d: Date) => localDate(d);
+/** The period to compare with: the month before for a whole month, otherwise the same number of days just before. */
+function periodBefore(r: Range): Range {
+  const from = new Date(`${r.from}T00:00:00`), to = new Date(`${r.to}T00:00:00`);
+  const wholeMonth = from.getDate() === 1 && new Date(to.getFullYear(), to.getMonth() + 1, 0).getDate() === to.getDate() && from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear();
+  if (wholeMonth) return { from: iso(new Date(from.getFullYear(), from.getMonth() - 1, 1)), to: iso(new Date(from.getFullYear(), from.getMonth(), 0)) };
+  const len = Math.round((to.getTime() - from.getTime()) / 864e5) + 1, end = new Date(from); end.setDate(end.getDate() - 1);
+  const start = new Date(end); start.setDate(start.getDate() - len + 1);
+  return { from: iso(start), to: iso(end) };
+}
+/** "September 2026" for a whole month, "1 Sep to 15 Sep" otherwise. */
+function periodName(r: Range) {
+  const from = new Date(`${r.from}T00:00:00`), to = new Date(`${r.to}T00:00:00`);
+  const whole = from.getDate() === 1 && to.getDate() === new Date(to.getFullYear(), to.getMonth() + 1, 0).getDate() && from.getMonth() === to.getMonth();
+  return whole ? from.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) : `${dmy(r.from)} to ${dmy(r.to)}`;
+}
+const short = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+/** "up 12%" / "down 4%" / "level", against what came before. */
+function change(now: number, before: number) {
+  if (!before) return now ? "new this period" : "";
+  const p = ((now - before) / before) * 100;
+  return Math.abs(p) < 0.5 ? "level" : `${p > 0 ? "up" : "down"} ${fmt(Math.abs(p), Math.abs(p) < 10 ? 1 : 0)}%`;
+}
+const share = (part: number, whole: number) => (whole ? `${fmt((part / whole) * 100, (part / whole) * 100 < 10 ? 1 : 0)}%` : "0%");
+
 const SHORT: Record<string, string> = { Present: "P", "Half Day": "½", Meeting: "M", Leave: "L", "Weekly Off": "WO", Holiday: "H", Absent: "A", "No Report": "–" };
 const cls = (a?: string | null) => `att a-${(SHORT[a || ""] || "none").replace("½", "half").replace("–", "none")}`;
 const WORKING = new Set(["Present", "Half Day", "Meeting"]);
@@ -55,11 +80,14 @@ const same = (a: DsrDay, b: Day) => n(a.total_calls) === n(b.total_calls) && n(a
 interface Sum { soId: string; so?: SalesOfficer; days: number; att: Record<string, number>; calls: number; pc: number; value: number; flag: string }
 
 export default function SOReports({ officers, locations, stock, products, canManage, onChanged, notify }: Props) {
-  const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "month")!.range());
+  // DSRs come in once a month, so the page opens on last month.
+  const [range, setRange] = useState<Range>(() => PRESETS.find(p => p.id === "lastmonth")!.range());
   const [tab, setTab] = useState<string>("overview"), [showIdle, setShowIdle] = useState(false);
   const [zone, setZone] = useState(""), [q, setQ] = useState(""), [focus, setFocus] = useState("");
   const [days, setDays] = useState<Day[]>([]), [prods, setProds] = useState<Prod[]>([]), [states, setStates] = useState<StateDay[]>([]), [bills, setBills] = useState<Billing[]>([]);
-  const [latest, setLatest] = useState<Day[]>([]);
+  /** The period before (the month before, for a whole month), to say what went up and down. */
+  const [prevDays, setPrevDays] = useState<Day[]>([]), [prevProds, setPrevProds] = useState<Prod[]>([]);
+  const prevRange = useMemo(() => periodBefore(range), [range.from, range.to]);
   const [err, setErr] = useState(""), [reload, setReload] = useState(0);
   const [check, setCheck] = useState<Checked | null>(null), [replaceChanged, setReplaceChanged] = useState(true);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -94,17 +122,15 @@ export default function SOReports({ officers, locations, stock, products, canMan
   useEffect(() => {
     if (!supabase) return;
     let live = true;
-    const last = localDate(new Date(Date.now() - 864e5)), task = startTask("Loading SO reports", 0, true);
+    const task = startTask("Loading SO reports", 0, true);
     Promise.all([
       fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", range.from).lte("day", range.to).order("day").order("id").range(a, b)),
       fetchAll<StateDay>((a, b) => supabase!.from("dsr_state_days").select("*").gte("day", range.from).lte("day", range.to).order("day").range(a, b)).catch(() => []),
       supabase.rpc("billing_summary", { p_from: range.from, p_to: range.to }),
-      supabase.from("dsr_days").select("day").lte("day", last).order("day", { ascending: false }).limit(1),
-    ]).then(async ([d, s, b, l]) => {
+      fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", prevRange.from).lte("day", prevRange.to).order("id").range(a, b)).catch(() => [] as Day[]),
+    ]).then(async ([d, s, b, p]) => {
       if (!live) return;
-      setDays(d); setStates(s as StateDay[]); setBills((b.data || []) as Billing[]); setErr("");
-      const lastDay = (l.data as { day: string }[] | null)?.[0]?.day;
-      if (lastDay) { const { data } = await supabase!.from("dsr_days").select("*").eq("day", lastDay); if (live) setLatest((data || []) as Day[]); } else setLatest([]);
+      setDays(d); setStates(s as StateDay[]); setBills((b.data || []) as Billing[]); setPrevDays(p); setErr("");
       task.ok(`${plural(d.length, "SO day")} from ${dmy(range.from)} to ${dmy(range.to)}.`);
     }).catch(e => { if (!live) return; task.fail(errText(e)); setErr(`Couldn't load SO reports: ${errText(e)}. Run the latest database steps (009 and 010) in Supabase.`); })
     return () => { live = false; task.cancel(); };
@@ -116,6 +142,8 @@ export default function SOReports({ officers, locations, stock, products, canMan
     const t = window.setTimeout(() => {
       supabase!.rpc("dsr_product_totals", { p_from: range.from, p_to: range.to, p_sos: sos, p_state: null })
         .then(({ data }) => setProds(((data || []) as Prod[]).sort((x, y) => n(y.value) - n(x.value))));
+      supabase!.rpc("dsr_product_totals", { p_from: prevRange.from, p_to: prevRange.to, p_sos: sos, p_state: null })
+        .then(({ data }) => setPrevProds((data || []) as Prod[]));
     }, 400);
     return () => window.clearTimeout(t);
   }, [range.from, range.to, reload, sosKey]);
@@ -286,15 +314,34 @@ export default function SOReports({ officers, locations, stock, products, canMan
     return out;
   }, [range.from, range.to]);
   const byDay = useMemo(() => { const m = new Map<string, number>(); view.forEach(d => m.set(d.day, (m.get(d.day) || 0) + n(d.sale_value))); return m; }, [view]);
-  const trend: ChartData = { type: "lines", unit: "money", summary: "", x: dates.map(d => dmy(d)),
-    series: [{ key: "sec", name: "Secondary", slot: 1 }], values: [dates.map(d => byDay.get(d) || 0)] };
-  const topPeople: ChartData = { type: "bars", unit: "money", summary: "", more: Math.max(0, sums.length - 12), series: [{ key: "v", name: "Secondary", slot: 1 }],
-    rows: [...sums].sort((a, b) => b.value - a.value).slice(0, 12).map(s => ({ key: s.soId, label: s.so?.name || "Unknown", sub: s.so?.hq || "", values: [s.value] })) };
-  const topProducts: ChartData = { type: "bars", unit: "money", summary: "", more: Math.max(0, prods.length - 12), series: [{ key: "v", name: "Sold", slot: 2 }],
+  const totalSec = sums.reduce((a, s) => a + s.value, 0);
+  // Over two weeks the trend goes week by week (1–7, 8–14…), so every column can carry its value.
+  const weekly = dates.length > 14;
+  const buckets = weekly ? Array.from({ length: Math.ceil(dates.length / 7) }, (_, i) => dates.slice(i * 7, i * 7 + 7)) : dates.map(d => [d]);
+  const bucketVals = buckets.map(b => b.reduce((a, d) => a + (byDay.get(d) || 0), 0));
+  const bestB = bucketVals.reduce((b, v, i) => (v > bucketVals[b] ? i : b), 0);
+  const bName = (b: string[]) => (b.length > 1 ? `${short(b[0])} to ${short(b[b.length - 1])}` : short(b[0]));
+  const trend: ChartData = { type: "columns", unit: "money", summary: "", x: buckets.map(b => (b.length > 1 ? `${new Date(`${b[0]}T00:00:00`).getDate()}–${short(b[b.length - 1])}` : short(b[0]))),
+    series: [{ key: "sec", name: "Secondary", slot: 1 }], values: [bucketVals], xTitle: weekly ? "Week of the period" : "Day", yTitle: "Secondary sales (₹)" };
+  const trendHead = bucketVals[bestB] ? `${weekly ? "Best week" : "Best day"}: ${bName(buckets[bestB])}, ${money(bucketVals[bestB])} (${share(bucketVals[bestB], totalSec)} of the period)` : "";
+  const ranked = [...sums].sort((a, b) => b.value - a.value);
+  const topPeople: ChartData = { type: "bars", unit: "money", summary: "", more: Math.max(0, sums.length - 12), series: [{ key: "v", name: "Secondary", slot: 1 }], yTitle: "Person", xTitle: "Secondary sales (₹)",
+    rows: ranked.slice(0, 12).map(s => ({ key: s.soId, label: s.so?.name || "Unknown", sub: s.so?.hq || "", values: [s.value] })) };
+  const top12 = ranked.slice(0, 12).reduce((a, s) => a + s.value, 0);
+  const peopleHead = ranked[0] ? `${ranked[0].so?.name || "Unknown"} led with ${money(ranked[0].value)}, ${share(ranked[0].value, totalSec)} of team sales${ranked.length > 12 ? `; the top 12 made ${share(top12, totalSec)}` : ""}` : "";
+  const prodTotal = prods.reduce((a, p) => a + n(p.value), 0);
+  const topProducts: ChartData = { type: "bars", unit: "money", summary: "", more: Math.max(0, prods.length - 12), series: [{ key: "v", name: "Sold", slot: 2 }], yTitle: "Product", xTitle: "Value sold (₹)",
     rows: prods.slice(0, 12).map(p => ({ key: p.product, label: p.product, sub: p.category || "", values: [n(p.value)] })) };
+  const prodHead = prods[0] ? `${prods[0].product} sold the most: ${money(prods[0].value)}, ${share(n(prods[0].value), prodTotal)} of product sales` : "";
   const cats = new Map<string, number>(); prods.forEach(p => cats.set(p.category || "No category yet", (cats.get(p.category || "No category yet") || 0) + n(p.value)));
-  const byCategory: ChartData = { type: "bars", unit: "money", summary: "", more: 0, series: [{ key: "v", name: "Sold", slot: 3 }],
-    rows: [...cats].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ key: k, label: k, values: [v] })) };
+  const catList = [...cats].sort((a, b) => b[1] - a[1]);
+  const byCategory: ChartData = { type: "bars", unit: "money", summary: "", more: 0, series: [{ key: "v", name: "Sold", slot: 3 }], yTitle: "Category", xTitle: "Value sold (₹)",
+    rows: catList.map(([k, v]) => ({ key: k, label: k, values: [v] })) };
+  const catHead = catList[0] ? `${catList[0][0]} made up ${share(catList[0][1], prodTotal)} of sales${catList[1] ? `, then ${catList[1][0]} at ${share(catList[1][1], prodTotal)}` : ""}` : "";
+  const zones = useMemo(() => { const m = new Map<string, number>(); sums.forEach(s => m.set(zoneOf(s.so), (m.get(zoneOf(s.so)) || 0) + s.value)); return [...m].sort((a, b) => b[1] - a[1]); }, [sums]);
+  const byZone: ChartData = { type: "bars", unit: "money", summary: "", more: 0, series: [{ key: "v", name: "Secondary", slot: 1 }], yTitle: "Zone", xTitle: "Secondary sales (₹)",
+    rows: zones.map(([k, v]) => ({ key: k, label: k, values: [v] })) };
+  const zoneHead = zones[0] ? `${zones[0][0]} brought in ${share(zones[0][1], totalSec)} of secondary sales${zones[1] ? `; ${zones[1][0]} ${share(zones[1][1], totalSec)}` : ""}` : "";
 
   // ---------- checks: state totals, and SO secondary against distributor billing, stock and collection ----------
   const stateGaps = useMemo(() => {
@@ -316,10 +363,59 @@ export default function SOReports({ officers, locations, stock, products, canMan
   }, [view, bills, stock]);
   const unmatched = useMemo(() => { const m = new Map<string, number>(); view.forEach(d => { if (!d.distributor_id && d.db_name && WORKING.has(d.attendance || "") && n(d.sale_value)) m.set(d.db_name, (m.get(d.db_name) || 0) + n(d.sale_value)); }); return [...m].sort((a, b) => b[1] - a[1]); }, [view]);
 
-  // ---------- latest day ----------
-  const latestDay = latest[0]?.day;
-  const latestRows = latest.filter(d => inView.has(d.so_id) || !filtered);
-  const notReported = latestDay ? officers.filter(o => o.active && inView.has(o.id) && rankOf(o.designation) === 2 && !latest.some(d => d.so_id === o.id)) : [];
+  // ---------- key points of the period, against the period before ----------
+  const prevView = useMemo(() => prevDays.filter(d => inView.has(d.so_id) || (!filtered && !byId.has(d.so_id))), [prevDays, inView, filtered, byId]);
+  const insights = useMemo(() => {
+    const out: { tag: string; kind: "good" | "bad" | "info"; text: JSX.Element }[] = [];
+    if (!view.length) return out;
+    const tot = sums.reduce((a, s) => ({ calls: a.calls + s.calls, pc: a.pc + s.pc, value: a.value + s.value }), { calls: 0, pc: 0, value: 0 });
+    const name = periodName(range), before = periodName(prevRange);
+    const prev = { value: 0, calls: 0, pc: 0 }, prevBy = new Map<string, number>(), prevWork = new Map<string, number>();
+    prevView.forEach(d => { prev.value += n(d.sale_value); prev.calls += n(d.total_calls); prev.pc += n(d.productive_calls); prevBy.set(d.so_id, (prevBy.get(d.so_id) || 0) + n(d.sale_value)); if (WORKING.has(d.attendance || "")) prevWork.set(d.so_id, (prevWork.get(d.so_id) || 0) + 1); });
+    const b = (x: string | number) => <b>{x}</b>;
+    // Sales
+    const ch = change(tot.value, prev.value);
+    out.push({ tag: "Sales", kind: prev.value && tot.value < prev.value ? "bad" : "good", text: <>Secondary sales were {b(money(tot.value))} in {name}{prev.value ? <>, {b(ch)} on {before} ({money(prev.value)})</> : null}.
+      {bucketVals[bestB] ? <> {weekly ? "Best week" : "Best day"}: {bName(buckets[bestB])} with {money(bucketVals[bestB])}.</> : null}</> });
+    // Strike rate
+    const sr = pct(tot.pc, tot.calls), psr = pct(prev.pc, prev.calls);
+    const lowSr = sums.filter(s => s.calls >= 20 && pct(s.pc, s.calls) < sr * 0.8).sort((a, c) => pct(a.pc, a.calls) - pct(c.pc, c.calls));
+    if (tot.calls) out.push({ tag: "Calls", kind: prev.calls && sr < psr - 1 ? "bad" : "info", text: <>{b(fmt(tot.calls))} calls, {fmt(tot.pc)} productive: strike rate {b(`${fmt(sr)}%`)}{prev.calls ? ` (${fmt(psr)}% in ${before})` : ""}.
+      {lowSr.length > 0 && <> Below 80% of the team's rate: {lowSr.slice(0, 4).map(s => `${s.so?.name || "Unknown"} ${fmt(pct(s.pc, s.calls))}%`).join(", ")}{lowSr.length > 4 ? ` and ${lowSr.length - 4} more` : ""}.</>}</> });
+    // People: top, lowest per working day, biggest rise and fall
+    const perDay = sums.filter(s => working(s) >= 10).map(s => ({ s, v: s.value / working(s) })).sort((a, c) => c.v - a.v);
+    if (ranked[0]) out.push({ tag: "People", kind: "info", text: <>Top seller: {b(ranked[0].so?.name || "Unknown")} with {money(ranked[0].value)} ({share(ranked[0].value, tot.value)} of the team){ranked[1] ? `, then ${ranked[1].so?.name || "Unknown"} (${money(ranked[1].value)})` : ""}.
+      {perDay.length > 2 && <> Lowest per working day (10+ days worked): {b(perDay[perDay.length - 1].s.so?.name || "Unknown")} at {money(perDay[perDay.length - 1].v)} a day, against a team middle of {money(perDay[Math.floor(perDay.length / 2)].v)}.</>}</> });
+    if (prevView.length) {
+      const moves = sums.filter(s => prevBy.has(s.soId)).map(s => ({ s, d: s.value - (prevBy.get(s.soId) || 0) })).sort((a, c) => c.d - a.d);
+      const up = moves[0], down = moves[moves.length - 1];
+      if (up && down && (up.d > 0 || down.d < 0)) out.push({ tag: "Change", kind: "info", text: <>{up.d > 0 && <>Biggest rise: {b(up.s.so?.name || "Unknown")}, up {money(up.d)} on {before}. </>}{down.d < 0 && <>Biggest fall: {b(down.s.so?.name || "Unknown")}, down {money(-down.d)}.</>}</> });
+      const gone = [...prevWork.keys()].filter(id => !sums.some(s => s.soId === id) && byId.get(id)?.active !== false && inView.has(id));
+      if (gone.length) out.push({ tag: "Missing", kind: "bad", text: <>{b(plural(gone.length, "person", "people"))} who reported in {before} sent nothing for {name}: {gone.slice(0, 6).map(id => byId.get(id)?.name || "Unknown").join(", ")}{gone.length > 6 ? "…" : ""}.</> });
+    }
+    // Attendance
+    const att = (k: string) => sums.reduce((a, s) => a + (s.att[k] || 0), 0);
+    const worked = sums.reduce((a, s) => a + working(s), 0), idleDays = view.filter(d => d.attendance === "Present" && !n(d.total_calls) && !n(d.sale_value)).length;
+    out.push({ tag: "Attendance", kind: att("Absent") + att("No Report") > 0 ? "bad" : "info", text: <>{b(fmt(worked))} working days by {plural(sums.length, "person", "people")} ({money(worked ? tot.value / worked : 0)} a working day). Leave {fmt(att("Leave"))}, absent {fmt(att("Absent"))}, not reported {fmt(att("No Report"))}{idleDays ? `; ${plural(idleDays, "day")} marked present with no calls` : ""}.</> });
+    // Distributors
+    const dbVal = new Map<string, number>(); view.forEach(d => { const k = d.distributor_id || (d.db_name ? `?${d.db_name}` : ""); if (k && n(d.sale_value)) dbVal.set(k, (dbVal.get(k) || 0) + n(d.sale_value)); });
+    const prevDbs = new Set(prevView.filter(d => n(d.sale_value)).map(d => d.distributor_id || (d.db_name ? `?${d.db_name}` : "")).filter(Boolean));
+    const topDb = [...dbVal].filter(([k]) => !k.startsWith("?")).sort((a, c) => c[1] - a[1])[0];
+    const notLinked = [...dbVal].filter(([k]) => k.startsWith("?")).reduce((a, [, v]) => a + v, 0);
+    if (dbVal.size) out.push({ tag: "Distributors", kind: notLinked > tot.value * 0.1 ? "bad" : "info", text: <>Sold through {b(fmt(dbVal.size))} distributors{prevDbs.size ? ` (${fmt(prevDbs.size)} in ${before})` : ""}.
+      {topDb && <> Biggest: {b(locById.get(topDb[0])?.name || "")}, {money(topDb[1])} ({share(topDb[1], tot.value)}).</>}
+      {notLinked > 0 && <> {money(notLinked)} ({share(notLinked, tot.value)}) was booked at DB names not linked to your list; link them on <button className="link" onClick={() => setTab("checks")}>Stock Checks</button>.</>}</> });
+    // Products
+    if (prods.length) {
+      const pv = new Map(prevProds.map(p => [p.product, n(p.value)]));
+      const grow = prods.filter(p => n(p.value) >= prodTotal * 0.01 && (pv.get(p.product) || 0) > 0).map(p => ({ p, r: n(p.value) / (pv.get(p.product) || 1) })).sort((a, c) => c.r - a.r)[0];
+      out.push({ tag: "Products", kind: "info", text: <>Top product: {b(prods[0].product)} ({share(n(prods[0].value), prodTotal)} of product sales). Top category: {b(catList[0]?.[0] || "")} ({share(catList[0]?.[1] || 0, prodTotal)}).
+        {grow && grow.r > 1.1 && <> Fastest growing: {grow.p.product}, {change(n(grow.p.value), pv.get(grow.p.product) || 0)} on {before}.</>}</> });
+    }
+    // Zones
+    if (zones.length > 1) out.push({ tag: "Zones", kind: "info", text: <>{b(zones[0][0])} brought in {share(zones[0][1], tot.value)} of sales; {zones[zones.length - 1][0]} the least ({money(zones[zones.length - 1][1])}).</> });
+    return out;
+  }, [view, prevView, sums, prods, prevProds, range.from, range.to, zones, locById]);
 
   const dcols: Col<Day>[] = [
     { key: "day", label: "Date", value: d => d.day }, { key: "so", label: "Name", value: d => byId.get(d.so_id)?.name }, { key: "att", label: "Attendance", value: d => d.attendance },
@@ -379,7 +475,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
   ];
   const sct = useColumnFilters(onlyFlagged ? stockRows.filter(r => r.kind === "over" || r.kind === "drop") : stockRows, sccols);
 
-  const TABS = [["overview", "Overview"], ["team", "Team"], ["checks", "Stock Checks"], ["attendance", "Attendance"], ["log", "Daily Log"], ["products", "Products"], ["upload", "Upload DSR"], ["staff", "Sales Team"]] as const;
+  const TABS = [["overview", "Overview"], ["team", "Team"], ["checks", "Stock Checks"], ["attendance", "Attendance"], ["log", "Daily Log"], ["products", "Products"], ["staff", "Sales Team"]] as const;
   const flagged = stockRows.filter(r => r.kind === "over" || r.kind === "drop");
   return <>
     <section className="card sohead">
@@ -390,36 +486,44 @@ export default function SOReports({ officers, locations, stock, products, canMan
         <button className="secondary" onClick={exportAll} disabled={!days.length}>Export To Excel</button>
       </div>
       {focus && <p className="hint">Showing {byId.get(focus)?.name} and their team. <button className="link" onClick={() => setFocus("")}>Show Everyone</button></p>}
-      <div className="sotabs" role="tablist">{TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
+      <div className="sotabs" role="tablist">
+        <button role="tab" aria-selected={tab === "upload"} className={`uploadtab${tab === "upload" ? " on" : ""}`} onClick={() => setTab("upload")}>⬆ Upload DSR</button>
+        {TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
         {label}{id === "checks" && flagged.length ? <em className="bellcount">{flagged.length}</em> : null}</button>)}</div>
       {err && <div className="status err">{err}</div>}
     </section>
 
     {tab === "overview" && <>
-      <div className="cards">
-        <div className="metric"><small>Secondary sales</small><b>{money(tot.value)}</b></div>
-        <div className="metric"><small>Total calls</small><b>{fmt(tot.calls)}</b></div>
-        <div className="metric"><small>Productive calls</small><b>{fmt(tot.pc)}</b></div>
-        <div className="metric"><small>Strike rate (PC %)</small><b>{tot.calls ? `${fmt(pct(tot.pc, tot.calls))}%` : "—"}</b></div>
-        <div className="metric"><small>Distributors worked</small><b>{fmt(new Set(view.map(d => d.distributor_id || d.db_name).filter(Boolean)).size)}</b></div>
-      </div>
-      {latestDay && <section className="card">
-        <div className="rowhead"><h2>Latest Day: {new Date(`${latestDay}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long" })}, {longDate(latestDay)}</h2>
-          <span className="muted">{money(latestRows.reduce((a, d) => a + n(d.sale_value), 0))} secondary · {plural(latestRows.filter(d => WORKING.has(d.attendance || "")).length, "person", "people")} working</span></div>
-        <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Name</th><th>Attendance</th><th>DB</th><th>Town / Beat</th><th>Calls</th><th>PC</th><th>Secondary</th><th>Remark</th></tr></thead>
-          <tbody>{[...latestRows].sort((a, b) => n(b.sale_value) - n(a.sale_value)).map(d => <tr key={d.id}><td>{byId.get(d.so_id)?.name}</td><td><i className={cls(d.attendance)}>{d.attendance}</i></td>
-            <td>{d.db_name}</td><td className="wrap">{[d.town, d.beat].filter(Boolean).join(" · ")}</td><td>{d.total_calls}</td><td>{d.productive_calls}</td><td>{money(d.sale_value)}</td><td className="wrap">{d.remark}</td></tr>)}
-            {notReported.map(o => <tr key={o.id} className="flagged"><td>{o.name}</td><td><i className="att a-none">No report</i></td><td colSpan={6} className="muted">Nothing logged for this day</td></tr>)}</tbody></table></div>
+      {(() => {
+        const prevT = prevView.reduce((a, d) => ({ calls: a.calls + n(d.total_calls), pc: a.pc + n(d.productive_calls), value: a.value + n(d.sale_value) }), { calls: 0, pc: 0, value: 0 });
+        const prevDb = new Set(prevView.map(d => d.distributor_id || d.db_name).filter(Boolean)).size, dbs = new Set(view.map(d => d.distributor_id || d.db_name).filter(Boolean)).size;
+        const vs = (now: number, was: number, pts = false) => {
+          if (!prevView.length || (!was && !now)) return null;
+          const c = pts ? `${now - was >= 0 ? "+" : "−"}${fmt(Math.abs(now - was), 1)} pts` : change(now, was);
+          return <small className={`delta ${now > was ? "up" : now < was ? "down" : ""}`}>{c} vs {periodName(prevRange)}</small>;
+        };
+        return <div className="cards">
+          <div className="metric"><small>Secondary sales</small><b>{money(tot.value)}</b>{vs(tot.value, prevT.value)}</div>
+          <div className="metric"><small>Total calls</small><b>{fmt(tot.calls)}</b>{vs(tot.calls, prevT.calls)}</div>
+          <div className="metric"><small>Productive calls</small><b>{fmt(tot.pc)}</b>{vs(tot.pc, prevT.pc)}</div>
+          <div className="metric"><small>Strike rate (PC %)</small><b>{tot.calls ? `${fmt(pct(tot.pc, tot.calls))}%` : "—"}</b>{tot.calls && prevT.calls ? vs(pct(tot.pc, tot.calls), pct(prevT.pc, prevT.calls), true) : null}</div>
+          <div className="metric"><small>Distributors visited</small><b>{fmt(dbs)}</b>{vs(dbs, prevDb)}</div>
+        </div>;
+      })()}
+      {insights.length > 0 && <section className="card keypoints">
+        <div className="rowhead"><h2>Key Points: {periodName(range)}</h2><span className="muted">compared with {periodName(prevRange)}</span></div>
+        <ul>{insights.map((x, i) => <li key={i} className={x.kind}><span className="kptag">{x.tag}</span><span>{x.text}</span></li>)}</ul>
       </section>}
       {view.length > 0 ? <section className="card" ref={charts}>
-        <div className="rowhead"><h2>Charts</h2><button className="secondary" onClick={() => charts.current && exportPng(charts.current, "SO charts", `Sales team, ${dmy(range.from)} to ${dmy(range.to)}`).catch(e => notify(errText(e)))}>Export Charts</button></div>
+        <div className="rowhead"><h2>Charts</h2><button className="secondary" onClick={() => charts.current && exportPng(charts.current, "SO charts", `Sales team, ${periodName(range)}`).catch(e => notify(errText(e)))}>Export Charts</button></div>
         <div className="reportcharts">
-          <section><h3>Secondary sales by day</h3><ChartView data={trend} size="focus" labels={false} /></section>
-          <section><h3>Top people by secondary</h3><ChartView data={topPeople} size="card" /></section>
-          <section><h3>Top products sold</h3>{prods.length ? <ChartView data={topProducts} size="card" /> : <p className="empty">No product lines.</p>}</section>
-          <section><h3>Sales by category</h3>{prods.length ? <ChartView data={byCategory} size="card" /> : <p className="empty">No product lines.</p>}</section>
+          <section><h3>Secondary sales, {weekly ? "week by week" : "day by day"}</h3><p className="headline">{trendHead}</p><ChartView data={trend} size="focus" /></section>
+          <section><h3>Sales by person</h3><p className="headline">{peopleHead}</p><ChartView data={topPeople} size="card" /></section>
+          {zones.length > 1 && <section><h3>Sales by zone</h3><p className="headline">{zoneHead}</p><ChartView data={byZone} size="card" /></section>}
+          <section><h3>Products sold</h3>{prods.length ? <><p className="headline">{prodHead}</p><ChartView data={topProducts} size="card" /></> : <p className="empty">No product lines.</p>}</section>
+          <section><h3>Sales by category</h3>{prods.length ? <><p className="headline">{catHead}</p><ChartView data={byCategory} size="card" /></> : <p className="empty">No product lines.</p>}</section>
         </div>
-      </section> : <p className="empty">No daily reports in this period for this selection. Upload DSRs on the Upload DSR tab.</p>}
+      </section> : <p className="empty">No daily reports in {periodName(range)} for this selection. Upload DSRs with the Upload DSR button, or pick another period.</p>}
     </>}
 
     {tab === "team" && <section className="card">
@@ -439,7 +543,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
     </section>}
 
     {tab === "checks" && <>
-      <DsrLinker locations={locations} canManage={canManage} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
+      <DsrLinker locations={locations} officers={officers} stock={stock} canManage={canManage} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
       <SuspectLinks locations={locations} canManage={canManage} notify={notify} onChanged={() => setCheckReload(x => x + 1)} key={`s${checkReload}`} />
       <section className="card">
         <div className="rowhead"><h2>SO Bookings Against Distributor Stock</h2><DateRange value={checkRange} onChange={setCheckRange} /></div>

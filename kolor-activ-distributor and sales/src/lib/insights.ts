@@ -22,9 +22,19 @@ export interface ChartConfig {
 export type Unit = "money" | "units" | "days" | "percent" | "count" | "pct";
 export interface SeriesDef { key: string; name: string; slot: 1 | 2 | 3 }
 export interface BarRow { key: string; label: string; sub?: string; values: number[] }
+/** xTitle / yTitle name the axes; left out, they're worked out from the series and the unit. */
 export type ChartData =
-  | { type: "bars"; unit: Unit; series: SeriesDef[]; rows: BarRow[]; more: number; summary: string }
-  | { type: "columns" | "lines"; unit: Unit; series: SeriesDef[]; x: string[]; values: number[][]; summary: string };
+  | { type: "bars"; unit: Unit; series: SeriesDef[]; rows: BarRow[]; more: number; summary: string; xTitle?: string; yTitle?: string }
+  | { type: "columns" | "lines"; unit: Unit; series: SeriesDef[]; x: string[]; values: number[][]; summary: string; xTitle?: string; yTitle?: string };
+/** What the value axis measures: "Secondary (₹)", "Stock (dozens)". */
+export function valueTitle(d: ChartData): string {
+  if (d.yTitle && d.type !== "bars") return d.yTitle;
+  if (d.xTitle && d.type === "bars") return d.xTitle;
+  const what = d.series.length === 1 ? d.series[0].name : "";
+  // Quantities are kept in dozens everywhere.
+  const unit = d.unit === "money" ? "₹" : d.unit === "units" ? "dozens" : d.unit === "days" ? "days" : d.unit === "pct" || d.unit === "percent" ? "%" : "";
+  return what && unit ? `${what} (${unit})` : what || (unit === "₹" ? "Value (₹)" : unit ? unit.charAt(0).toUpperCase() + unit.slice(1) : "");
+}
 export interface Ctx { locations: Distributor[]; products: Product[]; stock: StockLine[]; officers: SalesOfficer[] }
 
 export function formatValue(unit: Unit, n: number): string {
@@ -192,7 +202,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
       rows.forEach(r => { if (r.kind) values[idx(r)][weeks.indexOf(r.week_end)] += pick(r); });
       const totals = weeks.map((_, i) => values.reduce((a, s) => a + s[i], 0));
       const now = totals[totals.length - 1] || 0, before = totals[Math.max(0, totals.length - 5)] || 0, diff = now - before;
-      return { type: "columns", unit: unitOf(c), series, x: weeks.map(shortDate), values,
+      return { type: "columns", unit: unitOf(c), series, x: weeks.map(shortDate), values, xTitle: "Week ending",
         summary: now ? `${says(c, now)} now, ${diff === 0 ? "the same as" : diff > 0 ? `up ${says(c, diff)} from` : `down ${says(c, -diff)} from`} 4 weeks ago.` : "" };
     },
   },
@@ -314,7 +324,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
       const chosen = all.filter(s => (c.series?.length ? c.series : ["dispatched", "sold", "so"]).includes(s.key));
       const values = chosen.map(s => rows.map(s.pick));
       const last = rows.length - 1;
-      return { type: "lines", unit: unitOf(c), series: chosen.map(({ pick: _, ...s }) => s), x: rows.map(r => shortDate(r.week_start)), values,
+      return { type: "lines", unit: unitOf(c), series: chosen.map(({ pick: _, ...s }) => s), x: rows.map(r => shortDate(r.week_start)), values, xTitle: "Week starting",
         summary: values.some(v => v.some(Boolean)) && last >= 0 ? `This week: ${chosen.map((s, i) => `${says(c, values[i][last])} ${SHORT[s.key]}`).join(", ")}.` : "" };
     },
   },
@@ -497,7 +507,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
       const keys = c.split === "none" ? ["All"] : [...top, ...(tot.size > top.length ? ["Other zones"] : [])];
       const values = keys.map(k => days.map(d => rows.filter(r => r.day === d && (k === "All" || (k === "Other zones" ? !top.includes(zoneOf(r)) : zoneOf(r) === k))).reduce((a, r) => a + Number(r.sale_value), 0)));
       const total = rows.reduce((a, r) => a + Number(r.sale_value), 0);
-      return { type: "lines", unit: "money", series: keys.map((k, i) => ({ key: k, name: k, slot: (Math.min(i, 2) + 1) as 1 | 2 | 3 })), x: days.map(shortDate), values,
+      return { type: "lines", unit: "money", series: keys.map((k, i) => ({ key: k, name: k, slot: (Math.min(i, 2) + 1) as 1 | 2 | 3 })), x: days.map(shortDate), values, xTitle: "Day",
         summary: total ? `${money(total)} booked by the sales team in ${c.days ?? 30} days.` : "" };
     },
   },

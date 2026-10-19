@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, SalesOfficer, StockLine, fetchAll, matchSO, fmt, money, plural, errText } from "../lib/supabase";
-import { localDate } from "../lib/parse";
+import { localDate, normName } from "../lib/parse";
+import { similarity } from "../lib/fuzzy";
 import DateRange, { PRESETS, Range } from "../components/DateRange";
 import { Select } from "../components/Select";
 import { useColumnFilters, Col } from "../components/ColumnFilter";
@@ -22,6 +23,26 @@ interface StockCheck { distributor_id: string; product: string; product_id: stri
 interface StateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number; team?: string }
 interface Props { officers: SalesOfficer[]; locations: Distributor[]; stock: StockLine[]; products?: Product[]; canManage: boolean; onChanged: () => Promise<void>; notify: (m: string) => void }
 interface Checked { book: DsrBook; files: string; fresh: DsrDay[]; same: number; changed: { d: DsrDay; old: Day }[] }
+/** How far the upload has got, shown as a bar on the Upload DSR tab. */
+interface Prog { label: string; done: number; total: number; note: string }
+/** Something that went wrong in one file or one day; the rest of the upload carries on. */
+interface Problem { where: string; text: string }
+/** A name in the workbooks that matches no one on the team, with the closest existing person if there is one. */
+interface NewName { name: string; state: string; days: number; files: string; like: SalesOfficer | null }
+
+/** The team member whose name (or other name) is closest to a new name, if close enough to ask about. */
+function closestPerson(name: string, state: string, officers: SalesOfficer[]): SalesOfficer | null {
+  // The same first name is worth asking about; common first words (Kumar, Md, Sri) are not.
+  const first = normName(name).split(" ")[0], common = /^(md|mohd|mohammad|mohammed|kumar|kumari|sri|shri|mr|ms)$/.test(first);
+  let best: SalesOfficer | null = null, score = 0;
+  for (const o of officers) {
+    let sc = Math.max(...[o.name, ...(o.aliases || [])].map(n => similarity(name, n)));
+    if (first.length > 2 && !common && [o.name, ...(o.aliases || [])].some(n => normName(n).split(" ")[0] === first)) sc = Math.max(sc, 0.8);
+    if (state && o.state && normName(o.state) === normName(state)) sc += 0.05;
+    if (sc > score) { score = sc; best = o; }
+  }
+  return score >= 0.75 ? best : null;
+}
 
 const SHORT: Record<string, string> = { Present: "P", "Half Day": "½", Meeting: "M", Leave: "L", "Weekly Off": "WO", Holiday: "H", Absent: "A", "No Report": "–" };
 const cls = (a?: string | null) => `att a-${(SHORT[a || ""] || "none").replace("½", "half").replace("–", "none")}`;
@@ -42,6 +63,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
   const [err, setErr] = useState(""), [reload, setReload] = useState(0);
   const [check, setCheck] = useState<Checked | null>(null), [replaceChanged, setReplaceChanged] = useState(true);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [prog, setProg] = useState<Prog | null>(null), [problems, setProblems] = useState<Problem[]>([]), [linked, setLinked] = useState<string[]>([]);
   const [report, setReport] = useState<Distributor | null>(null);
   const [person, setPerson] = useState<SalesOfficer | null>(null);
   const charts = useRef<HTMLDivElement>(null);
@@ -102,13 +124,25 @@ export default function SOReports({ officers, locations, stock, products, canMan
 
   // ---------- upload: several workbooks, every sheet accounted for, nobody logged twice ----------
   async function read(files: File[]) {
-    setMsg(null); setCheck(null); setReplaceChanged(true); setBusy("read");
+    setMsg(null); setCheck(null); setReplaceChanged(true); setBusy("read"); setLinked([]);
     const task = startTask(`Reading ${plural(files.length, "DSR workbook")}`, files.length);
+    const bad: Problem[] = [];
     try {
       const books: DsrBook[] = [];
-      for (let i = 0; i < files.length; i++) { task.step(i, files.length, files[i].name); await breathe(); books.push(readDsr(XLSX.read(await files[i].arrayBuffer(), { cellDates: false }), files[i].name)); }
+      for (let i = 0; i < files.length; i++) {
+        const note = `${files[i].name} (${(files[i].size / 1048576).toFixed(1)} MB)`;
+        task.step(i, files.length, files[i].name); setProg({ label: "Reading workbooks", done: i, total: files.length, note });
+        await breathe(); await new Promise(r => window.setTimeout(r, 30));
+        try {
+          const b = readDsr(XLSX.read(await files[i].arrayBuffer(), { cellDates: false }), files[i].name);
+          if (!b.days.length && !b.stateDays.length) bad.push({ where: files[i].name, text: "No daily rows found. SO sheets need headings such as Name SO, Month/Date and Total Call. This file was left out." });
+          books.push(b);
+        } catch (e) { bad.push({ where: files[i].name, text: `Couldn't be read (${errText(e)}). Is it an Excel file that opens normally? This file was left out; the others carry on.` }); }
+      }
+      setProg({ label: "Reading workbooks", done: files.length, total: files.length, note: "Comparing with the days already saved…" });
+      setProblems(bad);
       const book = mergeBooks(books);
-      if (!book.days.length && !book.stateDays.length) throw new Error("No daily rows found. SO sheets need headings such as Name SO, Month/Date and Total Call.");
+      if (!book.days.length && !book.stateDays.length) throw new Error("No daily rows found in any of the files. SO sheets need headings such as Name SO, Month/Date and Total Call.");
       const ds = book.days.map(d => d.day).sort();
       const existing = ds.length ? await fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", ds[0]).lte("day", ds[ds.length - 1]).order("id").range(a, b)) : [];
       const have = new Map(existing.map(e => [`${e.so_id}|${e.day}`, e]));
@@ -119,34 +153,76 @@ export default function SOReports({ officers, locations, stock, products, canMan
       });
       setCheck({ book, files: files.map(f => f.name).join(", "), fresh, same: sameN, changed });
       task.ok(`${plural(fresh.length, "new day")} to add. Press Add on the Upload DSR tab to save them.`);
-    } catch (e) { task.fail(errText(e)); setMsg({ kind: "err", text: `Couldn't read the file: ${errText(e)}` }); }
-    finally { setBusy(""); }
+    } catch (e) { task.fail(errText(e)); setMsg({ kind: "err", text: `Couldn't read the files: ${errText(e)}` }); }
+    finally { setBusy(""); setProg(null); }
   }
   async function post() {
     if (!supabase || !check) return;
     setBusy("post");
     const strip = (list: DsrDay[]) => list.map(({ sheet: _s, file: _f, ...d }) => d);
-    let added = 0, replaced = 0, newSos = 0, first = true;
+    let added = 0, replaced = 0, newSos = 0, done = 0;
+    const failed: Problem[] = [], base = problems;
+    let inARow = 0;
     const total = check.fresh.length + (replaceChanged ? check.changed.length : 0), task = startTask("Saving DSR days", total);
-    try {
-      const send = async (list: DsrDay[], replace: boolean) => {
-        for (let i = 0; i < list.length || (first && i === 0); i += 300) {
-          const { data, error } = await supabase!.rpc("post_dsr", { p_days: strip(list.slice(i, i + 300)), p_products: first ? check.book.products : [], p_source: check.files,
-            p_state_days: first ? check.book.stateDays : [], p_replace: replace });
-          if (error) throw error;
-          first = false;
-          const r = data as { added: number; replaced: number; new_sos: number };
-          added += r.added; replaced += r.replaced; newSos += r.new_sos;
-          setMsg({ kind: "ok", text: `Saving… ${fmt(added + replaced)} days` }); task.step(added + replaced, total);
+    const step = (note: string) => { setProg({ label: "Saving to the database", done, total, note }); task.step(done, total); };
+    // One call to the database; a dropped connection is tried again twice before it counts as an error.
+    const call = async (days: DsrDay[], replace: boolean, header = false) => {
+      let last: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { data, error } = await supabase!.rpc("post_dsr", { p_days: strip(days), p_products: header ? check.book.products : [], p_source: check.files,
+          p_state_days: header ? check.book.stateDays : [], p_replace: replace });
+        if (!error) { const r = data as { added: number; replaced: number; new_sos: number }; added += r.added; replaced += r.replaced; newSos += r.new_sos; return; }
+        last = error;
+        if (!/fetch|network|timeout|timed out|503|502|504|429/i.test(errText(error))) break;
+        await new Promise(r => window.setTimeout(r, 1500 * (attempt + 1)));
+      }
+      throw last;
+    };
+    const where = (d: DsrDay) => `${d.so} on ${dmy(d.day)}${d.file ? ` · ${d.file}` : ""}${d.sheet ? ` › ${d.sheet}` : ""}`;
+    // A batch that fails is split up until the one bad day is found; every other day is still saved.
+    const send = async (list: DsrDay[], replace: boolean, size = 300): Promise<void> => {
+      for (let i = 0; i < list.length; i += size) {
+        const part = list.slice(i, i + size);
+        try { await call(part, replace); done += part.length; inARow = 0; step(`${part[0].so} … ${part[part.length - 1].so}`); }
+        catch (e) {
+          if (part.length === 1) { failed.push({ where: where(part[0]), text: errText(e) }); done++;
+            // The same refusal day after day is the database itself, not the workbook: stop rather than try every day.
+            if (++inARow >= 10) throw new Error(`the database refused 10 days in a row (${errText(e)}). The days before these were saved; send this message to your admin`); step(`Problem with ${part[0].so}`); setProblems([...base, ...failed]); }
+          else await send(part, replace, size > 30 ? 30 : 1);
         }
-      };
+      }
+    };
+    try {
+      step("Product list and state totals");
+      try { await call([], false, true); }
+      catch (e) { failed.push({ where: "Product list and state totals", text: errText(e) }); }
       await send(check.fresh, false);
       if (replaceChanged && check.changed.length) await send(check.changed.map(c => c.d), true);
-      const text = `Added ${plural(added, "new day")}${replaced ? `, replaced ${plural(replaced, "day")}` : ""}${check.same ? `; ${plural(check.same, "day")} already logged were left as they were` : ""}${!replaceChanged && check.changed.length ? `; ${plural(check.changed.length, "day")} with different figures were kept as first logged` : ""}${newSos ? `; added ${plural(newSos, "new person", "new people")} to the sales team` : ""}.`;
-      setMsg({ kind: "ok", text }); notify(text); task.ok(text); setCheck(null); setReload(x => x + 1);
+      setProblems([...base, ...failed]);
+      const text = `Added ${plural(added, "new day")}${replaced ? `, replaced ${plural(replaced, "day")}` : ""}${check.same ? `; ${plural(check.same, "day")} already logged were left as they were` : ""}${!replaceChanged && check.changed.length ? `; ${plural(check.changed.length, "day")} with different figures were kept as first logged` : ""}${newSos ? `; added ${plural(newSos, "new person", "new people")} to the sales team` : ""}${failed.length ? `. ${plural(failed.length, "item")} couldn't be saved: see the list below` : ""}.`;
+      setMsg({ kind: failed.length ? "err" : "ok", text }); notify(text); if (failed.length) task.fail(text); else task.ok(text); setCheck(null); setReload(x => x + 1);
       if (newSos) await onChanged();
-    } catch (e) { const t = `Stopped after ${plural(added + replaced, "day")}: ${errText(e)}`; task.fail(t); setMsg({ kind: "err", text: t }); }
-    finally { setBusy(""); }
+    } catch (e) { const t = `Stopped after ${plural(added + replaced, "day")}: ${errText(e)}`; task.fail(t); setMsg({ kind: "err", text: t }); setProblems([...base, ...failed]); }
+    finally { setBusy(""); setProg(null); }
+  }
+
+  /** Names in the workbooks that match no one on the team; they'd be added as new people unless linked to someone. */
+  const newNames = useMemo<NewName[]>(() => {
+    if (!check) return [];
+    const m = new Map<string, NewName>();
+    for (const d of check.book.days) {
+      if (matchSO(d.so, officers)) continue;
+      const k = normName(d.so), e = m.get(k);
+      if (e) { e.days++; if (d.file && !e.files.includes(d.file)) e.files += `, ${d.file}`; continue; }
+      m.set(k, { name: d.so, state: d.state, days: 1, files: d.file, like: null });
+    }
+    return [...m.values()].filter(n => !linked.includes(normName(n.name))).map(n => ({ ...n, like: closestPerson(n.name, n.state, officers) }));
+  }, [check, officers, linked]);
+  /** "Same person": the workbook's spelling is saved as one of their other names, so their days go to them. */
+  async function linkName(n: NewName, o: SalesOfficer) {
+    const { error } = await supabase!.from("sales_officers").update({ aliases: [...new Set([...(o.aliases || []), n.name])] }).eq("id", o.id);
+    if (error) { setMsg({ kind: "err", text: `Couldn't link ${n.name}: ${errText(error)}` }); return; }
+    setLinked(l => [...l, normName(n.name)]); notify(`${n.name} is now saved as another name of ${o.name}.`); await onChanged();
   }
 
   // ---------- per person ----------
@@ -430,13 +506,25 @@ export default function SOReports({ officers, locations, stock, products, canMan
           const files = [...new Set(check.book.sheets.map(s => s.file))].filter(f => !check.book.sheets.some(s => s.file === f && s.kind === "SO daily" && s.rows > 0) && check.book.sheets.some(s => s.file === f && s.kind === "State total"));
           return files.length > 0 && <div className="status err">No SO daily rows were found in {files.join(", ")}: only the state total was read, so nobody's days from {files.length === 1 ? "it" : "them"} will be saved. Check that each SO sheet has the person's name in a column headed like "Name SO" (or Name ASE / Name SR) and dates under "Month/Date", then choose the file again. If it still happens, send the workbook to your admin.</div>;
         })()}
+        {newNames.length > 0 && <div className="warn"><b>{plural(newNames.length, "name")} in the workbooks {newNames.length === 1 ? "matches" : "match"} no one on the team.</b> {newNames.length === 1 ? "It" : "Each"} will be added as a new person unless you say it's someone already listed under another spelling:
+          <ul className="newnames">{newNames.map(n => <li key={n.name}><b>{n.name}</b> <small>({plural(n.days, "day")}{n.state ? `, ${n.state}` : ""}{n.files ? `, ${n.files}` : ""})</small>
+            {n.like ? <>: maybe <b>{n.like.name}</b>{n.like.designation ? ` (${n.like.designation}${n.like.state ? `, ${n.like.state}` : ""}${n.like.active ? "" : ", inactive"})` : ""}? {canManage && <><button className="link" onClick={() => linkName(n, n.like!)}>Same Person</button> · <button className="link" onClick={() => setLinked(l => [...l, normName(n.name)])}>Different, Add as New</button></>}</> : <span className="muted"> no similar name on the team: added as a new person.</span>}</li>)}</ul></div>}
         {check.book.dupes.length > 0 && <div className="warn">The same person appears twice on the same day in this upload ({plural(check.book.dupes.length, "time")}); only the first is used: {check.book.dupes.slice(0, 5).join("; ")}{check.book.dupes.length > 5 ? "…" : ""}.</div>}
         <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>File</th><th>Sheet</th><th>Read As</th><th>Rows</th><th>Note</th></tr></thead>
           <tbody>{check.book.sheets.map((s, i) => <tr key={i}><td>{s.file}</td><td>{s.name}</td><td>{s.kind}</td><td>{s.rows}</td><td className="wrap">{s.note}</td></tr>)}</tbody></table></div>
         <div className="actions"><button className="secondary" onClick={() => setCheck(null)}>Cancel</button>
           <button disabled={busy === "post" || (!check.fresh.length && !(replaceChanged && check.changed.length) && !check.book.stateDays.length)} onClick={post}>{busy === "post" ? "Saving…" : check.fresh.length + (replaceChanged ? check.changed.length : 0) ? `Add ${plural(check.fresh.length + (replaceChanged ? check.changed.length : 0), "Day")}` : "Save State Totals"}</button></div>
       </div>}
+      {prog && <div className="progress" role="status" aria-live="polite">
+        <div className="lbl"><span>{prog.label}</span><span>{prog.total ? `${fmt(prog.done)} of ${fmt(prog.total)}${prog.label.startsWith("Saving") ? " days" : " files"} · ${Math.floor((prog.done / prog.total) * 100)}%` : "Working…"}</span></div>
+        <div className="track"><div className={`fill${prog.total ? "" : " indet"}`} style={{ width: `${prog.total ? Math.max(2, (prog.done / prog.total) * 100) : 35}%` }} /></div>
+        {prog.note && <small className="muted">{prog.note}</small>}
+      </div>}
       <div className="reserve">{msg && <div className={`status ${msg.kind}`}>{msg.text}</div>}</div>
+      {problems.length > 0 && <div className="status err problems"><div className="rowhead"><b>{plural(problems.length, "problem")} in this upload</b><button className="link" onClick={() => setProblems([])}>Clear</button></div>
+        <p>The rest of the upload carries on without them. Fix these in the workbook and upload it again: days already saved are skipped, so nothing is counted twice.</p>
+        <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Where</th><th>What went wrong</th></tr></thead>
+          <tbody>{problems.map((p, i) => <tr key={i}><td className="wrap">{p.where}</td><td className="wrap">{p.text}</td></tr>)}</tbody></table></div></div>}
     </section>}
 
     {tab === "staff" && <Staff officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />}

@@ -1,8 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { normName } from "./parse";
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const key = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined;
+// import.meta.env is missing outside Vite (scripts and tests that read files with the app's readers).
+const env = (import.meta.env || {}) as Record<string, string | undefined>;
+const url = env.VITE_SUPABASE_URL;
+const key = env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY;
 export const supabase = url && key ? createClient(url, key) : null;
 
 export type Role = "HO_ADMIN" | "STATE_MANAGER" | "DISTRIBUTOR_MANAGER" | "SALESMAN";

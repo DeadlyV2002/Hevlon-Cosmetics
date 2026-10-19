@@ -41,7 +41,9 @@ export function attendanceOf(marked: string, remark: string, calls: number, db: 
 }
 
 const HEAD: Record<string, RegExp> = {
-  state: /^state$/, date: /date|^month/, manager: /reporting|manager|asm/, so: /name so|^so( name)?$|^so ase|sales ?officer/, hq: /^hq$|head ?quarter/,
+  // The person's column: "Name SO", "Name ASE" (Assam), "Name SR", "Name of SO", "Sales Officer", "Employee"…
+  state: /^state$/, date: /date|^month/, manager: /reporting|manager/,
+  so: /^name\s*(of\s*)?(the\s*)?(so|ase|asm|sr|isr|tso|psr|se|sso|salesman|sales ?(officer|man|person|executive)|employee|staff)\b|^(so|ase|sr|isr|tso|psr)( name)?$|^so ase|sales ?officer|sales ?person|^employee( name)?$|^staff( name)?$/, hq: /^hq$|head ?quarter/,
   db: /^db( name)?$|distributor/, town: /^town|city/, beat: /beat|route/, remark: /remark/, attendance: /attendance|^att$/,
   calls: /^total call/, pc: /^productive call/, value: /secondary sale|sec(ondary)? value/,
 };
@@ -72,7 +74,9 @@ export function readDsr(wb: XLSX.WorkBook, file = ""): DsrBook {
     }
     // A sheet with no SO names is the state (or zone) total, used to check the SO sheets.
     const body = g.slice(hr + 1).filter(r => toISODate(r[c.date]));
-    const isTotal = /total/i.test(name) || (c.so >= 0 ? body.every(r => !cellText(r[c.so]).trim()) : !/\(/.test(name));
+    // A sheet with distributors, towns or remarks filled in is someone's daily report, whatever its person column is called.
+    const hasDetail = body.some(r => ["db", "town", "beat", "remark"].some(k => c[k] >= 0 && cellText(r[c[k]]).trim()));
+    const isTotal = /total/i.test(name) || (!hasDetail && (c.so >= 0 ? body.every(r => !cellText(r[c.so]).trim()) : !/\(/.test(name)));
     const soFromSheet = name.replace(/\(.*\)/, "").trim();
     let found = 0;
     for (const r of body) {

@@ -20,6 +20,7 @@ import { guessProduct } from "./lib/fuzzy";
 import { useSessionLog } from "./components/LogBook";
 import Tasks from "./components/Tasks";
 import logoUrl from "./assets/kolor-activ-logo.jpg";
+import { PageIcon, TabIcon } from "./lib/icons";
 
 export type Page = "Dashboard" | "Inventory" | "Distributors" | "Retailers" | "Collections" | "SO reports" | "SO checks" | "Reports" | "Pricing" | "History" | "Settings";
 const NAV: Page[] = ["Dashboard", "Inventory", "Distributors", "Retailers", "Collections", "SO reports", "SO checks", "Reports", "Pricing", "History", "Settings"];
@@ -140,11 +141,11 @@ export default function App() {
     <div className="app">
       <aside>
         <Logo light /><small>Distributor control</small>
-        <nav>{NAV.filter(n => n !== "Pricing" || canPrice).map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); if (n === "Inventory") setInvOpened(true); }}>{n}{n === "Inventory" && invBusy && <span className="navbusy" title="Upload in progress">{invBusy === "…" ? "working" : invBusy}</span>}</button>)}</nav>
-        <button className="secondary logout" onClick={() => supabase!.auth.signOut()}>Sign out</button>
+        <nav>{NAV.filter(n => n !== "Pricing" || canPrice).map(n => <button key={n} className={page === n ? "nav active" : "nav"} onClick={() => { setPage(n); setMessage(""); if (n === "Inventory") setInvOpened(true); }} aria-current={page === n ? "page" : undefined}><PageIcon page={n} /><span>{n}</span>{n === "Inventory" && invBusy && <span className="navbusy" title="Upload in progress">{invBusy === "…" ? "working" : invBusy}</span>}</button>)}</nav>
+        <button className="secondary logout" onClick={() => supabase!.auth.signOut()}><TabIcon id="logout" />Sign out</button>
       </aside>
       <main>
-        <header><div><small>KOLOR ACTIV · HEVLON COSMETICS{testingMode ? " · TESTING MODE" : ""}</small><h1>{page}</h1></div>
+        <header><div><small>KOLOR ACTIV · HEVLON COSMETICS{testingMode ? " · TESTING MODE" : ""}</small><h1><span className="pageico"><PageIcon page={page} size={22} /></span>{page}</h1></div>
           <div className="headright">
             <AlertsBell ctx={ctx} version={version} onPick={pickAlert} />
             <span className="who">{session.user.email}{role && <em className="tag">{ROLE_LABEL[role]}</em>}</span>

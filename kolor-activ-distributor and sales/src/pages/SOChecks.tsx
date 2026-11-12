@@ -1,4 +1,5 @@
 import { Select } from "../components/Select";
+import { TabIcon } from "../lib/icons";
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, Distributor, Product, SalesOfficer, KIND_LABEL, fetchAll, fmt, plural, money, errText } from "../lib/supabase";
@@ -234,7 +235,7 @@ export default function SOChecks({ locations, products, officers, canManage, onC
       <FilterBar locations={locations} value={scope} onChange={setScope} kinds={["DISTRIBUTOR", "SUPER_STOCKIST"]} saveKey="so-checks" />
       {err && <div className="status err">{err}</div>}
       <div className="checktiles" role="tablist">{TABS.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} className={`checktile${tab === t.id ? " on" : ""}${t.count ? " has" : ""}`} onClick={() => setTab(t.id)}>
-        <b>{t.count}</b><span>{t.label}</span></button>)}</div>
+        <b><TabIcon id={t.id} size={18} />{t.count}</b><span>{t.label}</span></button>)}</div>
       <div className={`checkpanel${loading ? " loading" : ""}`}>
         <div className="checkhead"><div><h3>{current.label}</h3><p className="hint">{current.help}</p>
           {tab === "aged" && <label className="inline">Unsold for over <input type="number" min={7} max={365} value={agedDays} onChange={e => setAgedDays(Math.max(7, Number(e.target.value) || 60))} /> days</label>}

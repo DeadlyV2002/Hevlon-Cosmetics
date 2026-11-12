@@ -1,4 +1,5 @@
 import { Select } from "../components/Select";
+import { TabIcon } from "../lib/icons";
 import { ask } from "../lib/ask";
 import { confirmWithPassword } from "../lib/confirm";
 import { useDeferredValue, useMemo, useRef, useState } from "react";
@@ -366,8 +367,8 @@ export default function Distributors({ locations, stock, retailers, officers, pr
   return <>
     <section className="tabs">
       {KINDS.slice().reverse().map(k => <button key={k} className={tab === k && !showTree ? "active" : ""} onClick={() => { setShowTree(false); switchTab(k); }}>
-        {KIND_PLURAL[k]} ({locations.filter(d => d.kind === k).length})</button>)}
-      <button className={showTree ? "active" : ""} onClick={() => setShowTree(true)}>Tree View</button>
+        <TabIcon id={k} />{KIND_PLURAL[k]} <em className="tabcount">{locations.filter(d => d.kind === k).length}</em></button>)}
+      <button className={showTree ? "active" : ""} onClick={() => setShowTree(true)}><TabIcon id="tree" />Tree View</button>
     </section>
 
     {showTree ? <Retailers treeOnly retailers={retailers} locations={locations} stock={stock} officers={officers} canManage={canManage} onChanged={onChanged} notify={notify} />

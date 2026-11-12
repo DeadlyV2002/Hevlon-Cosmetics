@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Ctx, loadAlerts } from "../lib/insights";
 import { usePlace } from "./Select";
+import { TabIcon } from "../lib/icons";
 
 /** The bell in the header: things that need a look, worked out whenever the data changes. */
 export default function AlertsBell({ ctx, version, onPick }: { ctx: Ctx; version: number; onPick: (a: Alert) => void }) {
@@ -27,7 +28,7 @@ export default function AlertsBell({ ctx, version, onPick }: { ctx: Ctx; version
   return <div className="bell" ref={ref}>
     <button ref={btn} className={`secondary bellbtn${high ? " high" : n ? " some" : ""}`} aria-expanded={open} onClick={() => setOpen(o => !o)}
       aria-label={alerts === null ? "Checking for alerts" : `${n} alerts${high ? `, ${high} urgent` : ""}`}>
-      <span aria-hidden>🔔</span>{n > 0 && <span className="bellcount">{n}</span>}
+      <TabIcon id="bell" size={18} />{n > 0 && <span className="bellcount">{n}</span>}
     </button>
     {open && pos.left !== undefined && <div className="bellpanel" style={{ ...pos, width: Math.min(420, window.innerWidth - 16), left: Math.max(8, Math.min(Number(pos.left) + Number(pos.width) - Math.min(420, window.innerWidth - 16), window.innerWidth - Math.min(420, window.innerWidth - 16) - 8)) }} role="dialog" aria-label="Alerts">
       <div className="rowhead"><b>Needs a look</b><small className="muted">{alerts === null ? "checking…" : n ? `${n} alert${n === 1 ? "" : "s"}` : "all clear"}</small></div>

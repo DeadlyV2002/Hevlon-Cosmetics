@@ -109,7 +109,9 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
   const cx = (i: number) => pad.left + band * i + band / 2;
   const y = (v: number) => pad.top + ih - (Math.max(v, 0) / max) * ih;
   const xEvery = band >= 44 ? 1 : band >= 24 ? 2 : Math.ceil(44 / band);
-  const labelEvery = band >= (size === "card" ? 40 : 34) ? 1 : 2;
+  // A value goes on every column only where the widest one fits; otherwise on every 2nd, 3rd… so none touch.
+  const widest = Math.max(0, ...data.x.map((_, i) => f(data.values.reduce((t, v) => t + Math.max(v[i] || 0, 0), 0)).length)) * (size === "large" ? 7.6 : 6.6) + 10;
+  const labelEvery = Math.max(1, Math.ceil(widest / Math.max(band, 1)));
   const empty = data.values.every(s => s.every(v => !v));
   // The tallest column and each line's highest point always carry their value.
   const peakCol = stackTotals.reduce((b, v, i) => (v > stackTotals[b] ? i : b), 0);
@@ -152,7 +154,7 @@ function XChart({ data, size, labels }: { data: Extract<ChartData, { type: "colu
           return top ? <path key={k} className={`f${data.series[k].slot}`} d={colPath(x0, yTop, w, h, 4)} />
             : <rect key={k} className={`f${data.series[k].slot}`} x={x0} y={yTop + 2} width={w} height={h} />;
         })}
-          {stackTotals[i] > 0 && ((labels && i % labelEvery === (n - 1) % labelEvery) || i === peakCol) && <text className={`dlabel${i === peakCol ? " peak" : ""}`} x={cx(i)} y={y(stackTotals[i]) - 6} textAnchor="middle">{f(stackTotals[i])}</text>}
+          {stackTotals[i] > 0 && (i === peakCol || (labels && i % labelEvery === (n - 1) % labelEvery && Math.abs(i - peakCol) >= labelEvery)) && <text className={`dlabel${i === peakCol ? " peak" : ""}`} x={cx(i)} y={y(stackTotals[i]) - 6} textAnchor="middle">{f(stackTotals[i])}</text>}
         </g>;
       })}
       {lines && data.series.map((s, k) => {

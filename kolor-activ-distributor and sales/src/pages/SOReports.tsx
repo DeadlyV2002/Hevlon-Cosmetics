@@ -16,6 +16,7 @@ import { readDsr, mergeBooks, DsrBook, DsrDay, teamTotal as sheetTeamTotal } fro
 import { exportPng } from "../lib/present";
 import { startTask, breathe } from "../lib/tasks";
 import { dmy, longDate } from "../lib/dates";
+import { TabIcon } from "../lib/icons";
 
 interface Day { id: string; so_id: string; day: string; state: string | null; manager: string | null; hq: string | null; db_name: string | null; distributor_id: string | null; town: string | null; beat: string | null; remark: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number }
 interface Prod { product: string; category: string | null; qty: number; value: number }
@@ -487,9 +488,9 @@ export default function SOReports({ officers, locations, stock, products, canMan
       </div>
       {focus && <p className="hint">Showing {byId.get(focus)?.name} and their team. <button className="link" onClick={() => setFocus("")}>Show Everyone</button></p>}
       <div className="sotabs" role="tablist">
-        <button role="tab" aria-selected={tab === "upload"} className={`uploadtab${tab === "upload" ? " on" : ""}`} onClick={() => setTab("upload")}>⬆ Upload DSR</button>
+        <button role="tab" aria-selected={tab === "upload"} className={`uploadtab${tab === "upload" ? " on" : ""}`} onClick={() => setTab("upload")}><TabIcon id="upload" />Upload DSR</button>
         {TABS.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
-        {label}{id === "checks" && flagged.length ? <em className="bellcount">{flagged.length}</em> : null}</button>)}</div>
+        <TabIcon id={id} />{label}{id === "checks" && flagged.length ? <em className="bellcount">{flagged.length}</em> : null}</button>)}</div>
       {err && <div className="status err">{err}</div>}
     </section>
 
@@ -498,7 +499,8 @@ export default function SOReports({ officers, locations, stock, products, canMan
         const prevT = prevView.reduce((a, d) => ({ calls: a.calls + n(d.total_calls), pc: a.pc + n(d.productive_calls), value: a.value + n(d.sale_value) }), { calls: 0, pc: 0, value: 0 });
         const prevDb = new Set(prevView.map(d => d.distributor_id || d.db_name).filter(Boolean)).size, dbs = new Set(view.map(d => d.distributor_id || d.db_name).filter(Boolean)).size;
         const vs = (now: number, was: number, pts = false) => {
-          if (!prevView.length || (!was && !now)) return null;
+          // No comparison when either period has no reports at all: "down 100%" would only say nothing was uploaded.
+          if (!view.length || !prevView.length || (!was && !now)) return null;
           const c = pts ? `${now - was >= 0 ? "+" : "−"}${fmt(Math.abs(now - was), 1)} pts` : change(now, was);
           return <small className={`delta ${now > was ? "up" : now < was ? "down" : ""}`}>{c} vs {periodName(prevRange)}</small>;
         };

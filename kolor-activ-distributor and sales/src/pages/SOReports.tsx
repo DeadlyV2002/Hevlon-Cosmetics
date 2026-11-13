@@ -7,7 +7,8 @@ import DateRange, { PRESETS, Range } from "../components/DateRange";
 import { Select } from "../components/Select";
 import { useColumnFilters, Col } from "../components/ColumnFilter";
 import { ChartView } from "../components/Charts";
-import { ChartData } from "../lib/insights";
+import { ChartData, clearInsightCache } from "../lib/insights";
+import { SheetOut } from "../lib/linkSheet";
 import Staff, { rankOf } from "../components/Staff";
 import SOReport from "../components/SOReport";
 import DsrLinker, { SuspectLinks } from "../components/DsrLinker";
@@ -96,6 +97,8 @@ export default function SOReports({ officers, locations, stock, products, canMan
   const [report, setReport] = useState<Distributor | null>(null);
   const [person, setPerson] = useState<SalesOfficer | null>(null);
   const charts = useRef<HTMLDivElement>(null);
+  /** The unlinked DB names list, as the Stock Checks tab shows it, for Export To Excel. */
+  const linkSheets = useRef<(() => SheetOut[]) | null>(null);
   const byId = useMemo(() => new Map(officers.map(o => [o.id, o])), [officers]);
   const locById = useMemo(() => new Map(locations.map(l => [l.id, l])), [locations]);
   const zoneOf = (o?: SalesOfficer) => o?.zone || o?.state || "No zone";
@@ -229,7 +232,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
       if (replaceChanged && check.changed.length) await send(check.changed.map(c => c.d), true);
       setProblems([...base, ...failed]);
       const text = `Added ${plural(added, "new day")}${replaced ? `, replaced ${plural(replaced, "day")}` : ""}${check.same ? `; ${plural(check.same, "day")} already logged were left as they were` : ""}${!replaceChanged && check.changed.length ? `; ${plural(check.changed.length, "day")} with different figures were kept as first logged` : ""}${newSos ? `; added ${plural(newSos, "new person", "new people")} to the sales team` : ""}${failed.length ? `. ${plural(failed.length, "item")} couldn't be saved: see the list below` : ""}.`;
-      setMsg({ kind: failed.length ? "err" : "ok", text }); notify(text); if (failed.length) task.fail(text); else task.ok(text); setCheck(null); setReload(x => x + 1);
+      setMsg({ kind: failed.length ? "err" : "ok", text }); notify(text); if (failed.length) task.fail(text); else task.ok(text); setCheck(null); setReload(x => x + 1); clearInsightCache();
       if (newSos) await onChanged();
     } catch (e) { const t = `Stopped after ${plural(added + replaced, "day")}: ${errText(e)}`; task.fail(t); setMsg({ kind: "err", text: t }); setProblems([...base, ...failed]); }
     finally { setBusy(""); setProg(null); }
@@ -434,13 +437,41 @@ export default function SOReports({ officers, locations, stock, products, canMan
   const allZones = [...new Set([...officers.map(zoneOf), ...days.map(d => d.state || "")].filter(Boolean))].sort();
   const tot = sums.reduce((a, s) => ({ calls: a.calls + s.calls, pc: a.pc + s.pc, value: a.value + s.value }), { calls: 0, pc: 0, value: 0 });
 
-  function exportAll() {
+  /** Export To Excel gives what the open tab is showing: its period, people in view and column filters. */
+  function exportShown() {
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(st.rows.map(s => Object.fromEntries(scols.map(c => [c.label, c.value(s) ?? ""])))), "Team summary");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dt.rows.map(d => Object.fromEntries(dcols.map(c => [c.label, c.value(d) ?? ""])))), "Daily log");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sums.map(s => ({ Name: s.so?.name || "", ...Object.fromEntries(gridDates.map(d => [d.slice(5), SHORT[grid.get(`${s.soId}|${d}`) || ""] || ""])) }))), "Attendance");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pt.rows.map(p => ({ Product: p.product, Category: p.category, Dozens: n(p.qty), "Value ₹": Math.round(n(p.value)) }))), "Products");
-    XLSX.writeFile(wb, `so-reports-${range.from}-to-${range.to}.xlsx`);
+    const add = (name: string, rows: object[]) => XLSX.utils.book_append_sheet(wb, rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([["Nothing to show for this selection."]]), name.slice(0, 31));
+    const table = <T,>(cols: Col<T>[], rows: T[]) => rows.map(r => Object.fromEntries(cols.map(c => [c.label, c.value(r) ?? ""])));
+    const shown = [periodName(tab === "checks" ? checkRange : range), zone, focus ? `${byId.get(focus)?.name}'s team` : "", q.trim() ? `search "${q.trim()}"` : ""].filter(Boolean).join(", ");
+    let file = `so-reports-${tab}-${range.from}-to-${range.to}`;
+    if (tab === "overview") {
+      const now = periodName(range), was = periodName(prevRange);
+      const p = prevView.reduce((a, d) => ({ calls: a.calls + n(d.total_calls), pc: a.pc + n(d.productive_calls), value: a.value + n(d.sale_value) }), { calls: 0, pc: 0, value: 0 });
+      const dbs = (v: Day[]) => new Set(v.map(d => d.distributor_id || d.db_name).filter(Boolean)).size;
+      add("Key figures", [
+        { Figure: "Secondary sales ₹", [now]: Math.round(tot.value), [was]: Math.round(p.value) }, { Figure: "Total calls", [now]: tot.calls, [was]: p.calls },
+        { Figure: "Productive calls", [now]: tot.pc, [was]: p.pc }, { Figure: "Strike rate %", [now]: Math.round(pct(tot.pc, tot.calls) * 10) / 10, [was]: Math.round(pct(p.pc, p.calls) * 10) / 10 },
+        { Figure: "Distributors visited", [now]: dbs(view), [was]: dbs(prevView) }, { Figure: "Showing", [now]: shown, [was]: "" },
+      ]);
+      // The key points exactly as they read on the page.
+      add("Key points", [...document.querySelectorAll(".keypoints li")].map(li => ({ Topic: li.querySelector(".kptag")?.textContent || "", "Key point": (li.querySelector("span:last-child")?.textContent || "").replace(/\s+/g, " ").trim() })));
+      add(weekly ? "By week" : "By day", buckets.map((b, i) => ({ [weekly ? "Week" : "Day"]: bName(b), "Secondary ₹": Math.round(bucketVals[i]), "Share %": totalSec ? Math.round((bucketVals[i] / totalSec) * 1000) / 10 : 0 })));
+      add("By person", ranked.map(x => ({ Name: x.so?.name || "Unknown", Post: x.so?.designation || "", HQ: x.so?.hq || "", Zone: zoneOf(x.so), "Days Worked": working(x), "Total Calls": x.calls, "Productive Calls": x.pc, "Secondary ₹": Math.round(x.value), "Share %": totalSec ? Math.round((x.value / totalSec) * 1000) / 10 : 0 })));
+      add("By zone", zones.map(([z, v]) => ({ Zone: z, "Secondary ₹": Math.round(v), "Share %": totalSec ? Math.round((v / totalSec) * 1000) / 10 : 0 })));
+      add("Products", prods.map(x => ({ Product: x.product, Category: x.category || "", Dozens: Math.round(n(x.qty) * 10) / 10, "Value ₹": Math.round(n(x.value)), "Share %": prodTotal ? Math.round((n(x.value) / prodTotal) * 1000) / 10 : 0 })));
+      add("Categories", catList.map(([c, v]) => ({ Category: c, "Value ₹": Math.round(v), "Share %": prodTotal ? Math.round((v / prodTotal) * 1000) / 10 : 0 })));
+    } else if (tab === "team") add("Team performance", table(scols, st.rows));
+    else if (tab === "checks") {
+      // The unlinked names first, ready to fill in and upload back; then the two check tables as filtered.
+      (linkSheets.current?.() || []).forEach(x => XLSX.utils.book_append_sheet(wb, x.ws, x.name));
+      add("Bookings vs stock", table(sccols, sct.rows));
+      add("By distributor", dbRows.map(r => ({ Distributor: r.loc?.name || "Deleted", Code: r.loc?.code || "", SOs: [...r.sos].join(", "), "SO Bookings ₹": Math.round(r.value), "Billed To Them ₹": Math.round(r.billed), "Stock Now ₹": Math.round(r.stockV), "Collection %": r.cp === null ? "" : Math.round(r.cp), Flag: r.flag })));
+      file = `stock-checks-${checkRange.from}-to-${checkRange.to}`;
+    } else if (tab === "attendance") add("Attendance", sums.map(x => ({ Name: x.so?.name || "", Post: x.so?.designation || "", ...Object.fromEntries(gridDates.map(d => [dmy(d), SHORT[grid.get(`${x.soId}|${d}`) || ""] || ""])) })));
+    else if (tab === "log") add("Daily log", table(dcols, dt.rows));
+    else if (tab === "products") add("Products", table(pcols, pt.rows));
+    else if (tab === "staff") add("Sales team", officers.filter(o => !filtered || inView.has(o.id)).map(o => ({ Code: o.code, Name: o.name, Post: o.designation || "SO", "Reports To": byId.get(o.manager_id || "")?.name || "", Zone: zoneOf(o), HQ: o.hq || o.region || "", Areas: o.areas || "", Phone: o.phone || "", Active: o.active ? "Yes" : "No", "Other Names": (o.aliases || []).join(", ") })));
+    XLSX.writeFile(wb, `${file}.xlsx`);
   }
 
   // ---------- SO bookings against distributor stock, product by product ----------
@@ -484,7 +515,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
         <DateRange value={range} onChange={setRange} />
         <Select value={zone} onChange={e => { setZone(e.target.value); setFocus(""); }} aria-label="Zone"><option value="">All zones</option>{allZones.map(z => <option key={z} value={z}>{z}</option>)}</Select>
         <input className="search" placeholder="Search a person, HQ, area or town…" value={q} onChange={e => setQ(e.target.value)} />
-        <button className="secondary" onClick={exportAll} disabled={!days.length}>Export To Excel</button>
+        <button className="secondary" onClick={exportShown} disabled={tab === "upload"} title="Exports what this tab is showing now">Export To Excel</button>
       </div>
       {focus && <p className="hint">Showing {byId.get(focus)?.name} and their team. <button className="link" onClick={() => setFocus("")}>Show Everyone</button></p>}
       <div className="sotabs" role="tablist">
@@ -545,7 +576,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
     </section>}
 
     {tab === "checks" && <>
-      <DsrLinker locations={locations} officers={officers} stock={stock} canManage={canManage} onListsChanged={onChanged} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
+      <DsrLinker locations={locations} officers={officers} stock={stock} canManage={canManage} onListsChanged={onChanged} sheetsRef={linkSheets} notify={notify} onLinked={() => setCheckReload(x => x + 1)} key={checkReload} />
       <SuspectLinks locations={locations} canManage={canManage} notify={notify} onChanged={() => setCheckReload(x => x + 1)} key={`s${checkReload}`} />
       <section className="card">
         <div className="rowhead"><h2>SO Bookings Against Distributor Stock</h2><DateRange value={checkRange} onChange={setCheckRange} /></div>

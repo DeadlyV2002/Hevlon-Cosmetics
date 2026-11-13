@@ -15,11 +15,17 @@ const keyWords = (s: string) => normName(s).split(" ").filter(w => w.length > 2 
 interface Row { db_name: string; state: string | null; town: string | null; beat: string | null; sale_value: number; attendance: string | null; so_id: string; day: string; hq: string | null }
 export interface DbName { name: string; state: string; towns: Set<string>; days: number; value: number; guess?: Distributor; score: number;
   /** Who booked there (SO id → days), their beats and HQs, and the first and last day it appears. */
-  sos: Map<string, number>; beats: Set<string>; hqs: Set<string>; first: string; last: string }
+  sos: Map<string, number>; beats: Set<string>; hqs: Set<string>; first: string; last: string;
+  /** Other unlinked spellings that look like this same distributor (a typo, an added "s", "J.M.R." for "JMR"), and what they share. */
+  same?: string[]; sameWhy?: string }
 
 /** Words SOs put in the DB column on days they didn't visit a distributor. */
 export const NOT_A_DB = /^(leave|sunday|holiday|weekly off|week off|review meeting|meeting|absent|off|na|n a|nil|office|training|self|travel)$/;
 
+/** Meeting days and visits to "the SS point" typed in the DB column: not a distributor, however they are spelt. */
+const NOT_A_VISIT = /(me+t+ings?|mit+ings?)\b|\b(meet|review|training|p[ae]y?ments?|appoint(ed|ment)s?)\b|^(today on |work at )?(s ?)+point( \w+)?$/;
+/** Two parties written in one cell ("Vishal Enterprises + Ashish Ent"): never grouped with either, or it would join them into one. */
+const TWO_PARTIES = /[+&/,]| and /i;
 interface Prep { flat: string; core: string; toks: string[] }
 // Only the distinctive part of a name counts: "A K Traders" must not match every "... Traders", nor "JMR Enterprises" match "Abni Enterprises".
 const prep = (s: string): Prep => {
@@ -28,14 +34,14 @@ const prep = (s: string): Prep => {
 };
 const spelling = (x: string, y: string) => { const long = Math.max(x.length, y.length); return !long || Math.abs(x.length - y.length) / long > 0.25 ? 0 : 1 - editDistance(x, y) / long; };
 /** Like similarity() in fuzzy.ts, on names cleaned once instead of on every comparison. */
-function sim(a: Prep, b: Prep) {
+function sim(a: Prep, b: Prep, spellingOnly = false) {
   if (!a.flat || !b.flat) return 0;
   if (a.flat === b.flat) return 1;
   const contained = a.toks.length > 0 && b.toks.length > 0 && (a.toks.every(w => b.toks.includes(w)) || b.toks.every(w => a.toks.includes(w)));
   // Spelling is compared on the distinctive part of each name; the whole name only counts when it is nearly the same ("MD Cosmetics" / "M.D Cosmetic").
   const core = a.core && b.core ? spelling(a.core, b.core) : 0, whole = spelling(a.flat, b.flat);
   // Names made only of shop words ("Shree Agency" / "Shri Agency") are compared whole.
-  return Math.max(core, whole >= 0.85 || (!a.core && !b.core) ? whole : 0, contained ? 0.85 : 0);
+  return Math.max(core, whole >= 0.85 || (!a.core && !b.core) ? whole : 0, contained && !spellingOnly ? 0.85 : 0);
 }
 export const sameState = (a?: string | null, b?: string | null) => { const x = normName(a || ""), y = normName(b || ""); return !x || !y || x.includes(y) || y.includes(x); };
 
@@ -46,7 +52,7 @@ export async function loadUnlinked(): Promise<DbName[]> {
   const m = new Map<string, DbName>();
   rows.forEach(r => {
     const k = normName(r.db_name);
-    if (!k || NOT_A_DB.test(k)) return;
+    if (!k || NOT_A_DB.test(k) || NOT_A_VISIT.test(k)) return;
     const e = m.get(k) || { name: r.db_name.trim(), state: r.state || "", towns: new Set<string>(), days: 0, value: 0, score: 0, sos: new Map<string, number>(), beats: new Set<string>(), hqs: new Set<string>(), first: r.day, last: r.day };
     e.days++; e.value += Number(r.sale_value) || 0; if (r.town) e.towns.add(r.town.trim());
     if (r.beat) e.beats.add(r.beat.trim()); if (r.hq) e.hqs.add(r.hq.trim()); e.sos.set(r.so_id, (e.sos.get(r.so_id) || 0) + 1);
@@ -68,11 +74,51 @@ export async function suggest(names: DbName[], locations: Distributor[], task?: 
       let s = x.kw.length > 0 && x.kw.every(w => hasWord(words, w)) ? 0.8 : 0;
       for (const p of x.names) { const v = sim(me, p); if (v > s) s = v; }
       if (s >= 0.7 && x.town && towns.some(t => sim(t, x.town!) >= 0.8)) s += 0.1;
+      // The SO who books this name already looks after that distributor: more likely the same one, misspelt.
+      if (s >= 0.7 && x.d.so_id && e.sos.has(x.d.so_id)) s += 0.1;
       if (s > score) { score = s; best = x.d; }
     }
     out.push({ ...e, guess: score >= 0.8 ? best : undefined, score });
     if (i % 20 === 19) { task?.step(i + 1, names.length); await breathe(); }
   }
+  return out;
+}
+
+/** Groups unlinked spellings that are most probably one distributor: nearly the same name (once shop words such as
+ *  Enterprises / Store / Sringar are set aside) in the same state, booked by the same SO or in the same town or HQ.
+ *  "Omm Santi Enterprise" / "Enterprises", "JMR" / "J.M.R.", "Navya Srinagar Store" / "Navya Sringaar", "Yuraj" / "Yuvraj Store".
+ *  Members of a group are put next to each other, biggest group booking first. */
+export async function groupAlike(names: DbName[]): Promise<DbName[]> {
+  const p = names.map(n => ({ me: prep(n.name), towns: [...n.towns, ...n.hqs].map(prep) }));
+  const two = names.map(n => TWO_PARTIES.test(n.name) || / and /.test(` ${normName(n.name)} `));
+  const parent = names.map((_, i) => i), why = new Map<number, Set<string>>();
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const a = names[i], b = names[j];
+      if (!sameState(a.state, b.state) || two[i] || two[j]) continue;
+      // close: nearly the same spelling. Otherwise one name's words all sit inside the other's ("Vinayak" in "Siddhi Vinayak").
+      const close = sim(p[i].me, p[j].me, true), v = close >= 0.8 ? close : sim(p[i].me, p[j].me);
+      // Very short distinctive parts ("AK", "RK") must match exactly; longer ones may differ by a letter or two.
+      if (v < 0.8 || (Math.min(p[i].me.core.length, p[j].me.core.length) < 4 && v < 1)) continue;
+      const so = [...a.sos.keys()].some(id => b.sos.has(id)), town = p[i].towns.some(t => p[j].towns.some(u => sim(t, u) >= 0.8));
+      // A shared SO is enough for a near-identical spelling. A name inside a longer one needs the same town too:
+      // seniors travel with many SOs, so a shared name alone would join shops in different towns.
+      if (close >= 0.8 ? !so && !town : !town) continue;
+      const ri = find(i), rj = find(j);
+      if (ri !== rj) parent[rj] = ri;
+      const w = why.get(find(i)) || new Set<string>(); (why.get(rj) || []).forEach(x => w.add(x));
+      if (so) w.add("same SO"); if (town) w.add("same town"); why.set(find(i), w);
+    }
+    if (i % 40 === 39) await breathe();
+  }
+  const groups = new Map<number, number[]>();
+  names.forEach((_, i) => { const r = find(i); groups.set(r, [...(groups.get(r) || []), i]); });
+  const out: DbName[] = [];
+  [...groups.entries()].map(([r, ix]) => ({ r, ix, value: ix.reduce((t, i) => t + names[i].value, 0) })).sort((a, b) => b.value - a.value).forEach(g => {
+    const label = [...(why.get(g.r) || [])].join(" and ");
+    g.ix.sort((a, b) => names[b].value - names[a].value).forEach(i => out.push(g.ix.length > 1 ? { ...names[i], same: g.ix.filter(k => k !== i).map(k => names[k].name), sameWhy: label } : names[i]));
+  });
   return out;
 }
 

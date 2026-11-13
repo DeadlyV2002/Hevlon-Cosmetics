@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import Modal from "./Modal";
 import LocationForm from "./LocationForm";
 import { guessDetails } from "../lib/batch";
-import { Distributor, SalesOfficer, StockLine, money, plural, errText, fmt, proper } from "../lib/supabase";
+import { supabase, Distributor, SalesOfficer, StockLine, money, plural, errText, fmt, proper, nextCode } from "../lib/supabase";
+import { buildLinkSheets, readLinkSheet, LinkPlan, SheetOut } from "../lib/linkSheet";
 import { normName } from "../lib/parse";
 import { similarity } from "../lib/fuzzy";
 import { dmy } from "../lib/dates";
-import { DbName, LinkedName, loadUnlinked, suggest, linkNames, sameState, suspectLinks, unlinkName, nameScore } from "../lib/dsrLink";
+import { DbName, LinkedName, loadUnlinked, suggest, groupAlike, linkNames, sameState, suspectLinks, unlinkName, nameScore } from "../lib/dsrLink";
 import { runTask, startTask } from "../lib/tasks";
 import { Select } from "./Select";
 
@@ -15,14 +17,21 @@ const PAGE = 40;
 export const SURE = 0.95;
 
 /** DSR "DB Name" spellings that don't match a distributor: suggests the closest one to link. */
-export default function DsrLinker({ locations, officers = [], stock = [], canManage, onLinked, onListsChanged, notify }: { locations: Distributor[]; officers?: SalesOfficer[]; stock?: StockLine[]; canManage: boolean; onLinked: () => void; onListsChanged?: () => void | Promise<void>; notify: (m: string) => void }) {
-  const [open, setOpen] = useState(""), [adding, setAdding] = useState(false);
-  useEffect(() => setAdding(false), [open]);
+export default function DsrLinker({ locations, officers = [], stock = [], canManage, onLinked, onListsChanged, notify, sheetsRef }: { locations: Distributor[]; officers?: SalesOfficer[]; stock?: StockLine[]; canManage: boolean; onLinked: () => void; onListsChanged?: () => void | Promise<void>; notify: (m: string) => void;
+  /** Lets the page's own Export To Excel include this list (the names on screen, ready to fill in). */
+  sheetsRef?: React.MutableRefObject<(() => SheetOut[]) | null> }) {
+  const [plan, setPlan] = useState<(LinkPlan & { file: string }) | null>(null), [sheetErr, setSheetErr] = useState("");
+  const [open, setOpen] = useState(""), [adding, setAdding] = useState(false), [withSame, setWithSame] = useState(true);
+  useEffect(() => { setAdding(false); setWithSame(true); }, [open]);
+  /** A name with the other spellings of the same distributor, when they are being handled together. */
+  const family = (name: string) => { const n = names?.find(x => x.name === name); return [name, ...(withSame && n?.same ? n.same.filter(x => names!.some(y => y.name === x)) : [])]; };
+  const choose = (name: string, id: string) => setPick(p => ({ ...p, ...Object.fromEntries(family(name).map(x => [x, id])) }));
   /** A new distributor made from a DSR name: saved, then the name is linked to it at once. */
   async function addedNew(name: string, d: Distributor) {
     try {
-      const r = await runTask("Linking DSR name to the new distributor", t => linkNames([{ db_name: name, distributor_id: d.id }], t), 1, r => `Linked ${plural(r.days, "SO day")}.`);
-      notify(`Added ${d.name} (${d.code}) and linked "${name}" to it (${plural(r.days, "SO day")}).`);
+      const all = family(name);
+      const r = await runTask("Linking DSR name to the new distributor", t => linkNames(all.map(db_name => ({ db_name, distributor_id: d.id })), t), all.length, r => `Linked ${plural(r.days, "SO day")}.`);
+      notify(`Added ${d.name} (${d.code}) and linked ${all.length > 1 ? `${all.length} spellings (${all.join(", ")})` : `"${name}"`} to it (${plural(r.days, "SO day")}).`);
     } catch (e) { notify(`${d.name} was added, but the DSR name wasn't linked: ${errText(e)}. Link it from the list.`); }
     setAdding(false); setOpen("");
     await onListsChanged?.(); onLinked();
@@ -32,9 +41,13 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   useEffect(() => {
     let live = true;
     const task = startTask("Matching DSR DB names to distributors", 0, true);
-    loadUnlinked().then(list => suggest(list, locations, task)).then(list => {
+    loadUnlinked().then(list => suggest(list, locations, task)).then(groupAlike).then(list => {
       if (!live) return;
-      setNames(list); setPick(Object.fromEntries(list.filter(n => n.guess && n.score >= SURE).map(n => [n.name, n.guess!.id])));
+      // Close matches are chosen already. Another spelling of the same distributor is offered the same match, for you to accept.
+      const picks = Object.fromEntries(list.filter(n => n.guess && n.score >= SURE).map(n => [n.name, n.guess!.id]));
+      const byId = new Map(locations.map(l => [l.id, l]));
+      list = list.map(n => { if (picks[n.name] || !n.same) return n; const ids = new Set(n.same.map(x => picks[x]).filter(Boolean)); const d = ids.size === 1 ? byId.get([...ids][0]) : undefined; return d ? { ...n, guess: d, score: Math.min(Math.max(n.score, 0.85), SURE - 0.01) } : n; });
+      setNames(list); setPick(picks);
       task.ok(list.length ? `${plural(list.length, "name")} to link, ${list.filter(n => n.guess).length} with a suggestion.` : "Every DB name is linked.");
     }).catch(e => { if (!live) return; task.fail(errText(e)); setNames([]); });
     return () => { live = false; task.cancel(); };
@@ -50,7 +63,8 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   }, [dists]);
 
   async function link(only?: string) {
-    const map = Object.entries(pick).filter(([name, id]) => id && (!only || name === only)).map(([db_name, distributor_id]) => ({ db_name, distributor_id }));
+    const mine = only ? family(only) : null;
+    const map = Object.entries(pick).filter(([name, id]) => id && (!mine || mine.includes(name))).map(([db_name, distributor_id]) => ({ db_name, distributor_id }));
     if (!map.length) return;
     setBusy(true);
     try {
@@ -71,7 +85,7 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
       <div className="matchhead">
         <div><b>{d.name}</b> <small className="muted">{d.code} · {d.kind === "SUPER_STOCKIST" ? "Super stockist" : "Distributor"}{d.status === "DORMANT" ? " · dormant" : ""}</small>
           <div className="whys">{why.map(w => <span key={w} className="why">{w}</span>)}</div></div>
-        {canManage && (on ? <span className="chosen">✓ Chosen</span> : <button className="secondary" onClick={() => setPick(p => ({ ...p, [n.name]: d.id }))}>Choose</button>)}
+        {canManage && (on ? <span className="chosen">✓ Chosen</span> : <button className="secondary" onClick={() => choose(n.name, d.id)}>Choose</button>)}
       </div>
       <dl>
         <dt>Town</dt><dd className={sameTown ? "good" : ""}>{[d.territory, d.region, d.state].filter(Boolean).join(", ") || "—"}{sameTown ? " ✓" : ""}</dd>
@@ -110,6 +124,11 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
         <div className="kpi"><small>Where</small><b className="kpitext">{towns[0] || n.state || "—"}</b><span>{[n.state, hqs.length ? `HQ ${hqs.join(", ")}` : "", towns.length > 1 ? plural(towns.length, "town") : ""].filter(Boolean).join(" · ")}</span></div>
         <div className={`kpi${chosenD ? "" : " bad"}`}><small>Link</small><b className="kpitext">{chosenD ? chosenD.name : "Not chosen"}</b><span>{plural(cands.length, "possible distributor")}</span></div>
       </div>
+      {n.same && n.same.length > 0 && <div className="samebox">
+        <div className="rowhead"><b>⚑ Most probably the same distributor under {plural(n.same.length, "other spelling")} ({n.sameWhy})</b>
+          <label className="inline"><input type="checkbox" checked={withSame} onChange={e => setWithSame(e.target.checked)} /> Link {n.same.length === 1 ? "it" : "them"} together with this name</label></div>
+        <ul>{n.same.map(x => { const o = names!.find(y => y.name === x); return o ? <li key={x}><b>{o.name}</b> <span className="muted">· {[...o.sos.keys()].map(id => soById.get(id)?.name).filter(Boolean).join(", ")} · {once(o.towns).slice(0, 3).join(", ") || "no town"} · {plural(o.days, "day")} · {money(o.value)}</span></li> : null; })}</ul>
+      </div>}
       <div className="reportgrid">
         <section className="contact">
           <h3>From The DSRs</h3>
@@ -141,23 +160,95 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
       </div>
     </>;
   };
+  // ---------- the list as an Excel sheet: filled in offline, uploaded back ----------
+  const shownNames = () => { const t = q.trim().toLowerCase(); return t ? (names || []).filter(n => `${n.name} ${n.state} ${[...n.towns].join(" ")}`.toLowerCase().includes(t)) : names || []; };
+  const sheets = () => buildLinkSheets(shownNames(), pick, locations, officers, SURE);
+  useEffect(() => { if (sheetsRef) sheetsRef.current = names?.length ? sheets : null; return () => { if (sheetsRef) sheetsRef.current = null; }; });
+  function exportList() {
+    const wb = XLSX.utils.book_new();
+    sheets().forEach(x => XLSX.utils.book_append_sheet(wb, x.ws, x.name));
+    XLSX.writeFile(wb, `unlinked-db-names-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+  async function readSheet(file: File) {
+    setSheetErr("");
+    try {
+      const p = readLinkSheet(XLSX.read(await file.arrayBuffer()), names || [], locations, officers);
+      if (!p.links.length && !p.news.length && !p.problems.length) throw new Error(p.gone ? "Every filled-in row is for a name that has been linked already. Export the list again for the names still unlinked." : "No row has a Link To or a New Distributor Name filled in yet.");
+      setPlan({ ...p, file: file.name });
+    } catch (e) { setSheetErr(`${file.name}: ${errText(e)}`); }
+  }
+  /** Adds the new distributors, then links every spelling in the sheet. A failure part-way keeps what was saved; uploading the sheet again finishes the rest. */
+  async function applyPlan() {
+    if (!plan || !supabase) return;
+    setBusy(true);
+    try {
+      const made = new Map<string, Distributor>();
+      if (plan.news.length) await runTask(`Adding ${plural(plan.news.length, "new distributor")}`, async t => {
+        const taken: { code: string }[] = [...locations];
+        for (let i = 0; i < plan.news.length; i += 50) {
+          const part = plan.news.slice(i, i + 50), payload = part.map(x => { const code = nextCode("DISTRIBUTOR", taken); taken.push({ code }); return { ...x.payload, code }; });
+          const { data, error } = await supabase!.from("distributors").insert(payload).select();
+          if (error) throw new Error(error.code === "42501" ? "only HO admins and state managers can add distributors" : errText(error));
+          (data as Distributor[]).forEach(d => { const src = part.find(x => x.key === normName(d.name)); if (src) made.set(src.key, d); });
+          t.step(Math.min(i + 50, plan.news.length), plan.news.length);
+        }
+      }, plan.news.length, () => `${plural(plan.news.length, "distributor")} added.`);
+      const map = [...plan.links.map(l => ({ db_name: l.db_name, distributor_id: l.d.id })),
+        ...plan.news.flatMap(x => { const d = made.get(x.key); return d ? x.spellings.map(db_name => ({ db_name, distributor_id: d.id })) : []; })];
+      const r = map.length ? await runTask("Linking DSR DB names from the sheet", t => linkNames(map, t), map.length, r => `Linked ${plural(r.names, "name")} (${plural(r.days, "SO day")}).`) : { names: 0, days: 0 };
+      notify(`From ${plan.file}: linked ${plural(r.names, "DB name")} (${plural(r.days, "SO day")})${plan.news.length ? `, added ${plural(plan.news.length, "new distributor")}` : ""}.${plan.problems.length ? ` ${plural(plan.problems.length, "row")} had a problem and ${plan.problems.length === 1 ? "was" : "were"} left unlinked.` : ""}`);
+      setPlan(null);
+      if (plan.news.length) await onListsChanged?.();
+      onLinked();
+    } catch (e) { notify(`Stopped: ${errText(e)}. What was saved before this stays saved; upload the sheet again to finish the rest.`); if (plan.news.length) await onListsChanged?.(); onLinked(); setPlan(null); }
+    finally { setBusy(false); }
+  }
   if (!names) return <section className="card"><p className="empty">Matching DSR DB names to your distributors…</p></section>;
   if (!names.length) return <p className="hint">Every DB name in the DSRs is linked to a distributor.</p>;
   const chosen = Object.values(pick).filter(Boolean).length;
   const t = q.trim().toLowerCase(), list = t ? names.filter(n => `${n.name} ${n.state} ${[...n.towns].join(" ")}`.toLowerCase().includes(t)) : names;
   return <section className="card">
     <div className="rowhead"><h2>Link DSR DB Names To Distributors</h2>
-      {canManage && <button disabled={busy || !chosen} onClick={() => link()}>{busy ? "Linking…" : `Link ${plural(chosen, "Name")}`}</button>}</div>
-    <p className="hint">{plural(names.length, "DB name")} in the SO reports {names.length === 1 ? "isn't" : "aren't"} linked to your distributor list, so {names.length === 1 ? "its" : "their"} bookings can't be checked against stock. Close matches in the same state are already chosen ({names.filter(n => n.guess && n.score >= SURE).length}); {names.filter(n => n.guess && n.score < SURE).length} weaker suggestions are offered for you to accept. Click a name to open who booked there, its towns and beats, and the distributors it could be with their SO and super stockist. Check each choice, then link.</p>
+      <div className="actions">
+        <button className="secondary" onClick={exportList} title="The unlinked names as an Excel sheet you can fill in">Export List To Excel</button>
+        {canManage && <label className="button secondary" title="Upload the exported sheet after filling in Link To or the new distributor's details">Upload Filled Sheet<input hidden type="file" accept=".xlsx,.xlsm,.xls,.ods,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) readSheet(x); e.target.value = ""; }} /></label>}
+        {canManage && <button disabled={busy || !chosen} onClick={() => link()}>{busy ? "Linking…" : `Link ${plural(chosen, "Name")}`}</button>}
+      </div></div>
+    {sheetErr && <div className="status err">{sheetErr}</div>}
+    <p className="hint">{plural(names.length, "DB name")} in the SO reports {names.length === 1 ? "isn't" : "aren't"} linked to your distributor list, so {names.length === 1 ? "its" : "their"} bookings can't be checked against stock. Close matches in the same state are already chosen ({names.filter(n => n.guess && n.score >= SURE).length}); {names.filter(n => n.guess && n.score < SURE).length} weaker suggestions are offered for you to accept. Click a name to open who booked there, its towns and beats, and the distributors it could be with their SO and super stockist. {names.some(n => n.same) ? ` ${names.filter(n => n.same).length} names are flagged ⚑ as other spellings of the same distributor (a typo, an added "s", dots in initials) because the same SO books them or they are in the same town; they sit together in the list and are linked together from the pop-up. ` : " "}Check each choice, then link. With many names it is quicker in Excel: Export List To Excel, fill in the Link To column (or a new distributor's details) there, and Upload Filled Sheet.</p>
     <input className="search" placeholder="Search a DB name, state or town…" value={q} onChange={e => { setQ(e.target.value); setShown(PAGE); }} />
     <div className="tablewrap scrolltable"><table className="nice"><thead><tr><th>Name In DSR</th><th>State</th><th>Towns</th><th>Days</th><th>Booked</th><th>Link To</th><th>Suggestion</th></tr></thead>
       <tbody>{list.slice(0, shown).map(n => <tr key={n.name} className={pick[n.name] ? "" : "muted"}>
-        <td><button className="link strong" aria-haspopup="dialog" onClick={() => setOpen(n.name)}>{n.name}</button><br /><small className="muted">{[...n.sos.keys()].map(id => soById.get(id)?.name).filter(Boolean).slice(0, 2).join(", ")}</small></td><td>{n.state}</td><td className="wrap">{[...n.towns].slice(0, 3).join(", ")}</td><td>{n.days}</td><td>{money(n.value)}</td>
+        <td><button className="link strong" aria-haspopup="dialog" onClick={() => setOpen(n.name)}>{n.name}</button><br /><small className="muted">{[...n.sos.keys()].map(id => soById.get(id)?.name).filter(Boolean).slice(0, 2).join(", ")}</small>
+          {n.same && n.same.length > 0 && <small className="sameflag" title={`${n.sameWhy}: ${n.same.join(", ")}`}>⚑ {n.sameWhy}: also written {n.same[0]}{n.same.length > 1 ? ` +${n.same.length - 1}` : ""}</small>}</td><td>{n.state}</td><td className="wrap">{[...n.towns].slice(0, 3).join(", ")}</td><td>{n.days}</td><td>{money(n.value)}</td>
         <td><Select value={pick[n.name] || ""} disabled={!canManage} onChange={e => setPick(p => ({ ...p, [n.name]: e.target.value }))}>
           <option value="">Don't link</option>{optionsFor(n.state)}
         </Select></td>
         <td>{n.guess && pick[n.name] !== n.guess.id ? <button className="link" disabled={!canManage} onClick={() => setPick(p => ({ ...p, [n.name]: n.guess!.id }))}>Use {n.guess.name}?</button> : n.guess ? <span className="muted">{n.score >= SURE ? "close match" : "your pick"}</span> : <span className="muted">none</span>}</td></tr>)}</tbody></table></div>
     {list.length > shown && <div className="actions"><span className="muted">Showing {shown} of {list.length}.</span><button className="secondary" onClick={() => setShown(s => s + PAGE)}>Show {Math.min(PAGE, list.length - shown)} More</button></div>}
+    {plan && <Modal wide onClose={() => !busy && setPlan(null)} className="report linkpop"
+      title="Check The Filled Sheet" subtitle={`${plan.file} · nothing is saved until you press Save`}
+      actions={<span className="actions"><button disabled={busy || (!plan.links.length && !plan.news.length)} onClick={applyPlan}>{busy ? "Saving…" : `Save: Link ${plural(plan.links.length + plan.news.reduce((a, x) => a + x.spellings.length, 0), "Name")}${plan.news.length ? `, Add ${plural(plan.news.length, "Distributor")}` : ""}`}</button></span>}>
+      <div className="kpis">
+        <div className="kpi"><small>Link to distributors in your list</small><b>{fmt(plan.links.length)}</b><span>DB names</span></div>
+        <div className="kpi"><small>New distributors to add</small><b>{fmt(plan.news.length)}</b><span>{plural(plan.news.reduce((a, x) => a + x.spellings.length, 0), "DB name")} linked to them</span></div>
+        <div className="kpi"><small>Bookings covered</small><b>{money(plan.value)}</b><span>{plural(plan.days, "SO day")}</span></div>
+        <div className={`kpi${plan.problems.length ? " bad" : ""}`}><small>Rows with a problem</small><b>{fmt(plan.problems.length)}</b><span>{plan.blank ? `${fmt(plan.blank)} left empty` : "none left empty"}{plan.gone ? ` · ${fmt(plan.gone)} already linked` : ""}</span></div>
+      </div>
+      <div className="reportgrid sheetcheck">
+        {plan.problems.length > 0 && <section className="contact"><h3>Not Saved: Fix These In The Sheet</h3>
+          <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Name In DSR</th><th>What's wrong</th></tr></thead>
+            <tbody>{plan.problems.map((p, i) => <tr key={i}><td><b>{p.name}</b></td><td className="wrap">{p.text}</td></tr>)}</tbody></table></div></section>}
+        {plan.news.length > 0 && <section className="contact"><h3>New Distributors</h3>
+          <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Distributor</th><th>Super Stockist</th><th>City</th><th>State</th><th>DSR Names</th><th>Still To Fill</th></tr></thead>
+            <tbody>{plan.news.map(x => <tr key={x.key}><td><b>{x.payload.name}</b></td><td>{String(x.payload.super_stockist || "")}</td><td>{String(x.payload.territory || "—")}</td><td>{String(x.payload.state || "—")}</td>
+              <td className="wrap">{x.spellings.join(", ")}</td><td className="wrap">{x.missing.length ? <span className="muted">{x.missing.join(", ")}</span> : "complete"}</td></tr>)}</tbody></table></div>
+          {plan.news.some(x => x.missing.length) && <p className="hint">Distributors with details still to fill are added anyway; complete them later on the Distributors page (tick Only Incomplete).</p>}</section>}
+        {plan.links.length > 0 && <section className="contact"><h3>Links To Your List</h3>
+          <div className="tablewrap scrolltable short"><table className="nice"><thead><tr><th>Name In DSR</th><th>Links To</th><th>Code</th><th>City</th></tr></thead>
+            <tbody>{plan.links.map(l => <tr key={l.db_name}><td>{l.db_name}</td><td><b>{l.d.name}</b></td><td>{l.d.code}</td><td>{l.d.territory || "—"}</td></tr>)}</tbody></table></div></section>}
+      </div>
+    </Modal>}
     {(() => {
       const n = open ? names.find(x => x.name === open) : undefined;
       if (!n) return null;
@@ -167,7 +258,7 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
         subtitle={`DB name in the SO reports, not yet linked to your distributor list${n.state ? ` · ${n.state}` : ""}`}
         actions={canManage && <span className="actions">
           {chosenD && <button disabled={busy} onClick={() => link(n.name)}>{busy ? "Linking…" : `Link To ${chosenD.name}`}</button>}
-          {pick[n.name] && <button className="secondary" onClick={() => setPick(p => ({ ...p, [n.name]: "" }))}>Don't Link</button>}
+          {pick[n.name] && <button className="secondary" onClick={() => choose(n.name, "")}>Don't Link</button>}
         </span>}>
         {details(n)}
       </Modal>;

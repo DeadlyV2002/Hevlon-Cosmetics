@@ -168,14 +168,31 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
     try {
       const inserts = good.filter(x => !x.row.id).map(({ row: { id: _, ...r } }) => r);
       const updates = good.filter(x => x.row.id).map(x => x.row);
-      if (inserts.length) { const { error } = await supabase.from("retailers").insert(inserts); if (error) throw error; }
-      if (updates.length) { const { error } = await supabase.from("retailers").upsert(updates, { onConflict: "id" }); if (error) throw error; }
+      // In parts, so a list of thousands of retailers goes through.
+      for (let i = 0; i < inserts.length; i += 500) { const { error } = await supabase.from("retailers").insert(inserts.slice(i, i + 500)); if (error) throw error; }
+      for (let i = 0; i < updates.length; i += 500) { const { error } = await supabase.from("retailers").upsert(updates.slice(i, i + 500), { onConflict: "id" }); if (error) throw error; }
       show("ok", `Imported ${plural(good.length, "retailer")} (${inserts.length} new, ${updates.length} updated).${importRows.length > good.length ? ` ${plural(importRows.length - good.length, "row")} skipped: see the reasons in the preview.` : ""}`);
       setPreview(null); await onChanged(); if (queue.length) nextImport();
     } catch (e: any) { show("err", `Import failed: ${e?.code === "42501" ? "only HO admins and state managers can import retailers" : errText(e)}`); }
     finally { setBusy(false); }
   }
 
+  /** A blank sheet with the headings the import reads, and the distributor list to copy codes from. */
+  function template() {
+    const wb = XLSX.utils.book_new();
+    const blank = XLSX.utils.aoa_to_sheet([["Retailer", "Distributor (code or name)", "Owner", "Phone", "Area / beat", "Code"]]);
+    blank["!cols"] = [{ wch: 32 }, { wch: 28 }, { wch: 22 }, { wch: 16 }, { wch: 22 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, blank, "Retailers");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ["How to fill this sheet"],
+      ["1. One row for each retailer. Retailer (the shop's name) and Distributor are needed; the rest can be left empty and filled in later."],
+      ["2. Distributor: type the distributor's code (D123) or its exact name, as on the Distributor list sheet. It is the distributor (or super stockist) the retailer buys from."],
+      ["3. Upload the file with Import From Excel on the Retailers page. You check a preview before anything is saved."],
+      ["4. A retailer already listed under the same distributor is updated, not added twice, so the same file can be uploaded again after corrections."],
+    ]), "How to fill");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sellers.map(d => ({ Code: d.code, Name: d.name, Kind: d.kind === "SUPER_STOCKIST" ? "Super stockist" : "Distributor", "City / Area": d.territory || "", State: d.state || "", "Super Stockist": byId.get(d.parent_id || "")?.name || "" }))), "Distributor list");
+    XLSX.writeFile(wb, "retailers-import.xlsx");
+  }
   function exportList() {
     const rows = list.map(r => {
       const d = byId.get(r.distributor_id || ""), ss = d?.kind === "SUPER_STOCKIST" ? d : byId.get(d?.parent_id || "");
@@ -196,6 +213,7 @@ export default function Retailers({ retailers, locations, stock, officers, canMa
   return <>
     {!treeOnly && canManage && <section className="card upload">
       <div className="rowhead"><h2>{editing ? `Edit ${editing.name}` : "Add retailer"}</h2>
+        <button className="secondary" onClick={template}>Download Retailer Template</button>
         <label className="button secondary">Import from Excel<input hidden type="file" multiple accept={ACCEPT} onChange={e => { const [x, ...rest] = [...(e.target.files || [])]; if (x) { readImport(x); setQueue(rest); } e.target.value = ""; }} /></label></div>
       <div className="formgrid">
         <label>Retailer name *<input {...f("name")} /></label>

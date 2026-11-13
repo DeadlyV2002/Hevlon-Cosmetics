@@ -145,9 +145,18 @@ const load = {
 // ---------- SO daily reports and collections ----------
 interface DsrRow { so_id: string; day: string; state: string | null; attendance: string | null; total_calls: number; productive_calls: number; sale_value: number; distributor_id: string | null }
 interface BillRow { party_type: string; party_id: string; billed: number; collected: number; billed_all: number; collected_all: number }
-const dsr = (days: number) => once(`dsr:${days}`, () => fetchAll<DsrRow>((a, b) => supabase!.from("dsr_days")
-  .select("so_id,day,state,attendance,total_calls,productive_calls,sale_value,distributor_id").gte("day", daysAgo(days - 1)).lte("day", today()).order("day").order("id").range(a, b)));
-const dsrProducts = (days: number) => rpc<{ product: string; category: string | null; qty: number; value: number }>("dsr_product_totals", { p_from: daysAgo(days - 1), p_to: today(), p_sos: null, p_state: null });
+/** The latest day with SO daily reports. DSRs are uploaded once a month, so "the last 30 days" of reports
+ *  ends on that day; counted back from today the window would often be empty. */
+export const dsrEnd = () => once("dsr:end", async () => {
+  const { data } = await supabase!.from("dsr_days").select("day").lte("day", today()).order("day", { ascending: false }).limit(1);
+  return String((data as { day: string }[] | null)?.[0]?.day || today()).slice(0, 10);
+});
+const backFrom = (end: string, n: number) => { const d = new Date(`${end}T00:00:00`); d.setDate(d.getDate() - n); return localDate(d); };
+/** "to 14-10-26" when the reports stop before today, so nobody reads an old window as this month's. */
+const upTo = (end: string) => (end < today() ? ` to ${shortDate(end)}` : "");
+const dsr = async (days: number) => { const end = await dsrEnd(); return once(`dsr:${days}:${end}`, () => fetchAll<DsrRow>((a, b) => supabase!.from("dsr_days")
+  .select("so_id,day,state,attendance,total_calls,productive_calls,sale_value,distributor_id").gte("day", backFrom(end, days - 1)).lte("day", end).order("day").order("id").range(a, b))); };
+const dsrProducts = async (days: number) => { const end = await dsrEnd(); return rpc<{ product: string; category: string | null; qty: number; value: number }>("dsr_product_totals", { p_from: backFrom(end, days - 1), p_to: end, p_sos: null, p_state: null }); };
 const bills = (days: number) => rpc<BillRow>("billing_summary", { p_from: daysAgo(days - 1), p_to: today() });
 const person = (ctx: Ctx, id: string) => ctx.officers.find(o => o.id === id);
 const WORKDAY = new Set(["Present", "Half Day", "Meeting"]);
@@ -495,12 +504,12 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
   dsr_trend: {
     name: "Secondary sales day by day", blurb: "What the sales team booked each day from their daily reports, by zone.",
     title: "Secondary sales day by day",
-    subtitle: c => `Secondary sales from SO daily reports over the last ${c.days ?? 30} days${c.split === "zone" ? ", top zones" : ""}.`,
+    subtitle: c => `Secondary sales from SO daily reports over the ${c.days ?? 30} days up to the latest report${c.split === "zone" ? ", top zones" : ""}.`,
     defaults: { days: 30, split: "zone", labels: false },
     options: [{ key: "days", label: "Look back", min: 7, max: 365, suffix: "days" }, { key: "split", label: "Lines", choices: [{ id: "zone", label: "Top 3 zones and the rest" }, { id: "none", label: "One line for everyone" }] }, { key: "labels" }],
     empty: "No SO daily reports in this period. Upload DSRs on the SO Reports page.",
     async load(c, ctx) {
-      const rows = await dsr(c.days ?? 30), days = [...Array(c.days ?? 30)].map((_, i) => daysAgo((c.days ?? 30) - 1 - i));
+      const end = await dsrEnd(), rows = await dsr(c.days ?? 30), days = [...Array(c.days ?? 30)].map((_, i) => backFrom(end, (c.days ?? 30) - 1 - i));
       const zoneOf = (r: DsrRow) => person(ctx, r.so_id)?.zone || r.state || "Other";
       const tot = new Map<string, number>(); rows.forEach(r => tot.set(zoneOf(r), (tot.get(zoneOf(r)) || 0) + Number(r.sale_value)));
       const top = c.split === "none" ? [] : [...tot].sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
@@ -508,20 +517,20 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
       const values = keys.map(k => days.map(d => rows.filter(r => r.day === d && (k === "All" || (k === "Other zones" ? !top.includes(zoneOf(r)) : zoneOf(r) === k))).reduce((a, r) => a + Number(r.sale_value), 0)));
       const total = rows.reduce((a, r) => a + Number(r.sale_value), 0);
       return { type: "lines", unit: "money", series: keys.map((k, i) => ({ key: k, name: k, slot: (Math.min(i, 2) + 1) as 1 | 2 | 3 })), x: days.map(shortDate), values, xTitle: "Day",
-        summary: total ? `${money(total)} booked by the sales team in ${c.days ?? 30} days.` : "" };
+        summary: total ? `${money(total)} booked by the sales team in the ${c.days ?? 30} days${upTo(end)}.` : "" };
     },
   },
   dsr_people: {
     name: "Best and weakest sales staff", blurb: "Secondary sales by person, zone or senior, from the daily reports.",
     title: "Secondary sales by person",
-    subtitle: c => `Secondary sales in the last ${c.days ?? 30} days, by ${c.groupBy === "zone" ? "zone" : c.groupBy === "boss" ? "senior (ASM or ASE) and their team" : "person"}${c.split === "asc" ? ", lowest first" : ""}.`,
+    subtitle: c => `Secondary sales in the ${c.days ?? 30} days up to the latest report, by ${c.groupBy === "zone" ? "zone" : c.groupBy === "boss" ? "senior (ASM or ASE) and their team" : "person"}${c.split === "asc" ? ", lowest first" : ""}.`,
     defaults: { days: 30, groupBy: "so", split: "desc", top: 10, labels: true },
     options: [{ key: "days", label: "Look back", min: 1, max: 365, suffix: "days" },
       { key: "groupBy", label: "One bar for", choices: [{ id: "so", label: "Each person" }, { id: "zone", label: "Each zone" }, { id: "boss", label: "Each senior and team" }] },
       { key: "split", label: "Order", choices: [{ id: "desc", label: "Highest first" }, { id: "asc", label: "Lowest first" }] }, { key: "top" }, { key: "labels" }],
     empty: "No SO daily reports in this period.",
     async load(c, ctx) {
-      const rows = await dsr(c.days ?? 30);
+      const end = await dsrEnd(), rows = await dsr(c.days ?? 30);
       const items = rows.map(r => {
         const p = person(ctx, r.so_id), boss = p?.manager_id ? person(ctx, p.manager_id) : undefined;
         const g = c.groupBy === "zone" ? { key: p?.zone || r.state || "Other", label: p?.zone || r.state || "Other" }
@@ -531,13 +540,13 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
       });
       const r = rank(items, c.top ?? 10, c.split === "asc" ? "asc" : "desc");
       const total = items.reduce((a, it) => a + it.values[0], 0);
-      return { type: "bars", unit: "money", series: [{ key: "sec", name: "Secondary", slot: 1 }], ...r, summary: total ? `${money(total)} in ${c.days ?? 30} days.` : "" };
+      return { type: "bars", unit: "money", series: [{ key: "sec", name: "Secondary", slot: 1 }], ...r, summary: total ? `${money(total)} in the ${c.days ?? 30} days${upTo(end)}.` : "" };
     },
   },
   dsr_products: {
     name: "What the sales team is selling", blurb: "Products or categories in the daily reports, by value or dozens.",
     title: "What the sales team is selling",
-    subtitle: c => `Products in SO daily reports over the last ${c.days ?? 30} days, by ${c.groupBy === "category" ? "category" : "product"}.`,
+    subtitle: c => `Products in SO daily reports over the ${c.days ?? 30} days up to the latest report, by ${c.groupBy === "category" ? "category" : "product"}.`,
     defaults: { days: 30, groupBy: "product", top: 10, labels: true },
     options: [{ key: "days", label: "Look back", min: 1, max: 365, suffix: "days" }, { key: "groupBy", label: "One bar for", choices: [{ id: "product", label: "Each product" }, { id: "category", label: "Each category" }] }, { key: "top" }, { key: "labels" }],
     empty: "No product lines in the daily reports for this period.",
@@ -551,7 +560,7 @@ export const KIND_SPECS: Record<ChartKind, KindSpec> = {
   dsr_attendance: {
     name: "Days worked by the sales team", blurb: "Working days per person from the daily reports; the fewest first.",
     title: "Days worked",
-    subtitle: c => `Days each person worked (present, half day or meeting) in the last ${c.days ?? 30} days, fewest first.`,
+    subtitle: c => `Days each person worked (present, half day or meeting) in the ${c.days ?? 30} days up to the latest report, fewest first.`,
     defaults: { days: 30, top: 10, labels: true },
     options: [{ key: "days", label: "Look back", min: 7, max: 180, suffix: "days" }, { key: "top" }, { key: "labels" }],
     empty: "No SO daily reports in this period.",

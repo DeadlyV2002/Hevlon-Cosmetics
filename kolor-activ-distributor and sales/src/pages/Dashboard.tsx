@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/ask";
 import { supabase, errText, fetchAll, money, fmt, plural } from "../lib/supabase";
 import { localDate } from "../lib/parse";
-import { ChartConfig, ChartData, ChartKind, Ctx, KIND_SPECS, chartTitle, cleanCharts, defaultCharts, newChart } from "../lib/insights";
+import { ChartConfig, ChartData, ChartKind, Ctx, KIND_SPECS, chartTitle, cleanCharts, defaultCharts, newChart, dsrEnd } from "../lib/insights";
 import { ChartView, ChartSize } from "../components/Charts";
 import ChartEditor from "../components/ChartEditor";
 import { dmy } from "../lib/dates";
@@ -157,29 +157,34 @@ export default function Dashboard({ ctx, userId, version, openKind, onOpened }: 
 const ROTATE = 4;
 
 // ---------- running totals ----------
-interface Totals { dsrMonth: number; dsrDay: number; lastDay: string; working: number; reported: number; collected: number; billed: number; owed: number }
+interface Totals { dsrMonth: number; dsrDay: number; lastDay: string; monthOf: string; working: number; reported: number; collected: number; billed: number; owed: number }
 function Kpis({ ctx, version }: { ctx: Ctx; version: number }) {
   const [t, setT] = useState<Totals | null>(null);
   useEffect(() => {
     if (!supabase) return;
-    const now = new Date(), month = localDate(new Date(now.getFullYear(), now.getMonth(), 1)), fy = localDate(new Date(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1, 3, 1)), today = localDate(now);
+    const now = new Date(), fy = localDate(new Date(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1, 3, 1)), today = localDate(now);
+    // DSRs come in once a month: the figures are for the latest month that has reports, which may not be this one.
+    let monthOf = today.slice(0, 7);
     Promise.all([
-      fetchAll<{ day: string; sale_value: number; attendance: string | null }>((a, b) => supabase!.from("dsr_days").select("day,sale_value,attendance").gte("day", month).lte("day", today).order("day").range(a, b)).catch(() => []),
+      dsrEnd().catch(() => today).then(end => { monthOf = end.slice(0, 7); const [y, m] = monthOf.split("-").map(Number);
+        return fetchAll<{ day: string; sale_value: number; attendance: string | null }>((a, b) => supabase!.from("dsr_days").select("day,sale_value,attendance").gte("day", `${monthOf}-01`).lte("day", localDate(new Date(y, m, 0))).order("day").range(a, b)); }).catch(() => []),
       supabase.rpc("billing_summary", { p_from: fy, p_to: today }),
     ]).then(([d, b]) => {
       const lastDay = d.map(x => x.day).sort().pop() || "", onDay = d.filter(x => x.day === lastDay);
       const rows = ((b.data || []) as { party_type: string; billed: number; collected: number; billed_all: number; collected_all: number }[]).filter(r => r.party_type === "LOCATION");
-      setT({ dsrMonth: d.reduce((a, x) => a + Number(x.sale_value), 0), dsrDay: onDay.reduce((a, x) => a + Number(x.sale_value), 0), lastDay,
+      setT({ dsrMonth: d.reduce((a, x) => a + Number(x.sale_value), 0), dsrDay: onDay.reduce((a, x) => a + Number(x.sale_value), 0), lastDay, monthOf,
         working: onDay.filter(x => ["Present", "Half Day", "Meeting"].includes(x.attendance || "")).length, reported: onDay.length,
         collected: rows.reduce((a, r) => a + Number(r.collected), 0), billed: rows.reduce((a, r) => a + Number(r.billed), 0), owed: rows.reduce((a, r) => a + Number(r.billed_all) - Number(r.collected_all), 0) });
     }).catch(() => setT(null));
   }, [version]);
   const stockValue = ctx.stock.reduce((a, s) => a + Number(s.stock_value || 0), 0);
   const day = t?.lastDay ? dmy(t.lastDay) : "";
+  const thisMonth = localDate(new Date()).slice(0, 7), older = !!t?.lastDay && t.monthOf < thisMonth;
+  const monthName = t ? new Date(`${t.monthOf}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }) : "";
   return <div className="kpis dashkpis">
     <div className="kpi"><small>Stock held (at SS rate)</small><b>{money(stockValue)}</b><span>{plural(new Set(ctx.stock.filter(s => Number(s.current_stock)).map(s => s.distributor_id)).size, "location")}</span></div>
-    <div className="kpi"><small>Secondary this month</small><b>{money(t?.dsrMonth)}</b><span>from SO daily reports</span></div>
-    <div className="kpi"><small>Latest day{day ? `, ${day}` : ""}</small><b>{money(t?.dsrDay)}</b><span>{t?.reported ? `${t.working} of ${plural(t.reported, "person", "people")} working` : "no reports yet"}</span></div>
+    <div className="kpi"><small>{older ? `Secondary, ${monthName}` : "Secondary this month"}</small><b>{money(t?.dsrMonth)}</b><span>{older ? `latest month uploaded; reports run to ${day}` : "from SO daily reports"}</span></div>
+    <div className="kpi"><small>Latest report day{day ? `, ${day}` : ""}</small><b>{money(t?.dsrDay)}</b><span>{t?.reported ? `${t.working} of ${plural(t.reported, "person", "people")} working` : "no reports yet"}</span></div>
     <div className="kpi"><small>Collected this year</small><b>{money(t?.collected)}</b><span>{t?.billed ? `${fmt((t.collected / t.billed) * 100)}% of ${money(t.billed)} billed` : "no bills yet"}</span></div>
     <div className={`kpi${t && t.owed > 0 && t.billed && t.collected / t.billed < 0.6 ? " bad" : ""}`}><small>Outstanding</small><b>{money(t?.owed)}</b><span>owed by super stockists and distributors</span></div>
   </div>;

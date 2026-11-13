@@ -97,6 +97,11 @@ export default function SOReports({ officers, locations, stock, products, canMan
   const [report, setReport] = useState<Distributor | null>(null);
   const [person, setPerson] = useState<SalesOfficer | null>(null);
   const charts = useRef<HTMLDivElement>(null);
+  /** The workbooks of the upload being checked, kept so an answer about a shared name re-reads them without choosing the files again. */
+  const rawBooks = useRef<{ books: DsrBook[]; files: string }>({ books: [], files: "" });
+  const [twoPeople, setTwoPeople] = useState<Set<string>>(new Set());
+  /** Names confirmed to be one person in two sheets (a transfer): not asked about again on this computer. */
+  const [onePerson, setOnePerson] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem("ka-dsr-one-person") || "[]"); } catch { return []; } });
   /** The unlinked DB names list, as the Stock Checks tab shows it, for Export To Excel. */
   const linkSheets = useRef<(() => SheetOut[]) | null>(null);
   const byId = useMemo(() => new Map(officers.map(o => [o.id, o])), [officers]);
@@ -156,7 +161,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
 
   // ---------- upload: several workbooks, every sheet accounted for, nobody logged twice ----------
   async function read(files: File[]) {
-    setMsg(null); setCheck(null); setReplaceChanged(true); setBusy("read"); setLinked([]);
+    setMsg(null); setCheck(null); setReplaceChanged(true); setBusy("read"); setLinked([]); setTwoPeople(new Set());
     const task = startTask(`Reading ${plural(files.length, "DSR workbook")}`, files.length);
     const bad: Problem[] = [];
     try {
@@ -173,21 +178,35 @@ export default function SOReports({ officers, locations, stock, products, canMan
       }
       setProg({ label: "Reading workbooks", done: files.length, total: files.length, note: "Comparing with the days already saved…" });
       setProblems(bad);
-      const book = mergeBooks(books);
-      if (!book.days.length && !book.stateDays.length) throw new Error("No daily rows found in any of the files. SO sheets need headings such as Name SO, Month/Date and Total Call.");
-      const ds = book.days.map(d => d.day).sort();
-      const existing = ds.length ? await fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", ds[0]).lte("day", ds[ds.length - 1]).order("id").range(a, b)) : [];
-      const have = new Map(existing.map(e => [`${e.so_id}|${e.day}`, e]));
-      const fresh: DsrDay[] = [], changed: Checked["changed"] = []; let sameN = 0;
-      book.days.forEach(d => {
-        const o = matchSO(d.so, officers), old = o ? have.get(`${o.id}|${d.day}`) : undefined;
-        if (!old) fresh.push(d); else if (same(d, old)) sameN++; else changed.push({ d, old });
-      });
-      setCheck({ book, files: files.map(f => f.name).join(", "), fresh, same: sameN, changed });
-      task.ok(`${plural(fresh.length, "new day")} to add. Press Add on the Upload DSR tab to save them.`);
+      rawBooks.current = { books, files: files.map(f => f.name).join(", ") };
+      const n = await compare(books, rawBooks.current.files, new Set());
+      task.ok(`${plural(n, "new day")} to add. Press Add on the Upload DSR tab to save them.`);
     } catch (e) { task.fail(errText(e)); setMsg({ kind: "err", text: `Couldn't read the files: ${errText(e)}` }); }
     finally { setBusy(""); setProg(null); }
   }
+  /** Puts the workbooks together and compares them with what is saved. apart: names confirmed to be two different people. */
+  async function compare(books: DsrBook[], fileNames: string, apart: Set<string>) {
+    const book = mergeBooks(books, { apart, people: officers });
+    if (!book.days.length && !book.stateDays.length) throw new Error("No daily rows found in any of the files. SO sheets need headings such as Name SO, Month/Date and Total Call.");
+    const ds = book.days.map(d => d.day).sort();
+    const existing = ds.length ? await fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", ds[0]).lte("day", ds[ds.length - 1]).order("id").range(a, b)) : [];
+    const have = new Map(existing.map(e => [`${e.so_id}|${e.day}`, e]));
+    const fresh: DsrDay[] = [], changed: Checked["changed"] = []; let sameN = 0;
+    book.days.forEach(d => {
+      const o = matchSO(d.so, officers), old = o ? have.get(`${o.id}|${d.day}`) : undefined;
+      if (!old) fresh.push(d); else if (same(d, old)) sameN++; else changed.push({ d, old });
+    });
+    setCheck({ book, files: fileNames, fresh, same: sameN, changed });
+    return fresh.length;
+  }
+  /** "Two different people": the same workbooks are put together again with that name kept apart. */
+  async function splitName(key: string) {
+    const next = new Set(twoPeople).add(key); setTwoPeople(next); setBusy("read");
+    try { await compare(rawBooks.current.books, rawBooks.current.files, next); }
+    catch (e) { setMsg({ kind: "err", text: errText(e) }); }
+    finally { setBusy(""); }
+  }
+  function sameName(key: string) { const next = [...new Set([...onePerson, key])]; setOnePerson(next); try { localStorage.setItem("ka-dsr-one-person", JSON.stringify(next)); } catch { /* private window */ } }
   async function post() {
     if (!supabase || !check) return;
     setBusy("post");
@@ -248,7 +267,8 @@ export default function SOReports({ officers, locations, stock, products, canMan
       if (e) { e.days++; if (d.file && !e.files.includes(d.file)) e.files += `, ${d.file}`; continue; }
       m.set(k, { name: d.so, state: d.state, days: 1, files: d.file, like: null });
     }
-    return [...m.values()].filter(n => !linked.includes(normName(n.name))).map(n => ({ ...n, like: closestPerson(n.name, n.state, officers) }));
+    const split = new Set((check.book.apart || []).map(normName));
+    return [...m.values()].filter(n => !linked.includes(normName(n.name))).map(n => ({ ...n, like: split.has(normName(n.name)) ? null : closestPerson(n.name, n.state, officers) }));
   }, [check, officers, linked]);
   /** "Same person": the workbook's spelling is saved as one of their other names, so their days go to them. */
   async function linkName(n: NewName, o: SalesOfficer) {
@@ -643,6 +663,13 @@ export default function SOReports({ officers, locations, stock, products, canMan
           const files = [...new Set(check.book.sheets.map(s => s.file))].filter(f => !check.book.sheets.some(s => s.file === f && s.kind === "SO daily" && s.rows > 0) && check.book.sheets.some(s => s.file === f && s.kind === "State total"));
           return files.length > 0 && <div className="status err">No SO daily rows were found in {files.join(", ")}: only the state total was read, so nobody's days from {files.length === 1 ? "it" : "them"} will be saved. Check that each SO sheet has the person's name in a column headed like "Name SO" (or Name ASE / Name SR) and dates under "Month/Date", then choose the file again. If it still happens, send the workbook to your admin.</div>;
         })()}
+        {(check.book.clashes || []).filter(c => !onePerson.includes(c.key)).map(c => <div key={c.key} className="status err">
+          <b>{c.name} worked in {c.places.length} states on the same {plural(c.overlap, "day")}.</b> {c.places.map(p => `${p.state}${p.hq ? `, HQ ${p.hq}` : ""} (${plural(p.days, "day")}; ${p.file} › ${p.sheet})`).join(" and ")}.
+          If these are two people with the same name, one is overwriting the other's days: only the first sheet's entry for each day is kept.
+          {canManage && <div className="actions"><button disabled={busy === "read"} onClick={() => splitName(c.key)}>Two Different People: Save Them Separately</button>
+            <button className="secondary" onClick={() => sameName(c.key)}>Same Person (Moved States)</button></div>}</div>)}
+        {(check.book.apart || []).length > 0 && <div className="status info">Two people share a name, so the one outside the name's home state is saved separately as: {check.book.apart!.map(x => `"${x}"`).join(", ")}. Their HQ and post can be set on the Sales Team tab.</div>}
+        {(check.book.misfit || []).length > 0 && <div className="warn">On {plural(check.book.misfit!.length, "day")} the product quantities come to far more than the day's own sale value, usually a quantity typed in the wrong cell. They are saved as typed; correct the workbook and upload it again: {check.book.misfit!.slice(0, 6).join("; ")}{check.book.misfit!.length > 6 ? "…" : ""}.</div>}
         {newNames.length > 0 && <div className="warn"><b>{plural(newNames.length, "name")} in the workbooks {newNames.length === 1 ? "matches" : "match"} no one on the team.</b> {newNames.length === 1 ? "It" : "Each"} will be added as a new person unless you say it's someone already listed under another spelling:
           <ul className="newnames">{newNames.map(n => <li key={n.name}><b>{n.name}</b> <small>({plural(n.days, "day")}{n.state ? `, ${n.state}` : ""}{n.files ? `, ${n.files}` : ""})</small>
             {n.like ? <>: maybe <b>{n.like.name}</b>{n.like.designation ? ` (${n.like.designation}${n.like.state ? `, ${n.like.state}` : ""}${n.like.active ? "" : ", inactive"})` : ""}? {canManage && <><button className="link" onClick={() => linkName(n, n.like!)}>Same Person</button> · <button className="link" onClick={() => setLinked(l => [...l, normName(n.name)])}>Different, Add as New</button></>}</> : <span className="muted"> no similar name on the team: added as a new person.</span>}</li>)}</ul></div>}

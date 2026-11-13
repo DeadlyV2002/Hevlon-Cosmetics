@@ -16,7 +16,20 @@ export interface DsrProduct { name: string; category: string; rate: number | nul
 /** team: the SOs in the same workbook (names, sorted), so a state total is checked against its own SOs. */
 export interface DsrStateDay { state: string; day: string; total_calls: number; productive_calls: number; sale_value: number; team: string }
 export interface SheetInfo { file: string; name: string; kind: "SO daily" | "State total" | "Summary" | "Empty"; rows: number; note: string }
+/** One name working in two states on the same days: either one person in two sheets, or two people with the same name. */
+export interface Clash { key: string; name: string; overlap: number; places: { state: string; hq: string; file: string; sheet: string; days: number }[] }
+export interface MergeOptions {
+  /** Names (normalised) confirmed to be two different people: the one outside the name's home state is saved as "Name (State)". */
+  apart?: Set<string>;
+  /** The sales team, to know each name's home state and to find a "Name (State)" person made earlier. */
+  people?: { name: string; state?: string | null }[];
+}
 export interface DsrBook { days: DsrDay[]; stateDays: DsrStateDay[]; products: DsrProduct[]; sheets: SheetInfo[]; dupes: string[];
+  clashes?: Clash[];
+  /** Names saved separately because two people share them, e.g. "Santosh Kumar (West Bengal)". */
+  apart?: string[];
+  /** Days whose product quantities come to far more than the day's own sale value: usually a quantity typed in the wrong cell. */
+  misfit?: string[];
   /** Figures too large to be real (a phone number typed in Total Calls, say); saved as blank and listed for checking. */
   odd?: string[] }
 
@@ -108,7 +121,35 @@ export function readDsr(wb: XLSX.WorkBook, file = ""): DsrBook {
 }
 
 /** Several workbooks as one upload. The same person on the same day twice is kept once and reported. */
-export function mergeBooks(books: DsrBook[]): DsrBook {
+const WORKED = new Set(["Present", "Half Day", "Meeting"]);
+export function mergeBooks(input: DsrBook[], opts: MergeOptions = {}): DsrBook {
+  const known = new Map((opts.people || []).map(p => [normName(p.name), p]));
+  const sk = (x: string) => normName(x || "");
+  // A "Name (State)" person made on an earlier upload takes that state's days of the name, whichever files are uploaded.
+  let books = input.map(b => ({ ...b, days: b.days.map(d => (d.state && known.has(normName(`${d.so} (${d.state})`)) ? { ...d, so: `${d.so} (${d.state})` } : d)) }));
+  // Where does each name report from, and on which days did it actually work there?
+  const where = new Map<string, Map<string, { state: string; hq: string; file: string; sheet: string; days: number; worked: Set<string> }>>();
+  for (const b of books) for (const d of b.days) {
+    if (!d.state) continue;
+    const k = normName(d.so), m = where.get(k) || new Map(), e = m.get(sk(d.state)) || { state: d.state, hq: d.hq, file: d.file, sheet: d.sheet, days: 0, worked: new Set<string>() };
+    e.days++; if (WORKED.has(d.attendance) && (d.total_calls || d.sale_value)) e.worked.add(d.day);
+    m.set(sk(d.state), e); where.set(k, m);
+  }
+  const clashes: Clash[] = [], apart: string[] = [], away = new Map<string, Set<string>>();
+  for (const [k, m] of where) {
+    if (m.size < 2) continue;
+    const list = [...m.values()];
+    let overlap = 0;
+    list.forEach((a, i) => list.slice(i + 1).forEach(b => a.worked.forEach(x => { if (b.worked.has(x)) overlap++; })));
+    // Sundays and holidays in both sheets prove nothing; working the same day in two states does.
+    if (!overlap) continue;
+    const name = books.flatMap(b => b.days).find(d => normName(d.so) === k)!.so;
+    if (!opts.apart?.has(k)) { clashes.push({ key: k, name, overlap, places: list.map(({ worked: _w, ...p }) => p) }); continue; }
+    const home = sk(known.get(k)?.state || "") || sk([...list].sort((a, b) => b.days - a.days)[0].state);
+    away.set(k, new Set(list.filter(p => sk(p.state) !== home).map(p => sk(p.state))));
+    list.filter(p => sk(p.state) !== home).forEach(p => apart.push(`${name} (${p.state})`));
+  }
+  if (away.size) books = books.map(b => ({ ...b, days: b.days.map(d => (away.get(normName(d.so))?.has(sk(d.state)) ? { ...d, so: `${d.so} (${d.state})` } : d)) }));
   const seen = new Map<string, DsrDay>(), days: DsrDay[] = [], dupes: string[] = [], products = new Map<string, DsrProduct>(), states = new Map<string, DsrStateDay>();
   for (const b of books) {
     for (const d of b.days) {
@@ -129,7 +170,13 @@ export function mergeBooks(books: DsrBook[]): DsrBook {
   days.forEach(d => fix(d.so, d.day, d, 2000));
   const stateDays = [...states.values()];
   stateDays.forEach(d => fix(`${d.state} state total`, d.day, d, 1000000));
-  return { days, stateDays, products: [...products.values()], sheets: books.flatMap(b => b.sheets), dupes, odd };
+  // Product quantities that come to several times the day's sale: saved as typed, and listed so the workbook can be corrected.
+  const misfit: string[] = [];
+  days.forEach(d => {
+    const sum = d.lines.reduce((a, l) => a + l.qty * (l.rate || 0), 0), big = [...d.lines].sort((a, b) => b.qty * (b.rate || 0) - a.qty * (a.rate || 0))[0];
+    if (d.sale_value > 0 && sum > d.sale_value * 3 && sum - d.sale_value > 20000 && big) misfit.push(`${d.so} on ${dmy(d.day)}: day's sale ₹${Math.round(d.sale_value)}, but the products add up to ₹${Math.round(sum)} (${big.product}: ${big.qty} dozen)`);
+  });
+  return { days, stateDays, products: [...products.values()], sheets: books.flatMap(b => b.sheets), dupes, odd, clashes, apart, misfit };
 }
 
 /** The SO figures behind a state total: that workbook's SOs on that day. */

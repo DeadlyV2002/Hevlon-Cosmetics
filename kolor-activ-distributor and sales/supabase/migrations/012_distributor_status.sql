@@ -842,3 +842,34 @@ begin
 end $$;
 revoke all on function public.post_stock_count(text,jsonb,date,text,text,boolean,boolean) from public, anon;
 grant execute on function public.post_stock_count(text,jsonb,date,text,text,boolean,boolean) to authenticated;
+
+-- ---------- Workbook corrections: DSR days whose own figures don't agree ----------
+-- Saved exactly as typed; this lists them so the workbook can be corrected and uploaded again.
+--  * product quantities x rate don't add up to the day's Secondary Sale Value
+--  * more productive calls than total calls
+--  * a sale with no calls
+create or replace function public.dsr_day_checks(p_from date, p_to date)
+returns table(problem text, so text, post text, day date, state text, hq text, db_name text, total_calls int, productive_calls int,
+  sale_value numeric, products_value numeric, gap numeric, biggest_line text, source_file text)
+language sql stable set search_path=public as $$
+  with l as (
+    select day_id, sum(value) v,
+      (array_agg(product || ': ' || trim(to_char(qty, 'FM999999990.##')) || ' doz x ' || trim(to_char(rate, 'FM999999990.##')) order by value desc))[1] top
+    from dsr_lines group by day_id),
+  d as (
+    select d.*, s.name so_name, s.designation, coalesce(l.v, 0) lv, l.top
+    from dsr_days d join sales_officers s on s.id = d.so_id left join l on l.day_id = d.id
+    where d.day between p_from and p_to)
+  select x.problem, d.so_name, d.designation, d.day, d.state, d.hq, d.db_name, d.total_calls, d.productive_calls,
+    d.sale_value, round(d.lv, 2), round(d.lv - d.sale_value, 2), d.top, d.source_file
+  from d cross join lateral (values
+    (case when d.top is not null and abs(d.lv - d.sale_value) > greatest(5, d.sale_value * 0.01) then
+       case when d.lv > d.sale_value then 'Products add up to more than the day''s sale value' else 'Products add up to less than the day''s sale value' end end),
+    (case when coalesce(d.productive_calls, 0) > coalesce(d.total_calls, 0) then 'More productive calls than total calls' end),
+    (case when coalesce(d.sale_value, 0) > 0 and coalesce(d.total_calls, 0) = 0 then 'A sale with no calls' end)
+  ) x(problem)
+  where x.problem is not null
+  order by abs(d.lv - d.sale_value) desc, d.day
+$$;
+revoke all on function public.dsr_day_checks(date, date) from public, anon;
+grant execute on function public.dsr_day_checks(date, date) to authenticated;

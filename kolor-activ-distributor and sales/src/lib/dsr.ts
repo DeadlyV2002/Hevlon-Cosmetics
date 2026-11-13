@@ -4,6 +4,7 @@
 import * as XLSX from "xlsx";
 import { cellText, normName, parseNum, toISODate, today, sheetRows } from "./parse";
 import { labelOf } from "./sheet";
+import { normalizeState } from "./india";
 import { plural } from "./supabase";
 import { dmy } from "./dates";
 
@@ -19,14 +20,14 @@ export interface SheetInfo { file: string; name: string; kind: "SO daily" | "Sta
 /** One name working in two states on the same days: either one person in two sheets, or two people with the same name. */
 export interface Clash { key: string; name: string; overlap: number; places: { state: string; hq: string; file: string; sheet: string; days: number }[] }
 export interface MergeOptions {
-  /** Names (normalised) confirmed to be two different people: the one outside the name's home state is saved as "Name (State)". */
+  /** Names (normalised) confirmed to be two different people: each is saved with its state, "Name (Bihar)" and "Name (West Bengal)". */
   apart?: Set<string>;
   /** The sales team, to know each name's home state and to find a "Name (State)" person made earlier. */
   people?: { name: string; state?: string | null }[];
 }
 export interface DsrBook { days: DsrDay[]; stateDays: DsrStateDay[]; products: DsrProduct[]; sheets: SheetInfo[]; dupes: string[];
   clashes?: Clash[];
-  /** Names saved separately because two people share them, e.g. "Santosh Kumar (West Bengal)". */
+  /** People saved with their state because two share a name, e.g. "Santosh Kumar (Bihar)", "Santosh Kumar (West Bengal)". */
   apart?: string[];
   /** Days whose product quantities come to far more than the day's own sale value: usually a quantity typed in the wrong cell. */
   misfit?: string[];
@@ -123,11 +124,19 @@ export function readDsr(wb: XLSX.WorkBook, file = ""): DsrBook {
 /** Several workbooks as one upload. The same person on the same day twice is kept once and reported. */
 const WORKED = new Set(["Present", "Half Day", "Meeting"]);
 export function mergeBooks(input: DsrBook[], opts: MergeOptions = {}): DsrBook {
-  const known = new Map((opts.people || []).map(p => [normName(p.name), p]));
   const sk = (x: string) => normName(x || "");
-  // A "Name (State)" person made on an earlier upload takes that state's days of the name, whichever files are uploaded.
-  let books = input.map(b => ({ ...b, days: b.days.map(d => (d.state && known.has(normName(`${d.so} (${d.state})`)) ? { ...d, so: `${d.so} (${d.state})` } : d)) }));
-  // Where does each name report from, and on which days did it actually work there?
+  // Names two people share. Once one of them is in the team as "Name (State)", every day under that name is saved
+  // with its own state after it, so the two can never overwrite each other, whichever workbooks are uploaded.
+  const shared = new Set<string>(opts.apart || []);
+  (opts.people || []).forEach(p => { const m = p.name.match(/^(.+?)\s*\(([^)]+)\)\s*$/); if (m && normalizeState(m[2])) shared.add(normName(m[1])); });
+  const apartNames = new Set<string>();
+  const books = input.map(b => ({ ...b, days: b.days.map(d => {
+    if (!d.state || !shared.has(normName(d.so))) return d;
+    const so = `${d.so} (${normalizeState(d.state) || d.state})`; apartNames.add(so); return { ...d, so };
+  }) }));
+  const apart = [...apartNames];
+  // For every other name: does it work in two states on the same days? Sundays and holidays in both sheets prove
+  // nothing (a person who moved leaves them behind in the old sheet); working the same day in two states does.
   const where = new Map<string, Map<string, { state: string; hq: string; file: string; sheet: string; days: number; worked: Set<string> }>>();
   for (const b of books) for (const d of b.days) {
     if (!d.state) continue;
@@ -135,21 +144,14 @@ export function mergeBooks(input: DsrBook[], opts: MergeOptions = {}): DsrBook {
     e.days++; if (WORKED.has(d.attendance) && (d.total_calls || d.sale_value)) e.worked.add(d.day);
     m.set(sk(d.state), e); where.set(k, m);
   }
-  const clashes: Clash[] = [], apart: string[] = [], away = new Map<string, Set<string>>();
+  const clashes: Clash[] = [];
   for (const [k, m] of where) {
     if (m.size < 2) continue;
     const list = [...m.values()];
     let overlap = 0;
     list.forEach((a, i) => list.slice(i + 1).forEach(b => a.worked.forEach(x => { if (b.worked.has(x)) overlap++; })));
-    // Sundays and holidays in both sheets prove nothing; working the same day in two states does.
-    if (!overlap) continue;
-    const name = books.flatMap(b => b.days).find(d => normName(d.so) === k)!.so;
-    if (!opts.apart?.has(k)) { clashes.push({ key: k, name, overlap, places: list.map(({ worked: _w, ...p }) => p) }); continue; }
-    const home = sk(known.get(k)?.state || "") || sk([...list].sort((a, b) => b.days - a.days)[0].state);
-    away.set(k, new Set(list.filter(p => sk(p.state) !== home).map(p => sk(p.state))));
-    list.filter(p => sk(p.state) !== home).forEach(p => apart.push(`${name} (${p.state})`));
+    if (overlap) clashes.push({ key: k, name: books.flatMap(b => b.days).find(d => normName(d.so) === k)!.so, overlap, places: list.map(({ worked: _w, ...p }) => p) });
   }
-  if (away.size) books = books.map(b => ({ ...b, days: b.days.map(d => (away.get(normName(d.so))?.has(sk(d.state)) ? { ...d, so: `${d.so} (${d.state})` } : d)) }));
   const seen = new Map<string, DsrDay>(), days: DsrDay[] = [], dupes: string[] = [], products = new Map<string, DsrProduct>(), states = new Map<string, DsrStateDay>();
   for (const b of books) {
     for (const d of b.days) {

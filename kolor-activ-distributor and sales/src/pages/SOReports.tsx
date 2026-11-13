@@ -185,25 +185,66 @@ export default function SOReports({ officers, locations, stock, products, canMan
     finally { setBusy(""); setProg(null); }
   }
   /** Puts the workbooks together and compares them with what is saved. apart: names confirmed to be two different people. */
-  async function compare(books: DsrBook[], fileNames: string, apart: Set<string>) {
-    const book = mergeBooks(books, { apart, people: officers });
+  async function compare(books: DsrBook[], fileNames: string, apart: Set<string>, team: SalesOfficer[] = officers) {
+    const book = mergeBooks(books, { apart, people: team });
     if (!book.days.length && !book.stateDays.length) throw new Error("No daily rows found in any of the files. SO sheets need headings such as Name SO, Month/Date and Total Call.");
     const ds = book.days.map(d => d.day).sort();
     const existing = ds.length ? await fetchAll<Day>((a, b) => supabase!.from("dsr_days").select("*").gte("day", ds[0]).lte("day", ds[ds.length - 1]).order("id").range(a, b)) : [];
     const have = new Map(existing.map(e => [`${e.so_id}|${e.day}`, e]));
     const fresh: DsrDay[] = [], changed: Checked["changed"] = []; let sameN = 0;
     book.days.forEach(d => {
-      const o = matchSO(d.so, officers), old = o ? have.get(`${o.id}|${d.day}`) : undefined;
+      const o = matchSO(d.so, team), old = o ? have.get(`${o.id}|${d.day}`) : undefined;
       if (!old) fresh.push(d); else if (same(d, old)) sameN++; else changed.push({ d, old });
     });
     setCheck({ book, files: fileNames, fresh, same: sameN, changed });
     return fresh.length;
   }
-  /** "Two different people": the same workbooks are put together again with that name kept apart. */
+  /** "Two different people": each is saved with their state after the name. The one already in the team is renamed
+   *  "Name (their state)" and keeps the days of that state; the other is added as a new person on save. */
   async function splitName(key: string) {
     const next = new Set(twoPeople).add(key); setTwoPeople(next); setBusy("read");
-    try { await compare(rawBooks.current.books, rawBooks.current.files, next); }
+    try {
+      let team = officers;
+      const o = officers.find(x => normName(x.name) === key), place = check?.book.clashes?.find(c => c.key === key)?.places || [];
+      const st = o?.state || place[0]?.state;
+      if (o && st) {
+        const name = `${o.name} (${st})`;
+        const { error } = await supabase!.from("sales_officers").update({ name }).eq("id", o.id);
+        if (error) throw error;
+        team = officers.map(x => (x.id === o.id ? { ...x, name } : x));
+        // Days of another state saved under the shared name move to the right person when the workbooks are saved with Replace.
+        notify(`${o.name} is now "${name}". The other ${o.name} will be added with their own state when you save.`);
+      }
+      await compare(rawBooks.current.books, rawBooks.current.files, next, team);
+      if (o && st) await onChanged();
+    }
     catch (e) { setMsg({ kind: "err", text: errText(e) }); }
+    finally { setBusy(""); }
+  }
+  /** Days this financial year whose own figures don't agree (products against the day's sale, calls), to correct in the workbooks. */
+  async function downloadCorrections() {
+    const now = new Date(), from = localDate(new Date(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1, 3, 1)), to = localDate(now);
+    setBusy("fix");
+    try {
+      const { data, error } = await supabase!.rpc("dsr_day_checks", { p_from: from, p_to: to });
+      if (error) throw new Error(`${errText(error)}. Run the latest database step (012) in Supabase.`);
+      type Fix = { problem: string; so: string; post: string | null; day: string; state: string | null; hq: string | null; db_name: string | null; total_calls: number; productive_calls: number; sale_value: number; products_value: number; gap: number; biggest_line: string | null; source_file: string | null };
+      const rows = ((data || []) as Fix[]).map(r => ({ "What's Wrong": r.problem, Name: r.so, Post: r.post || "", Date: dmy(r.day), State: r.state || "", HQ: r.hq || "", "DB Name": r.db_name || "", "Total Calls": r.total_calls, "Productive Calls": r.productive_calls,
+        "Day's Sale Value ₹": Math.round(n(r.sale_value)), "Products Add Up To ₹": Math.round(n(r.products_value)), "Difference ₹": Math.round(n(r.gap)), "Biggest Product Line": r.biggest_line || "", Workbook: (r.source_file || "").split(", ").find(x => r.state && x.toUpperCase().includes(r.state.toUpperCase())) || r.source_file || "" }));
+      const wb = XLSX.utils.book_new(), ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ "What's Wrong": "Nothing to correct: every saved day's figures agree." }]);
+      ws["!cols"] = [{ wch: 46 }, { wch: 26 }, { wch: 8 }, { wch: 11 }, { wch: 14 }, { wch: 16 }, { wch: 26 }, { wch: 11 }, { wch: 15 }, { wch: 17 }, { wch: 19 }, { wch: 13 }, { wch: 44 }, { wch: 46 }];
+      XLSX.utils.book_append_sheet(wb, ws, "Days to correct");
+      const by = new Map<string, { Name: string; State: string; Days: number; "Difference ₹": number }>();
+      ((data || []) as Fix[]).forEach(r => { const e = by.get(r.so) || { Name: r.so, State: r.state || "", Days: 0, "Difference ₹": 0 }; e.Days++; e["Difference ₹"] += Math.round(Math.abs(n(r.gap))); by.set(r.so, e); });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...by.values()].sort((a, b) => b["Difference ₹"] - a["Difference ₹"] || b.Days - a.Days)), "By person");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["How to use this list"],
+        ["Each row is a saved day whose own figures don't agree. The software saved it exactly as typed."],
+        ["Products add up to more / less than the day's sale value: open that person's sheet on that date. Either a product quantity is typed wrong (Biggest Product Line shows the largest one) or the Secondary Sale Value was typed by hand instead of left to the formula."],
+        ["More productive calls than total calls, or a sale with no calls: correct the Total Call and Productive Call cells for that date."],
+        ["After correcting the workbook, upload it again on Upload DSR. Changed days are replaced by the new workbook, and this list gets shorter."]]), "How to use");
+      XLSX.writeFile(wb, `dsr-corrections-${to}.xlsx`);
+      notify(rows.length ? `${plural(rows.length, "day")} to correct, for ${plural(by.size, "person", "people")}. The list is in your downloads.` : "Nothing to correct: every saved day's figures agree.");
+    } catch (e) { setMsg({ kind: "err", text: errText(e) }); }
     finally { setBusy(""); }
   }
   function sameName(key: string) { const next = [...new Set([...onePerson, key])]; setOnePerson(next); try { localStorage.setItem("ka-dsr-one-person", JSON.stringify(next)); } catch { /* private window */ } }
@@ -267,7 +308,7 @@ export default function SOReports({ officers, locations, stock, products, canMan
       if (e) { e.days++; if (d.file && !e.files.includes(d.file)) e.files += `, ${d.file}`; continue; }
       m.set(k, { name: d.so, state: d.state, days: 1, files: d.file, like: null });
     }
-    const split = new Set((check.book.apart || []).map(normName));
+    const split = new Set((check.book.apart || []).map(x => normName(x)));
     return [...m.values()].filter(n => !linked.includes(normName(n.name))).map(n => ({ ...n, like: split.has(normName(n.name)) ? null : closestPerson(n.name, n.state, officers) }));
   }, [check, officers, linked]);
   /** "Same person": the workbook's spelling is saved as one of their other names, so their days go to them. */
@@ -651,7 +692,8 @@ export default function SOReports({ officers, locations, stock, products, canMan
 
     {tab === "upload" && <section className="card upload">
       <div className="rowhead"><h2>Upload Daily Sales Reports</h2>
-        <label className="button secondary">{busy === "read" ? "Reading…" : "Choose DSR Workbooks"}<input hidden type="file" multiple accept=".xlsx,.xlsm,.xls,.ods,.csv" onChange={e => { const x = [...(e.target.files || [])]; if (x.length) read(x); e.target.value = ""; }} /></label></div>
+        <div className="actions"><button className="secondary" disabled={busy === "fix"} onClick={downloadCorrections} title="Saved days whose own figures don't agree, to correct in the workbooks">{busy === "fix" ? "Preparing…" : "Download Corrections List"}</button>
+        <label className="button secondary">{busy === "read" ? "Reading…" : "Choose DSR Workbooks"}<input hidden type="file" multiple accept=".xlsx,.xlsm,.xls,.ods,.csv" onChange={e => { const x = [...(e.target.files || [])]; if (x.length) read(x); e.target.value = ""; }} /></label></div></div>
       <p className="hint">Upload the DSR workbooks for any states, one or several at a time, every day. Every sheet is read: SO sheets give each person's days, the state total is used to check them, and summary sheets are noted. New days are added; a day already logged for a person stays unless you choose to replace it.</p>
       {check && <div className="fixbox">
         <b>{check.files}</b>: {plural(check.fresh.length, "new day")} to add, {plural(check.same, "day")} already logged with the same figures{check.book.stateDays.length ? `, ${plural(check.book.stateDays.length, "state-total day")}` : ""}, {plural(check.book.products.length, "product")} with SS rates.
@@ -666,9 +708,9 @@ export default function SOReports({ officers, locations, stock, products, canMan
         {(check.book.clashes || []).filter(c => !onePerson.includes(c.key)).map(c => <div key={c.key} className="status err">
           <b>{c.name} worked in {c.places.length} states on the same {plural(c.overlap, "day")}.</b> {c.places.map(p => `${p.state}${p.hq ? `, HQ ${p.hq}` : ""} (${plural(p.days, "day")}; ${p.file} › ${p.sheet})`).join(" and ")}.
           If these are two people with the same name, one is overwriting the other's days: only the first sheet's entry for each day is kept.
-          {canManage && <div className="actions"><button disabled={busy === "read"} onClick={() => splitName(c.key)}>Two Different People: Save Them Separately</button>
+          {canManage && <div className="actions"><button disabled={busy === "read"} onClick={() => splitName(c.key)}>Two Different People: Add Their State To Each Name</button>
             <button className="secondary" onClick={() => sameName(c.key)}>Same Person (Moved States)</button></div>}</div>)}
-        {(check.book.apart || []).length > 0 && <div className="status info">Two people share a name, so the one outside the name's home state is saved separately as: {check.book.apart!.map(x => `"${x}"`).join(", ")}. Their HQ and post can be set on the Sales Team tab.</div>}
+        {(check.book.apart || []).length > 0 && <div className="status info">People who share a name are saved with their state after it: {check.book.apart!.map(x => `"${x}"`).join(", ")}. HQ and post can be set on the Sales Team tab.</div>}
         {(check.book.misfit || []).length > 0 && <div className="warn">On {plural(check.book.misfit!.length, "day")} the product quantities come to far more than the day's own sale value, usually a quantity typed in the wrong cell. They are saved as typed; correct the workbook and upload it again: {check.book.misfit!.slice(0, 6).join("; ")}{check.book.misfit!.length > 6 ? "…" : ""}.</div>}
         {newNames.length > 0 && <div className="warn"><b>{plural(newNames.length, "name")} in the workbooks {newNames.length === 1 ? "matches" : "match"} no one on the team.</b> {newNames.length === 1 ? "It" : "Each"} will be added as a new person unless you say it's someone already listed under another spelling:
           <ul className="newnames">{newNames.map(n => <li key={n.name}><b>{n.name}</b> <small>({plural(n.days, "day")}{n.state ? `, ${n.state}` : ""}{n.files ? `, ${n.files}` : ""})</small>

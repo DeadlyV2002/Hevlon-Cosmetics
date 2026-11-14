@@ -78,6 +78,8 @@ export async function suggest(names: DbName[], locations: Distributor[], task?: 
       if (s >= 0.7 && x.d.so_id && e.sos.has(x.d.so_id)) s += 0.1;
       if (s > score) { score = s; best = x.d; }
     }
+    // Two parties in one cell: a match is only ever a suggestion, since it fits one of the two at best.
+    if (TWO_PARTIES.test(e.name) || / and /.test(` ${normName(e.name)} `)) score = Math.min(score, 0.9);
     out.push({ ...e, guess: score >= 0.8 ? best : undefined, score });
     if (i % 20 === 19) { task?.step(i + 1, names.length); await breathe(); }
   }

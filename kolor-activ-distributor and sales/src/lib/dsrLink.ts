@@ -26,6 +26,26 @@ export const NOT_A_DB = /^(leave|sunday|holiday|weekly off|week off|review meeti
 const NOT_A_VISIT = /(me+t+ings?|mit+ings?)\b|\b(meet|review|training|p[ae]y?ments?|appoint(ed|ment)s?)\b|^(today on |work at )?(s ?)+point( \w+)?$/;
 /** Two parties written in one cell ("Vishal Enterprises + Ashish Ent"): never grouped with either, or it would join them into one. */
 const TWO_PARTIES = /[+&/,]| and /i;
+const twoParties = (raw: string) => TWO_PARTIES.test(raw) || / and /.test(` ${normName(raw)} `);
+// A day off or a day not spent at a distributor, however it is worded: "Holiday for Bihu", "Today on leave",
+// "Leave due to fever", "Sunday Weekly Off", "Weakly off", "Transit Silchar to Guwahati", "Election of W.B".
+const DAY_OFF = /\b(hol+[iy] ?days?|leave|sunday|transit|elections?|bandh|strike|curfew)\b|\bwe+a?k(ly)? ?off\b|\bweek ?off\b|\w*penden[cs]e ?day\b/;
+const FESTIVAL = /^(holiday )?(for )?(the )?(bohag |magh |kati )?(bihu|diwali|deepawali|dipawali|holi|eid|id|chhath|chhath puja|durga puja|kali puja|laxmi puja|saraswati puja|vishwakarma puja|ganesh puja|rath yatra|raksha bandhan|rakhi|independence day|republic day|gandhi jayanti|dussehra|dashami|vijayadashami|christmas|muharram|ram navami|janmashtami|may day)( holiday| festival| off)?$/;
+// Looking for, opening or discussing a distributor rather than visiting one: "New Db Search", "DB Searching",
+// "Distributor searching Bheragora", "Appoint new distributor", "New SS confirm", "All DB close New DB open".
+const PROSPECTING = /\b(search|sarch|serch|seach|searc)(ing)?\b|\b(new|old) (db|d b|ss|s s|distribut\w*|distrid\w*|distibut\w*)\b|\bappoint\w*\b/;
+const NOT_A_PLACE = /^(outer|whole ?sale|local|main|open) market$|^market( work| visit| survey)?$/;
+/** Words such remarks are made of. Anything else in the cell is a name: "New D.B. Raj Gallery" still names Raj Gallery. */
+const REMARK_WORDS = new Set("new old db d b ss s distributor distributors distributior distridutar distibutor distributar search searching sarch sarching serch serching seach seaching searc open opened opening visit visited discuss discussion final confirm confrom conform confirmed created create appoint appointed appointment close closed all today for of the and point work".split(" "));
+/** True when what was typed in the DB Name column is a remark about the day, not a distributor.
+ *  A remark that also names a party ("Goswami Enterprise and New DB", "New DB open Sefali Enterprise") is kept, so it can still be attached to that party. */
+export function isRemark(raw: string): boolean {
+  const k = normName(raw);
+  if (!k || NOT_A_DB.test(k) || NOT_A_VISIT.test(k) || DAY_OFF.test(k) || FESTIVAL.test(k) || NOT_A_PLACE.test(k)) return true;
+  return PROSPECTING.test(k) && !k.split(" ").some(w => w.length > 1 && !REMARK_WORDS.has(w));
+}
+/** The distinctive part of a name with shop words set aside ("J.M.R Enterprises" → "jmr"), to put similar spellings side by side. */
+export const nameCore = (raw: string) => { const p = prep(raw); return p.core || p.flat; };
 interface Prep { flat: string; core: string; toks: string[] }
 // Only the distinctive part of a name counts: "A K Traders" must not match every "... Traders", nor "JMR Enterprises" match "Abni Enterprises".
 const prep = (s: string): Prep => {
@@ -52,7 +72,7 @@ export async function loadUnlinked(): Promise<DbName[]> {
   const m = new Map<string, DbName>();
   rows.forEach(r => {
     const k = normName(r.db_name);
-    if (!k || NOT_A_DB.test(k) || NOT_A_VISIT.test(k)) return;
+    if (isRemark(r.db_name)) return;
     const e = m.get(k) || { name: r.db_name.trim(), state: r.state || "", towns: new Set<string>(), days: 0, value: 0, score: 0, sos: new Map<string, number>(), beats: new Set<string>(), hqs: new Set<string>(), first: r.day, last: r.day };
     e.days++; e.value += Number(r.sale_value) || 0; if (r.town) e.towns.add(r.town.trim());
     if (r.beat) e.beats.add(r.beat.trim()); if (r.hq) e.hqs.add(r.hq.trim()); e.sos.set(r.so_id, (e.sos.get(r.so_id) || 0) + 1);
@@ -79,7 +99,7 @@ export async function suggest(names: DbName[], locations: Distributor[], task?: 
       if (s > score) { score = s; best = x.d; }
     }
     // Two parties in one cell: a match is only ever a suggestion, since it fits one of the two at best.
-    if (TWO_PARTIES.test(e.name) || / and /.test(` ${normName(e.name)} `)) score = Math.min(score, 0.9);
+    if (twoParties(e.name)) score = Math.min(score, 0.9);
     out.push({ ...e, guess: score >= 0.8 ? best : undefined, score });
     if (i % 20 === 19) { task?.step(i + 1, names.length); await breathe(); }
   }
@@ -92,7 +112,7 @@ export async function suggest(names: DbName[], locations: Distributor[], task?: 
  *  Members of a group are put next to each other, biggest group booking first. */
 export async function groupAlike(names: DbName[]): Promise<DbName[]> {
   const p = names.map(n => ({ me: prep(n.name), towns: [...n.towns, ...n.hqs].map(prep) }));
-  const two = names.map(n => TWO_PARTIES.test(n.name) || / and /.test(` ${normName(n.name)} `));
+  const two = names.map(n => twoParties(n.name));
   const parent = names.map((_, i) => i), why = new Map<number, Set<string>>();
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   for (let i = 0; i < names.length; i++) {

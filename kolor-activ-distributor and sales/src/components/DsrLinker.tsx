@@ -167,13 +167,13 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   function exportList() {
     const wb = XLSX.utils.book_new();
     sheets().forEach(x => XLSX.utils.book_append_sheet(wb, x.ws, x.name));
-    XLSX.writeFile(wb, `distributors-to-link-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `dsr-names-to-correct-${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
   async function readSheet(file: File) {
     setSheetErr("");
     try {
       const p = readLinkSheet(XLSX.read(await file.arrayBuffer()), names || [], locations, officers);
-      if (!p.links.length && !p.news.length && !p.fills.length && !p.problems.length) throw new Error(p.gone ? "Every row with a distributor name is for names that are linked already. Download the list again for the names still unlinked." : "No row has a Distributor Name filled in yet.");
+      if (!p.links.length && !p.news.length && !p.fills.length && !p.problems.length) throw new Error(p.gone ? "Every row with a correct name is for a spelling that is linked already. Download the list again for the names still unlinked." : "No row has a Correct Distributor Name filled in yet.");
       setPlan({ ...p, file: file.name });
     } catch (e) { setSheetErr(`${file.name}: ${errText(e)}`); }
   }
@@ -213,12 +213,12 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
   return <section className="card">
     <div className="rowhead"><h2>Link DSR DB Names To Distributors</h2>
       <div className="actions">
-        <button className="secondary" onClick={exportList} title="One row per distributor: its name, the spellings found in the DSRs, and its details">Download List (Excel)</button>
-        {canManage && <label className="button secondary" title="Upload the downloaded list after filling in the distributor names and details">Upload Filled List<input hidden type="file" accept=".xlsx,.xlsm,.xls,.ods,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) readSheet(x); e.target.value = ""; }} /></label>}
+        <button className="secondary" onClick={exportList} title="Every spelling the SOs typed, one per row, with an empty column for the correct name">Download List (Excel)</button>
+        {canManage && <label className="button secondary" title="Upload the downloaded list after typing the correct names">Upload Filled List<input hidden type="file" accept=".xlsx,.xlsm,.xls,.ods,.csv" onChange={e => { const x = e.target.files?.[0]; if (x) readSheet(x); e.target.value = ""; }} /></label>}
         {canManage && <button disabled={busy || !chosen} onClick={() => link()}>{busy ? "Linking…" : `Link ${plural(chosen, "Name")}`}</button>}
       </div></div>
     {sheetErr && <div className="status err">{sheetErr}</div>}
-    <p className="hint">{plural(names.length, "DB name")} in the SO reports {names.length === 1 ? "isn't" : "aren't"} linked to your distributor list, so {names.length === 1 ? "its" : "their"} bookings can't be checked against stock. Close matches in the same state are already chosen ({names.filter(n => n.guess && n.score >= SURE).length}); {names.filter(n => n.guess && n.score < SURE).length} weaker suggestions are offered for you to accept. Click a name to open who booked there, its towns and beats, and the distributors it could be with their SO and super stockist. {names.some(n => n.same) ? ` ${names.filter(n => n.same).length} names are flagged ⚑ as other spellings of the same distributor (a typo, an added "s", dots in initials) because the same SO books them or they are in the same town; they sit together in the list and are linked together from the pop-up. ` : " "}Check each choice, then link. With many names it is quicker in Excel. Download List gives one row per distributor: type the distributor's name in the first column (the spellings found in the DSRs are in the second), fill in its super stockist, city, SO, owner and phone, and Upload Filled List. A name already in your distributor list is linked to it; any other name is added as a new distributor.</p>
+    <p className="hint">{plural(names.length, "DB name")} in the SO reports {names.length === 1 ? "isn't" : "aren't"} linked to your distributor list, so {names.length === 1 ? "its" : "their"} bookings can't be checked against stock. Close matches in the same state are already chosen ({names.filter(n => n.guess && n.score >= SURE).length}); {names.filter(n => n.guess && n.score < SURE).length} weaker suggestions are offered for you to accept. Click a name to open who booked there, its towns and beats, and the distributors it could be with their SO and super stockist. {names.some(n => n.same) ? ` ${names.filter(n => n.same).length} names are flagged ⚑ as other spellings of the same distributor (a typo, an added "s", dots in initials) because the same SO books them or they are in the same town; they sit together in the list and are linked together from the pop-up. ` : " "}Check each choice, then link. With many names it is quicker in Excel. Download List gives every spelling the SOs typed, one per row, with similar spellings one under the other. Type the correct distributor name beside each, then Upload Filled List. A correct name that is in your distributor list gets the spelling attached to it; any other correct name is added as a new distributor. Rows left empty are skipped.</p>
     <input className="search" placeholder="Search a DB name, state or town…" value={q} onChange={e => { setQ(e.target.value); setShown(PAGE); }} />
     <div className="tablewrap scrolltable"><table className="nice"><thead><tr><th>Name In DSR</th><th>State</th><th>Towns</th><th>Days</th><th>Booked</th><th>Link To</th><th>Suggestion</th></tr></thead>
       <tbody>{list.slice(0, shown).map(n => <tr key={n.name} className={pick[n.name] ? "" : "muted"}>
@@ -236,7 +236,7 @@ export default function DsrLinker({ locations, officers = [], stock = [], canMan
         <div className="kpi"><small>Link to distributors in your list</small><b>{fmt(plan.links.length)}</b><span>DB names</span></div>
         <div className="kpi"><small>New distributors to add</small><b>{fmt(plan.news.length)}</b><span>{plural(plan.news.reduce((a, x) => a + x.spellings.length, 0), "DB name")} linked to them</span></div>
         <div className="kpi"><small>Bookings covered</small><b>{money(plan.value)}</b><span>{plural(plan.days, "SO day")}</span></div>
-        <div className={`kpi${plan.problems.length ? " bad" : ""}`}><small>Rows with a problem</small><b>{fmt(plan.problems.length)}</b><span>{plan.blank ? `${plural(plan.blank, "row")} with no name yet` : "every row named"}{plan.gone ? ` · ${fmt(plan.gone)} already linked` : ""}</span></div>
+        <div className={`kpi${plan.problems.length ? " bad" : ""}`}><small>Rows with a problem</small><b>{fmt(plan.problems.length)}</b><span>{plan.blank ? `${plural(plan.blank, "row")} with no correct name yet` : "every row filled"}{plan.gone ? ` · ${fmt(plan.gone)} already linked` : ""}</span></div>
       </div>
       <div className="reportgrid sheetcheck">
         {plan.problems.length > 0 && <section className="contact"><h3>Not Saved: Fix These In The Sheet</h3>
